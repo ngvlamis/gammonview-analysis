@@ -1,0 +1,21 @@
+# Normalise line endings to LF. Nothing tracked here contains a CRLF today, so
+# this is a no-op on the current tree; it exists so a clone with
+# core.autocrlf=true cannot start rewriting one, in a repo whose tests compare
+# fixtures exactly.
+* text=auto eol=lf
+
+# Binary fixtures, declared rather than detected. Git's heuristic would catch
+# every one of these (all carry NULs in the first bytes -- checked), but "would
+# detect" is the wrong guarantee for files a test compares as raw bytes: the
+# .gvab goldens that pin the format, and the .xg/.bgf sources the converters
+# are asserted against ply by ply. Declaring it also stops these showing up as
+# diff noise.
+*.gvab binary
+*.xg   binary
+*.bgf  binary
+*.png  binary
+
+# Generated lockfiles: collapsed in diffs on GitHub, and never worth reviewing
+# line by line. They are still tracked, and still reviewed as a version bump.
+uv.lock linguist-generated=true -diff
+gvformat-js/package-lock.json linguist-generated=true -diff

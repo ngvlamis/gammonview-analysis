@@ -1,0 +1,39 @@
+{
+  "name": "@gammonview/gvformat",
+  "version": "1.0.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.js",
+    "./*": "./src/*"
+  },
+  "license": "MIT",
+  "description": "OGXM binary codec — read/write .gvab match files",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ngvlamis/gammonview-analysis.git",
+    "directory": "gvformat-js"
+  },
+  "homepage": "https://github.com/ngvlamis/gammonview-analysis/tree/main/gvformat-js",
+  "bugs": {
+    "url": "https://github.com/ngvlamis/gammonview-analysis/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "src",
+    "cli",
+    "LICENSE",
+    "THIRD-PARTY-NOTICES.md"
+  ],
+  "scripts": {
+    "prepublishOnly": "npm test",
+    "test": "node test/test-ogid.js && node test/test-roundtrip.js && node test/test-merge.js && node test/test-stats.js && node test/test-met.js && node test/test-xg-cube.js && node test/test-bgf-alternatives.js && node test/test-bgf-move-steps.js && node test/test-bgf-embedded-cube.js && node test/test-xg-move-steps.js && node test/test-xg-eval-levels.js && node test/test-xg-zero-win-eval.js && node test/test-alternative-move-steps.js && node test/test-legality.js && node test/test-illegal-play-steps.js && node test/test-illegal-move.js && node test/test-share.js && node test/test-place.js && node test/test-mat.js && node test/test-og.js && node test/test-equity-loss.js && node test/test-basefill.js && node test/test-chunk-passthrough.js && node test/test-robustness.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "pako": "^3.0.0"
+  }
+}

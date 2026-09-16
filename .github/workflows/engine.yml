@@ -1,0 +1,70 @@
+# The engine-backed half of the suite: the thirteen names in run_all.py's
+# ENGINE_BACKED set. They need the `[engine]` extra -- bgsage, a large compiled
+# wheel, plus pyyaml -- and they analyze a whole match, so they cost minutes
+# where ci.yml costs seconds. That is the only reason they are split out; it is
+# a cadence decision, not a statement about how much they matter.
+#
+# One thing to know before reading this job's output: three of these tests
+# consume tests/golden/, and two compare engine output to it *exactly*.
+# test_ogxm_pipeline re-analyzes the corpus and requires the .gvab to match
+# byte-for-byte; test_luck_fill re-measures luck and requires identical floats,
+# on purpose ("not close, identical"). Those goldens were generated on macOS
+# arm64, and **bgsage does not reproduce them here**: measured 2026-09-13 on
+# this runner with the same bgsage build, one best move of 521 changed, one cube
+# verdict of 296 changed, and one match's PR moved 6.448 -> 6.246. It is not
+# rounding, and it is not a bug -- it is a different CPU.
+#
+# So those two comparisons are platform-gated: they skip by name wherever the
+# machine does not match tests/golden/PROVENANCE.json, and every structural
+# check in the same two files still runs. Expect a handful of SKIP lines here
+# and nothing red. The gate is in tests/fixtures.py:goldens_are_native; the
+# provenance file is stamped by regen_golden.py, so regenerating on a different
+# machine moves the gate rather than needing this comment edited.
+#
+# tests/regen_golden.py is genuinely not run: regenerating is a maintainer action
+# on the machine that owns the goldens, and CLAUDE.md explains why the diff wants
+# reading rather than accepting.
+name: engine
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    # Mondays, 06:00 UTC. This is the run that catches a bgsage release moving
+    # the numbers underneath us without anyone here touching a file.
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: engine-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  full-suite:
+    name: full suite (py${{ matrix.python }})
+    # ubuntu-latest is x86_64 on purpose. bgsage publishes manylinux wheels for
+    # x86_64 only, so an arm64 runner would fall back to the sdist and spend the
+    # job compiling an engine instead of testing against one.
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      # The floor and the version this repo develops on. The middle of the
+      # range is covered by ci.yml, which exercises the same source without
+      # the engine.
+      matrix:
+        python: ["3.10", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      # No --no-dev here: the dev group is exactly what these tests need. The
+      # runner reports skips separately from passes, so a suite that quietly
+      # stopped finding its fixtures does not read as green.
+      - name: full suite
+        run: uv run --python ${{ matrix.python }} python tests/run_all.py

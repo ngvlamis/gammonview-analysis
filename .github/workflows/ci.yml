@@ -1,0 +1,127 @@
+# The cheap half of the suite, on every push and pull request.
+#
+# `tests/run_all.py --fast` skips the thirteen names in that file's ENGINE_BACKED
+# set -- the tests that need the `[engine]` extra and minutes of CPU. Those run
+# in engine.yml on a slower cadence. Splitting them is what keeps this workflow
+# a few seconds per row, so the matrix below can afford to be wide.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A newer push to the same ref makes the older run's verdict worthless.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  codec:
+    name: codec (${{ matrix.os }}, py${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # One red row should not hide the state of the others -- the usual reason
+      # to look at this matrix is to find out *which* versions broke.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        python: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+        include:
+          # Windows earns a row on its own merits: the suite compares .gvab
+          # goldens as raw bytes and reads .gva back with read_text(), which is
+          # precisely the sort of thing a line-ending or default-encoding
+          # difference breaks. .gitattributes is the other half of that defence.
+          - os: windows-latest
+            python: "3.13"
+          # macOS is the author's platform, so it is the configuration every
+          # change is written against; a row here says so out loud.
+          - os: macos-latest
+            python: "3.13"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      # Two flags, each load-bearing:
+      #
+      # `--python` is not optional. A tracked .python-version pins 3.13 and uv
+      # honours it, so without an explicit override every row of this matrix
+      # would quietly run 3.13 and the 3.10 row would prove nothing at all.
+      #
+      # `--no-dev` is the assertion, not a saving. The dev group carries bgsage
+      # and pyyaml; leaving it out means this job installs the project with zero
+      # third-party dependencies, which is the README's central claim about
+      # `gvformat`. If an import creeps in from the engine side, this goes red.
+      - name: fast suite, no engine
+        run: uv run --python ${{ matrix.python }} --no-dev python tests/run_all.py --fast
+
+  js:
+    name: gvformat-js (node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      # package.json declares `engines: node >=18`. Test the floor it promises
+      # and the current release; the versions between them are not where an ESM
+      # or TypedArray difference is going to appear.
+      matrix:
+        node: ["18", "24"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+          cache-dependency-path: gvformat-js/package-lock.json
+
+      # `npm ci`, not `npm install`: the one runtime dependency (pako) is
+      # pinned in the lockfile, and the lockfile is what the published tarball
+      # is built against. The only publishConfig here is `access: public`,
+      # which scoped packages need at publish time and which affects nothing
+      # about this install.
+      - run: npm ci
+        working-directory: gvformat-js
+
+      - run: npm test
+        working-directory: gvformat-js
+
+  build:
+    name: build (sdist + wheel)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # hatch-vcs derives the version from git tags. A shallow clone has no
+          # tags and the build does not fail -- it quietly stamps 0.1.dev1+g...
+          # on the artifacts. Fetch everything, then print what it decided.
+          fetch-depth: 0
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - run: uv build
+
+      - name: report the derived version
+        run: ls -l dist/
+
+      # The wheel's real test is whether the base install works on its own. No
+      # project, no extras, nothing from the lockfile: just the wheel and a
+      # bare interpreter. This is what `pip install gammonview` gets.
+      #
+      # It runs from outside the checkout on purpose. With the repo as cwd,
+      # `import gvformat` finds the source tree sitting right there and the
+      # check passes without the wheel being involved at all -- so the assert
+      # insists the module actually came out of a site-packages.
+      - name: the wheel imports with no extras
+        working-directory: ${{ runner.temp }}
+        run: |
+          uv run --isolated --no-project --with "$GITHUB_WORKSPACE"/dist/*.whl \
+            python -c 'import gvformat, pathlib; p = pathlib.Path(gvformat.__file__); print(p); assert "site-packages" in p.parts, p'

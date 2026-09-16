@@ -1,0 +1,7 @@
+{
+  "system": "Darwin",
+  "machine": "arm64",
+  "bgsage": "2.0.20260907",
+  "generated": "2026-09-13",
+  "note": "Platform gate only. The exact checks in test_ogxm_pipeline (byte-identical .gvab/.gva) and test_luck_fill (identical floats) run only where system and machine match this file; elsewhere they skip. The bgsage version is recorded for information and is NOT gated on -- an engine upgrade must fail the goldens loudly, which is the signal to regenerate and read the diff."
+}

@@ -1,0 +1,95 @@
+[project]
+name = "gammonview"
+# Version is derived from the latest git tag by hatch-vcs (see [tool.hatch.version]
+# and [build-system]). Tag a release with `git tag vX.Y.Z` — never edit a number here.
+dynamic = ["version"]
+description = "Backgammon match analysis — the pure-Python OGXM/GVA codec (`gvformat`) plus bgsage-powered match and position analysis (`gvanalysis`)."
+readme = "README.md"
+# Both packages are stdlib-only in syntax and API; the floor is bgsage's own
+# (>=3.10), and the zero-dep suite is verified green on 3.10 and 3.11.
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE", "THIRD-PARTY-NOTICES.md"]
+authors = [{ name = "Nicholas Vlamis" }]
+keywords = ["backgammon", "ogxm", "gvab", "analysis", "bgsage", "xg", "match-equity"]
+# No `License ::` classifier: PEP 639 deprecates them in favour of the
+# `license` expression above, which lands as METADATA's `License-Expression`.
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: End Users/Desktop",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Games/Entertainment :: Board Games",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+# The base install is `gvformat`, which is pure stdlib — zero runtime deps.
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/ngvlamis/gammonview-analysis"
+Repository = "https://github.com/ngvlamis/gammonview-analysis"
+Issues = "https://github.com/ngvlamis/gammonview-analysis/issues"
+
+[project.optional-dependencies]
+# The bgsage-powered analysis layer (`gvanalysis`: game_eval, match, position
+# and friends). `gvformat` needs none of this; install it only to run analysis.
+# bgsage is MPL-2.0, which is file-level copyleft and imposes nothing on this
+# package: we import it, never modify or redistribute its files (MPL-2.0 §3.3
+# covers the larger work regardless). That is why this repo can be MIT.
+engine = [
+    "bgsage>=2.0.20260907",
+    "pyyaml>=6.0.3",
+]
+
+[dependency-groups]
+# Default dev environment: `uv sync` installs these so the analysis package and
+# the full test suite (which analyzes a real .mat) run out of the box.
+dev = [
+    "bgsage>=2.0.20260907",
+    "pyyaml>=6.0.3",
+]
+
+[project.scripts]
+gvan-match = "gvanalysis.match:main"
+gvan-batch = "gvanalysis.batch:main"
+gvan-position = "gvanalysis.position:main"
+reconstruct-mat = "gvanalysis.reconstruct_mat:main"
+compare-gva = "gvanalysis.compare_gva:main"
+xg2gva = "gvformat.xg:main"
+bgf2gva = "gvformat.bgf:main"
+
+[build-system]
+requires = ["hatchling", "hatch-vcs"]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+# Read the version straight from git tags (vX.Y.Z). Between tags this yields a
+# dev version like 0.9.1.postN.devM+g<sha> — no manual bumping, no drift.
+source = "vcs"
+
+[tool.hatch.build.targets.sdist]
+# The sdist is a source release, not a working copy. `.claude/` is agent
+# instruction data, and `node_modules/` is the JS mirror's installed
+# dependencies -- third-party code under its own licences, which has no
+# business inside this source archive (and would drag its own notice
+# obligations in with it).
+exclude = [
+    "/.claude",
+    "/gvformat-js/node_modules",
+
+    # Note for anyone adding an ignored directory later: hatchling honours the
+    # *root* .gitignore and ignores nested ones. gvformat-js/samples/ was
+    # ignored only by gvformat-js/.gitignore and so shipped in the sdist,
+    # publishing the pre-anonymization corpus. If you add a nested ignore for
+    # anything private, add it here too.
+]
+
+[tool.hatch.build.targets.wheel]
+# gvformat: the pure codec (zero deps). gvanalysis: the bgsage-backed analysis
+# layer (needs the [engine] extra to import/use).
+packages = ["gvformat", "gvanalysis"]

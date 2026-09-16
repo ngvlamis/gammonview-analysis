@@ -1,0 +1,40 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Test-runner scratch. The suite here is standalone scripts run by
+# tests/run_all.py, not pytest -- but contributors reach for pytest anyway, and
+# it leaves this behind.
+.pytest_cache/
+
+# Virtual environments
+.venv
+
+# JS mirror dependencies (installed by `npm install` in gvformat-js/)
+node_modules/
+
+# Agent instruction data -- covered by a global gitignore on the author's
+# machine, which a public clone obviously cannot rely on.
+.claude/
+
+# User-created preset overrides (built-in defaults live in presets.py)
+presets.yaml
+
+# Live OpenGammon API data for test-og.js's parity section: pulled from a real
+# account, so it carries real handles. Everything else under samples/ is
+# committed and anonymized -- this one directory is not.
+samples/og/
+
+# Instructions for non-Claude agents. Not part of the project.
+AGENTS.md
+
+# Local maintainer notes (NOTES.local.md and friends): superseded workflows,
+# host paths -- true and useful, but not public-repo material.
+*.local.md
+
+# Mac System files
+.DS_Store
