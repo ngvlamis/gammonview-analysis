@@ -1,0 +1,93 @@
+# Publish to PyPI via trusted publishing (OIDC). No API token exists anywhere:
+# PyPI is configured to trust *this workflow in this repository*, and mints a
+# short-lived credential for the job at run time. Nothing to store, leak, or
+# rotate, and a stolen repo secret cannot publish because there is no secret.
+#
+# One-time setup on PyPI (https://pypi.org/manage/account/publishing/), which
+# must be done before the first run, because the project does not exist yet:
+#
+#     PyPI project name : gammonview
+#     Owner             : ngvlamis
+#     Repository name   : gammonview-analysis
+#     Workflow name     : publish.yml
+#     Environment name  : pypi
+#
+# That registers a "pending publisher"; the project is created by the first
+# successful upload.
+name: publish
+
+on:
+  # A tag is the release signal, matching how the version is derived: hatch-vcs
+  # reads it from git, so the tag *is* the version. Pushing v1.2.3 publishes
+  # 1.2.3 -- there is no number to bump anywhere else, and no way for the tag
+  # and the artifact to disagree.
+  push:
+    tags: ["v*"]
+  # Manual trigger, for a tag that already exists (as v1.0.0 did when this
+  # workflow was written) or to retry a failed upload.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build sdist + wheel
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # hatch-vcs derives the version from git tags, and a shallow clone has
+          # none. It does not fail -- it quietly stamps 0.1.dev1+g<sha> on the
+          # artifacts, which is the sort of thing you discover on PyPI.
+          fetch-depth: 0
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - run: uv build
+
+      # Refuse to publish a version that git did not name. Without this, a run
+      # from an untagged commit uploads a dev version to PyPI, where it cannot
+      # be taken back.
+      - name: the artifacts carry a real release version
+        run: |
+          ls -l dist/
+          version=$(ls dist/*.whl | sed -E 's|.*/gammonview-([^-]+)-py3.*|\1|')
+          echo "derived version: $version"
+          case "$version" in
+            *dev*|*+*)
+              echo "::error::refusing to publish $version -- hatch-vcs found no tag on this commit"
+              exit 1 ;;
+          esac
+
+      - name: metadata renders on PyPI
+        run: uv run --isolated --no-project --with twine python -m twine check dist/*
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  pypi:
+    name: upload to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    # The environment is the approval gate: GitHub can require a manual review
+    # before the job runs, and PyPI's trusted publisher is bound to this name,
+    # so a workflow that does not declare it cannot publish.
+    environment:
+      name: pypi
+      url: https://pypi.org/p/gammonview
+    permissions:
+      # The OIDC token this mints is what PyPI trades for an upload credential.
+      # Without it the action fails with a confusing 403.
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - uses: pypa/gh-action-pypi-publish@release/v1
