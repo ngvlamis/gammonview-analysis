@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -68,6 +69,12 @@ def _eq2mwc(equity: float, away1: int, away2: int, cube_value: int, is_crawford:
 # derivation). The former 0.001 was an order of magnitude too aggressive and ran
 # PR ~2% high by under-counting the denominator.
 _CHECKER_SPREAD_EPS = 1e-4
+
+# EXPERIMENT (GVAN_MID_ESCALATE=1): let a borderline checker play that turns out
+# to be a real error escalate from the middle tier to the rollout, the way the
+# cube path already does with `real_error`. Off by default so the goldens and
+# the shipping presets are unchanged while this is measured.
+_MID_ESCALATE = os.environ.get("GVAN_MID_ESCALATE") == "1"
 
 
 def _trivial_cube(nd: float, dt: float, dp: float) -> bool:
@@ -673,6 +680,31 @@ def _eval_checker_decision(dec: dict, ctx: _EvalCtx) -> _DecResult:
                         moves = list(full_result.moves)
                         checker_upgraded = True
                         tier_analyzer = ctx.mid_analyzer_checker
+                        # A near-tied TOP TWO says nothing about how far down
+                        # the list the player went -- top2_gap is best-vs-second
+                        # and the played move may be the eighth. Size a genuine
+                        # error at the rollout tier even though the decision
+                        # arrived as borderline: the rule the cube path already
+                        # applies via `real_error`, and the one presets.py
+                        # documents ("errors bigger than close_threshold still
+                        # go to second_pass").
+                        if _MID_ESCALATE and ctx.base_analyzer is not None:
+                            mid_err = next(
+                                (abs(float(m.equity_diff)) for m in moves
+                                 if tuple(m.board) == played_tuple), None)
+                            if mid_err is not None and mid_err > ctx.close_threshold:
+                                full_result = _checker_play(
+                                    ctx.analyzer,
+                                    dec["board"], die1, die2,
+                                    cube_value=dec["cube_value"],
+                                    cube_owner=dec["cube_owner"],
+                                    away1=dec["away1"],
+                                    away2=dec["away2"],
+                                    is_crawford=dec["is_crawford"],
+                                    force_boards=[dec["board_played"]],
+                                )
+                                moves = list(full_result.moves)
+                                tier_analyzer = ctx.analyzer
                     elif (ctx.base_analyzer is not None
                             and tuple(cheap_moves[0].board) != played_tuple):
                         # Error (played != screen best) -> rollout tier.
