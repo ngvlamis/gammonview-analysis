@@ -33,7 +33,7 @@ from gvformat.export import (
     _normalize_eval_level,
     _probs_to_eval,
 )
-from gvformat.ogid import looks_like_ogid, parse_ogid
+from gvformat.ogid import flip_board, looks_like_ogid, parse_ogid
 from .progress import ProgressBar
 
 
@@ -94,15 +94,23 @@ def parse_xgid(xgid: str) -> PositionState:
     cube_position = int(parts[2])
     turn = int(parts[3])
 
-    # XGID field 3 is the cube position: 0 = centered, +1 = player 1 owns it,
-    # -1 = player 2 owns it. Field 4 (turn) uses the same +1/-1 player codes,
-    # and the 26-point board is written from the on-roll player's perspective,
-    # so the cube is the *mover's* exactly when the two signs agree. (Both
-    # halves of gammonview's board.js to_xgid/from_xgid pair encode it this
-    # way; a centered cube is what every opening XGID's ":0:0:" says.)
+    # An XGID names no colours: it has a "player 1" and a "player 2". The
+    # 26-point board is written in PLAYER 1's perspective -- index 1 is player
+    # 1's ace point, index 25 their bar, index 0 the opponent's, uppercase
+    # their checkers -- and that frame does NOT depend on the turn. Field 4
+    # says only who is ON ROLL: +1 player 1, -1 player 2.
+    #
+    # Reading it as a perspective marker instead ("the board is written from
+    # the on-roll player's side") is true only when it is +1, and it is the bug
+    # this parser shared with gammonview's board.js: every -1 id was analyzed
+    # for the wrong player, from the wrong side of the board.
+    mover_is_white = turn != -1
+
+    # Cube: +1 means player 1 owns it, and we read player 1 as White (the same
+    # choice board.js makes, so an id survives a round trip through either).
     if cube_position == 0:
         cube_owner = "centered"
-    elif (cube_position > 0) == (turn > 0):
+    elif (cube_position > 0) == mover_is_white:
         cube_owner = "player"
     else:
         cube_owner = "opponent"
@@ -115,22 +123,25 @@ def parse_xgid(xgid: str) -> PositionState:
     is_crawford = parts[7] == "1"
 
     if match_len > 0:
+        # Scores are written player 1 (White) first; `away1` is the MOVER's.
         score_a, score_b = int(parts[5]), int(parts[6])
-        if turn >= 0:
+        if mover_is_white:
             away1, away2 = match_len - score_a, match_len - score_b
         else:
             away1, away2 = match_len - score_b, match_len - score_a
     else:
         away1 = away2 = 0
 
-    # An XGID names no colours: its board is simply the on-roll player's. The
-    # turn field is the only handle on who that is, and gammonview's own
-    # to_xgid/from_xgid pair reads -1 as White on roll (see board.js), so
-    # follow it -- otherwise a move's absolute point numbering comes back
-    # mirrored from what the client that sent the id would draw.
+    # `board` above is player 1's perspective. bgsage wants the MOVER's, and
+    # player 1 is the mover only when the turn field is +1 -- so a -1 id has to
+    # be flipped before it is analyzed. Without this the engine is handed the
+    # opponent's board and told to play the dice on it.
+    if not mover_is_white:
+        board = flip_board(board)
+
     return PositionState(
         board, die1, die2, cube_value, cube_owner, away1, away2, is_crawford,
-        mover_is_white=(turn == -1),
+        mover_is_white=mover_is_white,
     )
 
 

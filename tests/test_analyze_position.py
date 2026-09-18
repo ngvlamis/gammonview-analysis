@@ -58,7 +58,7 @@ def raises(fn, label: str) -> None:
 #: names who *acted*), and XGID turn -1 is the same statement, so the two must
 #: analyze to the same board, the same frame and the same best move.
 OPENING_31_OGID = "11ccccchhhjjjjj:66666888dddddoo:N0N:13:B:R:0:0:0:0"
-OPENING_31_XGID = "XGID=-b----E-C---eE---c-e----B-:0:0:-1:31:0:0:0:0:8"
+OPENING_31_XGID = "XGID=-b----E-C---eE---c-e----B-:0:0:1:31:0:0:0:0:8"
 
 #: The same opening position with no dice: a cube decision (nobody doubles on
 #: the first roll, so the correct action is a no-double either way).
@@ -106,7 +106,8 @@ def main() -> int:
 
     print("4. the same position as an XGID analyzes identically")
     xg = analyze_position(OPENING_31_XGID, level="1ply")
-    check(xg["mover_is_white"] is True, "XGID turn -1 means White is on roll")
+    check(xg["mover_is_white"] is True,
+          "XGID turn +1 means player 1 (White) is on roll")
     check([a["notation"] for a in xg["alternatives"]]
           == [a["notation"] for a in alts], "same ranking as the OGID")
     check(xg["alternatives"][0]["move"] == top["move"],
@@ -132,11 +133,13 @@ def main() -> int:
     # so the stop in between is inferred -- and the position editor draws its
     # board arrows straight from these steps, so getting it wrong shows a
     # checker landing on a stack of enemy checkers and carrying on.
-    # Black on roll, so mover-own numbering is already absolute.
+    # Turn +1, so player 1 -- White -- is on roll, and a mover-own point p
+    # sits at absolute 25 - p: own 24 is absolute 1, and the stop on own 23
+    # is absolute 2. The routing under test is unchanged; only the frame is.
     primed = analyze_position(
         "XGID=-A---bEcC---eE-----e----A-:0:0:1:51:0:0:0:0:8", level="1ply")
     run = next(a for a in primed["alternatives"] if a["notation"] == "24/18")
-    check(run["move"] == [{"from": 24, "pips": 1}, {"from": 23, "pips": 5}],
+    check(run["move"] == [{"from": 1, "pips": 1}, {"from": 2, "pips": 5}],
           f"24/18 off a 5-1 goes round via 23, not through the made 19 (got {run['move']})")
 
     print("6. no dice means a cube decision")

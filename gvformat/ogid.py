@@ -53,8 +53,12 @@ raw index i is:
     absolute_pip(i) = i        if mover_is_black
 
 This was derived and cross-validated against the canonical worked example
-in OGID.md (the standard starting position) and against an independent
-asymmetric golden vector from gammonview's ``xgid.test.js``, and confirmed
+in OGID.md (the standard starting position) and, since, against seven real
+OpenGammon XGID/OGID pairs -- six of them consecutive plies of one game --
+in ``tests/test_position_id.py`` (section 7). The asymmetric golden vector
+this once cited from gammonview's ``xgid.test.js`` was a weaker witness than
+it looked: its two colours are mirror images of each other, so it reads the
+same from either side. It is also confirmed
 consistent with ``bgsage.board.flip_board``'s actual index-swap behaviour
 (``flip_board(i) == 25 - i``, sign-negated for indices 1-24, unsigned copy
 for the bar slots 0/25) -- see the ``__main__`` validation block below and
