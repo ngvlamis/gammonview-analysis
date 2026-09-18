@@ -497,6 +497,14 @@ function r4(v) { return Math.round(v * 1e4) / 1e4; }
  * `flip` is whether canonical white is XG's player-2 (cd.actif is XG's raw
  * +1=P1/-1=P2 mover flag, so `dblIsWhite = (cd.actif === 1) !== flip`).
  *
+ * `evalLevel` is the level of *this cube record* (`cd.level`), never of the
+ * checker play that follows it. XG picks a level per decision and routinely
+ * searches a cube deeper than the roll after it -- over our own XG corpus the
+ * two disagree on 12 of 30 in-move doubles, always with the cube the deeper
+ * of the pair. It covers all three branches, so the response ply reports it
+ * too: a take or pass is judged by the same evaluation as the double beside
+ * it, which is what the spec means by the field being present on take/pass.
+ *
  * Returns { doublerPly, responsePly, hasTake }; the caller pushes both
  * plies and, on a take, updates its own cubeValue/cubeOwnerBgf bookkeeping.
  */
@@ -605,6 +613,7 @@ function emitDoubleResponse(cd, board, turn, scoreWhite, scoreBlack, matchLength
   };
   if (pendingNdEquity != null) respAnalysis.no_double_equity = pendingNdEquity;
   if (_hasEval(probsDt, cd.evalDt[6])) respAnalysis.eval = _probsToEval(probsDt);
+  if (evalLevel) respAnalysis.eval_level = evalLevel;
 
   const responsePly = {
     color: respIsWhite ? 1 : 0,
@@ -784,11 +793,15 @@ export async function convertXg(fileBytes) {
           // Handle cube pair
           if (pendingCube !== null) {
             const cd = pendingCube;
+            // The cube record's own level, not this move record's -- see
+            // emitDoubleResponse. `evalLevel` above belongs to the checker
+            // play and is kept for it alone.
+            const cubeLevel = evalLevelName(cd.level);
 
             if (cd.doubled === 1) {
               pendingCube = null;
               const { doublerPly, responsePly, hasTake } = emitDoubleResponse(
-                cd, boardBefore, turn, scoreWhite, scoreBlack, matchLength, isCrawford, evalLevel, flip,
+                cd, boardBefore, turn, scoreWhite, scoreBlack, matchLength, isCrawford, cubeLevel, flip,
               );
               plies.push(doublerPly);
               plies.push(responsePly);
@@ -1029,6 +1042,13 @@ export async function convertXg(fileBytes) {
               // double is the same position, judged the other way.
               const probsNd = [cd.evalNd[3], cd.evalNd[4], cd.evalNd[5], cd.evalNd[1], cd.evalNd[0]];
               if (_hasEval(probsNd, cd.evalNd[6])) result.sub.eval = _probsToEval(probsNd);
+              // Same reasoning as the eval above, and the same source: the
+              // cube record's level, which is the depth the ND/DT/DP read was
+              // made at and is often not the checker play's. Without it every
+              // held cube and missed double in an XG match -- the bulk of the
+              // cube decisions in one -- showed no level at all.
+              const embLevel = evalLevelName(cd.level);
+              if (embLevel) result.sub.eval_level = embLevel;
               analysis[result.key] = result.sub;
             }
           }

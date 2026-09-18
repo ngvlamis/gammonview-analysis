@@ -622,6 +622,15 @@ def _emit_double_response(
     or ``_OGID_STATE_GAME_OVER`` on a pass, advancing ``cube_log2``/
     ``cube_owner`` on a take).
 
+    ``eval_level`` is the level of *this cube record* (``cd["level"]``), never
+    of the checker play that follows it. XG picks a level per decision and
+    routinely searches a cube deeper than the roll after it -- over our own XG
+    corpus the two disagree on 12 of 30 in-move doubles, always with the cube
+    the deeper of the pair. It covers all three branches, so the response ply
+    reports it too: a take or pass is judged by the same evaluation as the
+    double beside it, which is what the spec means by the field being present
+    on take/pass.
+
     Returns ``(doubler_ply, response_ply, has_take)``; the caller appends
     both plies and, on a take, updates its own ``cube_value``/
     ``cube_owner_bgf`` bookkeeping.
@@ -747,6 +756,8 @@ def _emit_double_response(
     probs_resp = probs_dt
     if _has_eval(probs_resp, cd["eval_dt"][6]):
         resp_analysis["eval"] = _probs_to_eval(probs_resp)
+    if eval_level:
+        resp_analysis["eval_level"] = eval_level
 
     response_ply = {
         "color": 1 if resp_is_white else 0,
@@ -905,13 +916,17 @@ def convert_xg(xg_path: Path) -> dict:
                     # ── Handle cube pair (tsCube + tsMove) ──────────────
                     if pending_cube is not None:
                         cd = pending_cube
+                        # The cube record's own level, not this move record's
+                        # -- see _emit_double_response. ``eval_level`` above
+                        # belongs to the checker play and is kept for it alone.
+                        cube_level = _eval_level_name(cd["level"])
 
                         if cd["doubled"] == 1:
                             pending_cube = None
                             # Actual double: emit doubler + response plies
                             doubler_ply, response_ply, has_take = _emit_double_response(
                                 cd, board_before, turn, score_white, score_black,
-                                match_length, is_crawford, eval_level, flip,
+                                match_length, is_crawford, cube_level, flip,
                             )
                             plies.append(doubler_ply)
                             plies.append(response_ply)
@@ -1197,6 +1212,15 @@ def convert_xg(xg_path: Path) -> dict:
                             ]
                             if _has_eval(probs_nd, cd["eval_nd"][6]):
                                 emb["eval"] = _probs_to_eval(probs_nd)
+                            # Same reasoning as the eval above, and the same
+                            # source: the cube record's level, which is the
+                            # depth the ND/DT/DP read was made at and is often
+                            # not the checker play's. Without it every held
+                            # cube and missed double in an XG match -- the bulk
+                            # of the cube decisions in one -- showed no level.
+                            emb_level = _eval_level_name(cd["level"])
+                            if emb_level:
+                                emb["eval_level"] = emb_level
                             analysis[key] = emb
 
                     if (0 <= action_id <= 20
