@@ -15,6 +15,12 @@ behind several design decisions. Dates are the tag dates.
 
 ## Unreleased
 
+**Analysis results change in this release.** The first four entries below all
+change what a fresh analysis produces — a preset is gone, two were retuned, one
+threshold became two, and a borderline decision now escalates. A `.gva` or
+`.gvab` written by 1.0.0 still reads identically; it is the *next* analysis of
+the same match that differs, so re-analyze rather than compare across versions.
+
 **The `balanced` preset is retired** *(breaking)*
 
 `--preset balanced` (and its `b` alias) now fails. It existed to be the cheap
@@ -41,6 +47,105 @@ is a removed built-in, not a reserved word.
 [`docs/PRESET_ACCURACY.md`](docs/PRESET_ACCURACY.md) keeps the 493-match study
 that included it, unedited. The `balanced` column there is the evidence for the
 removal, not a recommendation.
+
+**`world_class` and `world_class_fast` are retuned to XG's own routing**
+
+Mining XG's World Class decisions — 78,661 of them — for the level it actually
+spent puts its depth crossover near a top-2 equity gap of **0.08** and its
+rollout cliff at an error of **0.02**. Both presets now use those numbers.
+
+`world_class` was a flat 4-ply first pass, which is not what XG does. It becomes
+a **3-ply screen that deepens to 4-ply on near-ties** — XG runs 4-ply on 93.7%
+of decisions with a gap under 0.005 and on only 8.3% of those past 0.12. This is
+both more faithful and considerably cheaper: measured over three matches, 104.9
+→ 55.7 s/match, a 1.88× speedup, as the full-width 4-ply pass falls from 71.1%
+of decisions to 49.0% and the rollout share from 28.9% to 13.6%.
+
+`world_class_fast`'s cube middle tier moves from a 0.04 close threshold to 0.08,
+so "borderline" means the same thing on both presets. Over 33 holdout matches
+this is MAE-neutral (0.4826 → 0.4840, 95% CI [−0.0235, +0.0192]) at 1.5% more
+wall clock, with 2 of 33 matches changing at all — adopted as a coherence fix,
+not a measured gain, since 489 of 686 cube decisions already reached the rollout
+at 0.04.
+
+**`close_threshold` and `error_threshold` are now two separate dials**
+
+They answer different questions and were never the same number.
+`close_threshold` gates the *middle tier*: how near a tie before the screen's
+verdict stops being trusted. `error_threshold` gates the *second pass*: how much
+a decision has to cost before its size is worth a rollout. A middle tier is
+about 34× cheaper than a rollout on a checker move list, so the first can afford
+to be generous where the second cannot.
+
+`error_threshold` defaults to **0.02** and, like `mid_pass` and
+`close_threshold`, takes either a bare number or a `{checker, cube}` mapping.
+`fast` sets it to `0`, because its second pass is 3-ply rather than a rollout:
+there the second pass costs ~6× the screen instead of ~200×, and cheap depth is
+worth spending on every error.
+
+A `presets.yaml` written against 1.0.0 still loads, but a custom preset may
+escalate differently, in either direction. A 3-tier preset used to need an error
+larger than its `close_threshold` to reach the second pass, so one with a wide
+threshold now rolls out **more** often. A 2-tier preset had no error gate at all
+and escalated on any disagreement, so it now rolls out **less** often. Setting
+`error_threshold` explicitly — to the old `close_threshold` in the first case,
+to `0` in the second — restores the previous behaviour exactly.
+
+**A borderline decision that proves to be a real error now escalates**
+
+A checker play whose top two moves were within `close_threshold` went to the
+middle tier and was capped there, however large the played move's error turned
+out to be. The two are unrelated: `top2_gap` is best-vs-second and says nothing
+about how far down the list the player actually went. Over a 2-match corpus at
+a 0.04 threshold, 12 of 92 borderline decisions lost more than the threshold and
+7 lost more than 0.08 — the worst a 0.176 blunder in a position whose top two
+moves were 0.0004 apart, all of them sized at 3-ply by a preset whose second
+pass exists to roll out exactly those errors. Borderline cubes were never
+re-checked at all (0.4% of cubes, median 0.07, worst 0.22).
+
+Both kinds now escalate to `second_pass`, judged on the middle tier's own
+numbers rather than the screen's. PR moves toward the deepest preset at every
+threshold width. The escalation is skipped when `mid_pass` names `second_pass`'s
+own level, since the analyzers are one object and the second call would buy the
+same answer twice — which makes it a no-op for `world_class_fast`'s cube tier by
+construction.
+
+**Parallel analysis now fills the machine** *(behaviour change on `--jobs 0`)*
+
+The auto split was `cpu // 2` workers × `cpu // 4` engine threads, measured only
+at 24 cores and only against the two presets with no rollout tier. It is now
+`ceil(cpu / 7)` workers, each using every core.
+
+The 7 is measured: `checker_eval` elevates ~15 candidates per decision with a
+hardcoded `n_threads=1` and overlaps them, so **one decision draws about 7
+effective cores and no more**. Everything follows from that ceiling — one
+decision fills a laptop but leaves a workstation two-thirds idle, which is why
+serial analysis costs 3.9% on 8 cores and 44% on 24. Measured over a 6-match
+corpus on a 24-core M2 Ultra, an 8-core M3 and a 4-core i5-7600; 9–21 cores is
+interpolation. Output is byte-identical at any setting.
+
+`gvan-match` and `gvan-batch` need no change — both already defaulted to
+`--jobs 0`, and simply get faster. Imported callers still default to `jobs=1`
+(serial), because a library cannot know whether its caller guarded
+`if __name__ == "__main__":` and spawning without that guard fails as a bare
+`BrokenProcessPool`. That safety is no longer cheap: **pass `jobs=0` from a
+server or batch driver.**
+
+**Worker processes now exit with their parent**
+
+A `ProcessPoolExecutor` only cleans up when the parent exits normally. If it
+dies hard — SIGKILL, force-quit, crash, a laptop shut down rather than logged
+out — the workers block forever on a queue nobody will write to again, reparent
+to PID 1, and hold their analyzers and network weights until reboot. Under the
+`spawn` start method every worker holds its own handle to the call queue's pipe,
+so the write end stays open among the survivors and there is no EOF to notice.
+
+Thirty-seven such orphans were found on one machine in September 2026, in three
+cohorts days apart, holding roughly 19 GB. On a 16 GB laptop running the helper
+this reads to a user as "my computer is broken", with nothing to point at.
+Workers now wait on `multiprocessing.parent_process()`, whose sentinel is a pipe
+only the parent holds the other end of — one idle thread, no polling, and it
+works on macOS and Windows where `PR_SET_PDEATHSIG` does not.
 
 ## 1.0.0 — 2026-09-15
 

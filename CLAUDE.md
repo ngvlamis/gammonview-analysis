@@ -334,7 +334,8 @@ in step when a flag changes; the rationale belongs only here.
   (compact binary) — written beside the input or into `--out-dir`. Both forms
   derive from a single `write_gvab`, so `.gva` == `read_gvab(.gvab)` and the two
   can't drift. An OGXM input's existing analysis is preserved (ours appended).
-  Passes through `--preset`, `--threads`, `--all-moves`, `--count-illegal`. A
+  Passes through `--preset`, `--jobs`, `--threads`, `--all-moves` and
+  `--count-illegal`. A
   directory argument expands to its top-level `.mat`/`.gva`/`.ogxm`/`.gvab`;
   existing outputs are skipped unless `--force` (so a `.gva`/`.gvab` input whose
   output name equals it is skipped by default); a bad file is reported and the
