@@ -12,7 +12,13 @@ Typical server use — analyze a dropped match file and get the analyzed
 ``.gvab`` bytes back, in one call::
 
     from gvanalysis import analyze_match
-    data = analyze_match("match.mat", preset="world_class")   # bytes to send to the client
+    data = analyze_match("match.mat", preset="world_class", jobs=0)
+
+``jobs=0`` turns on decision-level parallelism. It is not the default, because
+an imported function cannot know whether its caller guarded
+``if __name__ == "__main__":`` and spawning without that guard fails obscurely
+-- but a server owns its entry point, and serial costs ~4% of wall clock on 8
+cores and ~44% on 24.
 
 Or the pieces:
 
@@ -80,7 +86,9 @@ def analyze_match(input_path, *, preset: str | None = None, quiet: bool = True, 
     ``[engine]`` extra; without it, raises a ``ModuleNotFoundError`` explaining
     how to install.
 
-    Extra keyword arguments go to ``analyze_ogxm``; notably
+    Extra keyword arguments go to ``analyze_ogxm``; notably ``jobs=0`` enables
+    decision-level parallelism (off by default here, since this is a library
+    call -- see ``analyze_ogxm``; a server should pass it) and
     ``on_progress=lambda done, total: ...`` reports decision-level progress, for
     a server driving a progress bar in a client.
     """

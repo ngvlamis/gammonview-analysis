@@ -57,6 +57,7 @@ if sys.platform == "win32":
 
 from bgsage import BgBotAnalyzer
 
+from .parentwatch import watch_parent
 from .loader import load_ogxm
 from .ogxm_reconstructor import reconstruct_decisions_from_ogxm
 from .game_eval import (
@@ -173,8 +174,14 @@ _WORKER: dict = {}
 
 
 def _worker_init(base_level, mid_level_checker, mid_level_cube, level,
-                 close_threshold, all_moves, count_illegal, level_display,
+                 thresholds, all_moves, count_illegal, level_display,
                  engine_threads, verbose) -> None:
+    # First, before any weights are loaded: from here on this process holds
+    # hundreds of megabytes, and if the parent dies hard nothing else will ever
+    # tell it to let go. See `parentwatch`.
+    watch_parent()
+
+    (close_checker, close_cube, err_checker, err_cube) = thresholds
     built: dict = {}
 
     def mk(lvl):
@@ -195,7 +202,11 @@ def _worker_init(base_level, mid_level_checker, mid_level_cube, level,
     _WORKER["ctx_kw"] = dict(
         analyzer=analyzer, base_analyzer=base_analyzer,
         mid_analyzer_checker=mid_analyzer_checker, mid_analyzer_cube=mid_analyzer_cube,
-        luck_analyzer=luck_analyzer, close_threshold=close_threshold,
+        luck_analyzer=luck_analyzer,
+        close_threshold_checker=close_checker,
+        close_threshold_cube=close_cube,
+        error_threshold_checker=err_checker,
+        error_threshold_cube=err_cube,
         verbose=verbose, all_moves=all_moves, count_illegal=count_illegal,
         level_display=level_display,
     )
@@ -253,18 +264,47 @@ def analyze_ogxm(
     is known -- before the first, slow engine build -- then once per decision.
     It is independent of show_progress and of stderr being a TTY.
 
-    `jobs` controls decision-level parallelism (Axis B): 1 (default) runs the
-    original serial path unchanged; a positive value is that many worker
-    PROCESSES; 0 means auto. Each decision (screen -> escalate-on-error ->
-    luck) is one unit of work dispatched to a `ProcessPoolExecutor`. Processes,
-    not threads, because bgsage's evaluation is a C++ extension that holds the
-    GIL -- threads plateau at ~2.8x, separate processes scale past it.
+    `jobs` controls decision-level parallelism (Axis B): 1 runs the original
+    serial path unchanged; a positive value is that many worker PROCESSES;
+    0 (the CLI default) means auto. Each decision (screen -> escalate-on-error
+    -> luck) is one unit of work dispatched to a `ProcessPoolExecutor`.
 
-    `threads` is bgsage's own internal parallelism (Axis A) *within* a worker.
-    In serial mode it behaves as before. In parallel mode it is the engine
-    threads per worker; auto picks a hybrid (~3 internal threads, ~cpu/3
-    workers) that fills the machine and lets a single heavy decision -- which
-    Axis B cannot split -- still be sped up internally.
+    Processes rather than threads, but NOT because the GIL forbids threads --
+    `bgbot_cpp` releases it, and 32 single-threaded 3-ply evaluations through a
+    plain ThreadPoolExecutor scale 5.1x at 8 threads and 7.8x at 24 (measured
+    2026-09-19, bgsage 2.0). The real reason is that thread scaling is capped
+    by the CANDIDATE COUNT: `checker_eval` elevates ~15 moves per decision, so
+    one decision draws ~7 effective cores and no more. Threads fill a decision;
+    processes fill a machine. They are not substitutes, which is why both axes
+    exist.
+
+    **The API default is 1 (serial); the CLI default is 0 (auto). This is
+    deliberate, and it is not free.** A CLI owns its entry point and is always
+    guarded; an imported function cannot know whether its caller is. Spawning by
+    default would turn any unguarded script into a `BrokenProcessPool` naming
+    nothing relevant, so the library errs safe, as joblib and scikit-learn do.
+
+    The price of that safety is now real -- serial costs ~4% on 8 cores and
+    ~44% on 24 (see the sizing comment below). **If you own your entry point,
+    pass `jobs=0`.** Servers and batch drivers should.
+
+    Any `jobs` other than 1 spawns worker processes, and under the `spawn`
+    start method every child re-imports the calling module. A caller that
+    drives this from a script MUST guard its entry point with
+    ``if __name__ == "__main__":`` -- without it each child re-runs the
+    caller's top level, which surfaces as `BrokenProcessPool` rather than as
+    anything naming the real cause. The CLI below is already guarded.
+
+    `threads` is Axis A: parallelism *within* one decision. Despite the name it
+    does not set threads inside a single evaluation -- `checker_eval` elevates
+    each candidate with a hardcoded `n_threads=1` and overlaps the candidates,
+    so `threads` is how many of the ~15 elevations run at once. A rollout level
+    bypasses screening and hands the value to bgsage's own pool instead.
+
+    **`threads=0` means every core, not none.** bgsage resolves it to hardware
+    concurrency at construction. It is both the default and the fastest setting
+    per decision: measured on one 40-move play at 24 cores, `threads=0` beats
+    `threads=2` by 3.7x at 3-ply, 5.1x at 4-ply and 6.9x at `truncated2`.
 
     Output is byte-identical to the serial path regardless of `jobs`
     (parallelism only changes wall-clock time, never the result: collation is a
@@ -276,7 +316,8 @@ def analyze_ogxm(
         base_level_r = None
         level = p.first_pass
         mid_level_checker = mid_level_cube = None
-        close_threshold = None
+        close_checker = close_cube = None
+        err_checker = err_cube = 0.0
     else:                          # two pass: 1st = screen, 2nd = authoritative
         base_level_r = p.first_pass
         level = p.second_pass
@@ -285,7 +326,12 @@ def analyze_ogxm(
         # cube position, so a preset may want one and not the other.
         mid_level_checker = p.mid_pass_checker
         mid_level_cube = p.mid_pass_cube
-        close_threshold = p.close_threshold
+        # Two dials, per kind. `close_*` decides what earns a closer look;
+        # `error_*` decides what earns a rollout. See presets.Preset.
+        close_checker = p.close_threshold_checker
+        close_cube = p.close_threshold_cube
+        err_checker = p.error_threshold_checker
+        err_cube = p.error_threshold_cube
 
     ml = int(ogxm.get("match_length", 0) or 0)
     p1 = ogxm.get("player_white") or "White"
@@ -320,10 +366,20 @@ def analyze_ogxm(
                 mid_desc = " / ".join(
                     f"{kind} {lvl or 'none'}" for kind, lvl in
                     (("checker", mid_level_checker), ("cube", mid_level_cube)))
+            close_desc = (f"{p.close_threshold}" if p.close_threshold is not None
+                          else " / ".join(
+                              f"{kind} {thr}" for kind, thr in
+                              (("checker", close_checker), ("cube", close_cube))
+                              if thr is not None))
+            err_desc = (f"{err_checker}" if err_checker == err_cube
+                        else f"checker {err_checker} / cube {err_cube}")
             print(f"Preset: {p.display} ({base_level_r} screen -> {mid_desc} on close "
-                  f"(<= {close_threshold}) -> {level} on error)")
+                  f"(<= {close_desc}) -> {level} on error (> {err_desc}))")
         elif base_level_r:
-            print(f"Preset: {p.display} ({base_level_r} screen, upgrade to {level})")
+            err_desc = (f"{err_checker}" if err_checker == err_cube
+                        else f"checker {err_checker} / cube {err_cube}")
+            print(f"Preset: {p.display} ({base_level_r} screen, upgrade to {level} "
+                  f"on error (> {err_desc}))")
         else:
             print(f"Preset: {p.display} ({level})")
         print()
@@ -332,34 +388,44 @@ def analyze_ogxm(
         on_progress(0, total_decisions)
 
     # Two axes of parallelism (see docstring). Axis B = `n_jobs` worker
-    # processes over decisions; Axis A = `worker_threads` bgsage-internal
-    # threads inside each. Serial (jobs==1) keeps `threads` as the engine's
-    # internal parallelism, exactly as before.
+    # processes over decisions; Axis A = `worker_threads`, how many of a
+    # decision's ~15 candidate elevations overlap inside one worker.
     #
-    # In parallel mode auto DELIBERATELY OVERSUBSCRIBES, to ~3x the core count.
-    # Sizing the product to ~cpu (the obvious choice, and what this did before)
-    # leaves the machine idle for a large share of the run: engine threads
-    # parallelise *within* one evaluation, and a 1-ply evaluation is too small to
-    # use them -- measured 0.98-1.00x from 1 to 24 threads, against 0.34x for a
-    # 2-ply play. The per-roll luck sweep is all 1-ply and ~29% of a `fast`
-    # analysis, so during it each worker really occupies one core. Overcommitting
-    # fills that gap and costs little in the thread-hungry passes.
+    # SIZING, measured 2026-09-19 across four machines on a 6-match corpus
+    # (84-459 plies each), `world_class_fast`, whole corpus per point:
     #
-    # Measured over the 12 sample matches on a 24-core box (16P+8E), best of two
-    # passes, against the previous 8x3 default: 12x6 is 1.22x on `fast` and 1.12x
-    # on `deep`; the whole threads=6 family lands within ~3% of that, and threads
-    # is by far the stronger lever (every threads=6 combo beat every threads=4
-    # one). Both levers must move together -- 4x6, which `cpu // worker_threads`
-    # would have produced from threads=6 alone, is 0.89x, i.e. a regression.
-    # Only the 24-core point is measured; the ratios below reproduce it and
-    # degrade to roughly the old commitment on small machines.
+    #   A worker draws ~7 effective cores on a checker decision at threads=0 --
+    #   `checker_eval` elevates ~15 candidates single-threaded and overlaps
+    #   them, so that is a per-decision CEILING. Everything follows from it:
+    #
+    #     24-core M2 Ultra:  4x0 234.97s (best) | 12x6 237.04 | 3x0 240.39
+    #                        | 2x0 264.03 (+12%) | serial 338.26 (+44%)
+    #      8-core M3 (drift-corrected):
+    #                        2x6 1029.8 (best) | 2x0 1034.0 | 4x2 1043.2
+    #                        | serial 1069.7 (+3.9%)
+    #      4-core i5-7600:   2x0 1429.7 (best) | 2x2 1449.9 | serial 1491.3
+    #
+    #   One decision fills 8 cores and leaves 24 two-thirds idle, which is why
+    #   serial costs 3.9% on a laptop and 44% on the Studio.
+    #
+    # Hence `ceil(cpu / 7)` workers, each with every core. The FLOOR OF 2 is
+    # measured, not defensive: two workers beat one by 4.1% even on 4 cores,
+    # because the ~15 elevations finish unevenly and a second decision in
+    # flight covers the first's tail. It also buys stability -- on a machine
+    # with a browser running, 2x0 reproduced to 0.003% while serial varied
+    # 3.45%, since oversubscription absorbs a stolen core.
+    #
+    # The ceiling (not floor) division matters only above 14 cores: at 24 a
+    # floor picks 3 workers, which measured +2.3%.
+    #
+    # Measured at 4, 8 and 24 cores. 9-21 cores is interpolation.
     cpu = os.cpu_count() or 1
     if jobs == 1:
         worker_threads = threads
         n_jobs = 1
     else:
-        worker_threads = threads if threads > 0 else max(2, cpu // 4)
-        n_jobs = jobs if jobs > 0 else max(1, cpu // 2)
+        worker_threads = threads if threads > 0 else 0   # 0 = every core
+        n_jobs = jobs if jobs > 0 else max(2, (cpu + 6) // 7)
 
     # Serial builds analyzers once here; parallel workers build their own (they
     # can't cross the process boundary), so skip the main-process build then.
@@ -391,7 +457,7 @@ def analyze_ogxm(
         luck_analyzer = _mk("1ply", "luck analyzer")
     elif not quiet:
         print(f"Analyzing {total_decisions} decisions across {n_jobs} worker "
-              f"process(es) x {worker_threads or 'auto'} engine threads...")
+              f"process(es) x {worker_threads or 'all'} cores per decision...")
 
     if not quiet:
         print()
@@ -444,7 +510,10 @@ def analyze_ogxm(
                               base_analyzer=base_analyzer, luck_analyzer=luck_analyzer,
                               mid_analyzer_checker=mid_analyzer_checker,
                               mid_analyzer_cube=mid_analyzer_cube,
-                              close_threshold=close_threshold,
+                              close_threshold_checker=close_checker,
+                              close_threshold_cube=close_cube,
+                              error_threshold_checker=err_checker,
+                              error_threshold_cube=err_cube,
                               level=level, all_moves=all_moves,
                               count_illegal=count_illegal,
                               progress=advance)
@@ -463,7 +532,8 @@ def analyze_ogxm(
                 work.append((gi, di, game_number, dec))
 
         init_args = (
-            base_level_r, mid_level_checker, mid_level_cube, level, close_threshold, all_moves,
+            base_level_r, mid_level_checker, mid_level_cube, level,
+            (close_checker, close_cube, err_checker, err_cube), all_moves,
             count_illegal, _LEVEL_DISPLAY.get(level, level), worker_threads, verbose,
         )
         buckets: "list[list[tuple[int, object]]]" = [[] for _ in recons]
@@ -551,7 +621,10 @@ def analyze_ogxm(
             # what it always did); the cube tier sits alongside it.
             "mid_pass_level": mid_level_checker,
             "mid_pass_cube_level": mid_level_cube,
-            "close_threshold": close_threshold,
+            "close_threshold_checker": close_checker,
+            "close_threshold_cube": close_cube,
+            "error_threshold_checker": err_checker,
+            "error_threshold_cube": err_cube,
             "second_pass_level": p.second_pass,
             "eval_level": level,   # back-compat: authoritative level for existing .gva consumers
             # Level the luck-analyzer runs at (always 1-ply today; will become
@@ -666,18 +739,19 @@ def main() -> None:
     )
     parser.add_argument(
         "--threads", type=int, default=0,
-        help="bgsage-internal engine threads (Axis A), per worker in parallel "
-             "mode (default: 0 = auto)",
+        help="Parallelism WITHIN one decision (Axis A): how many of the ~15 "
+             "candidate elevations overlap. Default 0 = every core, which is "
+             "also the fastest per decision (3.7-6.9x a low thread count).",
     )
     parser.add_argument(
         "--jobs", type=int, default=0,
         help="Decision-level parallel worker PROCESSES (Axis B; default: 0 = "
-             "auto ~cpu/2). Each checker/cube decision is analyzed in its own "
-             "process (bgsage's C++ core holds the GIL, so processes scale "
-             "where threads don't); output is byte-identical to serial. Auto "
-             "oversubscribes (jobs x threads ~ 3x cores) because the 1-ply luck "
-             "sweep cannot use engine threads. Pass --jobs 1 to force the "
-             "serial path.",
+             "auto = ceil(cpu/7), at least 2). Each checker/cube decision is "
+             "analyzed in its own process. Processes rather than threads "
+             "because thread scaling is capped by the ~15 candidates in one "
+             "decision (~7 cores), not by the GIL; output is byte-identical to "
+             "serial at any setting. Pass --jobs 1 to force the serial path, "
+             "which costs ~4%% on 8 cores and ~44%% on 24.",
     )
     parser.add_argument(
         "--verbose", action="store_true",
