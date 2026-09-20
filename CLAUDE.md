@@ -74,9 +74,16 @@ Server one-liner (dropped match → `.gvab` bytes for the client):
 
 ```python
 from gvanalysis import analyze_match      # mat_to_gvab is the old name, still exported
-data = analyze_match("match.mat", preset="world_class")   # analyzed .gvab bytes to store/ship
+data = analyze_match("match.mat", preset="world_class", jobs=0)   # analyzed .gvab bytes
 # also accepts .gva/.ogxm/.gvab; an input's existing analysis is kept, ours appended
 ```
+
+**Pass `jobs=0` from a server.** The API defaults to `jobs=1` (serial) while the
+CLI defaults to `0` (auto), deliberately: a CLI owns its entry point, an
+imported function cannot know whether its caller guarded `if __name__ ==
+"__main__":`, and spawning without that guard fails as a bare
+`BrokenProcessPool`. Serial is the safe default but no longer a cheap one —
+measured 2026-09-19, it costs ~4% on 8 cores and ~44% on 24.
 
 ## Setup
 
@@ -216,7 +223,7 @@ in step when a flag changes; the rationale belongs only here.
   | `fast` (`f`) | `2ply` | `3ply` | Fast |
   | `deep` (`d`) | `3ply` | — | Deep |
   | `balanced` (`b`) | `2ply` → `3ply` on close | `truncated2` | — (quality/speed) |
-  | `world_class` (`wc`) | `4ply` | `truncated2` | World Class (XG Roller+) |
+  | `world_class` (`wc`) | `3ply` → `4ply` on close | `truncated2` | World Class (XG Roller+) |
   | `world_class_fast` (`wcf`) | `3ply` (cube: → rollout on close too) | `truncated2` | World Class (3-tier) |
 
   `world_class_fast` is a 3-tier scheme (`mid_pass` + `close_threshold` on the
@@ -229,12 +236,18 @@ in step when a flag changes; the rationale belongs only here.
   (24ms → 100ms). Dropping the checker middle tier made the preset ~36%
   faster while it ran twice as many rollouts, so borderline checker plays now go
   straight from the 3-ply screen to `truncated2` when they are wrong, and are
-  left at the screen when they are right. Re-measured after
-  `gvanalysis/checker_eval.py` made 4-ply on a move list 1.6x cheaper, the
-  answer is unchanged and sharper: restoring the checker middle tier runs the
-  preset 48% slower (142.7s vs 96.4s on three matches) *and* diverts 65 of the
-  83 checker rollouts into 4-ply — the weaker estimator, per the arbiter test
-  below. Dearer and shallower at once. `mid_pass` therefore takes a
+  left at the screen when they are right. The argument now rests on the
+  borderline *rate* alone: at a 0.04 window a cube is borderline ~5% of the time
+  and a checker play 53.8%, so the same rule costs ~0.4s per match on one and
+  tens of seconds on the other. The old second argument — that restoring the
+  tier "diverts 65 of the 83 checker rollouts into 4-ply, the weaker estimator"
+  — described the **escalation defect**, not the tier: a borderline decision
+  used to be capped at the middle tier however large its error proved. It
+  escalates now, so a middle tier no longer steals rollouts (it would still
+  cost, and more, since those decisions pay both tiers). Note also that the cost
+  order has flipped since that measurement: on 760 paired checker decisions
+  4-ply beats `truncated2` on 710, median 2.23x, because `checker_eval.py`
+  screens candidates before the full-width pass. `mid_pass` takes a
   `{checker, cube}` mapping as well as a bare level (which still sets both); an
   omitted kind is plain 2-tier.
 
@@ -250,15 +263,39 @@ in step when a flag changes; the rationale belongs only here.
   routing the ~6% of cubes that are borderline to the rollout adds roughly
   0.4s per match.
 
-  `close_threshold` is the speed/fidelity dial: a cube is borderline when it is
-  that close to its double point or (on a take/pass) its take point. An error
-  only reaches the rollout tier via the error branch if it costs *more* than
-  `close_threshold` — inside that margin there is nothing for a rollout to size,
-  so the mid tier takes it where one exists.
+  **Two thresholds, not one — they answer different questions.**
+  `close_threshold` gates the *middle* tier: how near a tie before the screen's
+  verdict stops being trusted (top two checker moves within it, or a cube that
+  close to its double or take point). `error_threshold` gates the *second pass*:
+  how much a decision has to cost before its size is worth a rollout. Both take
+  a bare number or a `{checker, cube}` mapping, as `mid_pass` does.
+
+  They want opposite values and have wildly different price tags — a 3-ply
+  middle tier costs ~0.036s on a move list against a rollout's ~1.2s — so
+  `close_threshold` can afford to be generous where `error_threshold` cannot.
+  Mining XG's own World Class routing over 78,661 decisions finds the same
+  split: its depth crossover sits near a top-2 gap of 0.08 (4-ply share falls
+  64.9% → 15.0% across that boundary) while its rollout cliff is at an error of
+  0.02 (22.9% rolled out in 0.015–0.020, 94.7% in 0.020–0.030).
+
+  `error_threshold` defaults to **0.02**. It exists to ration rollouts, so
+  `fast` sets it to `0` — its second pass is `3ply`, not a rollout, and 0.02
+  there saves 6% of wall clock while moving PR by a mean of 0.14.
+
+  **A borderline decision that the middle tier then finds to be a real error
+  escalates to the second pass.** Both paths test the error again on the middle
+  tier's own numbers, not the screen's. Until Sep 2026 neither did: a borderline
+  checker play was capped at the middle tier (10% of them cost more than the
+  threshold, worst 0.56) and a borderline cube was re-checked never (0.4% of
+  cubes, median 0.07, max 0.22). The escalation is skipped when `mid_pass` names
+  `second_pass`'s own level — analyzers are memoized by level, so identity is
+  exact and re-running would buy the same answer twice. That makes it a no-op
+  for `world_class_fast`'s cube tier by construction.
 
   `balanced` is the same 3-tier machinery tuned for quality/speed rather than
-  XG parity: `2ply` screen on every decision, `3ply` on near-ties (wide `0.04`
-  threshold since 3-ply is cheap), `truncated2` to size genuine errors. The
+  XG parity: `2ply` screen on every decision, `3ply` on near-ties (wide `0.08`
+  threshold since 3-ply is cheap — XG's own crossover), `truncated2` to size
+  genuine errors bigger than `0.02`. The
   sizing tier was `4ply` until the arbiter test above found it the weaker
   estimator on precisely the decisions a sizing tier exists for. That test ran
   on cubes; it has since been repeated on 175 real sizing-tier *checker* errors

@@ -178,7 +178,7 @@ built-ins:
 | `fast` (`f`) | `2ply` | — | `3ply` | Fast |
 | `deep` (`d`) | `3ply` | — | — | Deep |
 | `balanced` (`b`) | `2ply` | `3ply` (both kinds) | `truncated2` | — (quality/speed) |
-| `world_class` (`wc`) | `4ply` | — | `truncated2` | World Class (XG Roller+) |
+| `world_class` (`wc`) | `3ply` | `4ply` (both kinds) | `truncated2` | World Class (XG Roller+) |
 | `world_class_fast` (`wcf`) | `3ply` | `truncated2` (**cube only**) | `truncated2` | World Class (3-tier) |
 
 The second pass runs on an **error**; the middle tier runs on a **borderline**
@@ -189,11 +189,17 @@ decision the screen would otherwise have settled. `fast` is the default.
 493 matches were analyzed by XG at World Class and by each of the three strong
 presets, then compared decision by decision:
 
-| | mean gap to XG's match PR | same checker play as XG | PR within 1 of XG | relative cost |
+> **Accuracy figures pending re-measurement.** The three columns below predate
+> the retuning of all three presets (two separate thresholds, middle-tier
+> escalation, and `world_class` moving from a flat 4-ply pass to 3-ply with a
+> 4-ply middle tier). The ordering is expected to hold; the numbers are not
+> current. The cost column is current.
+
+| | mean gap to XG's match PR | same checker play as XG | PR within 1 of XG | cost, ms/ply (24c → 4c) |
 |---|---|---|---|---|
-| `world_class` | 0.434 | 90.3% | 91.8%             | 45× |
-| `world_class_fast` | 0.441 | 90.0% | 90.7%             | 24× |
-| `balanced` | 0.540 | 89.2% | 86.7%             | 6× |
+| `world_class` | 0.434 | 90.3% | 91.8% | 291 → 2048 |
+| `world_class_fast` | 0.441 | 90.0% | 90.7% | 166 → 1016 |
+| `balanced` | 0.540 | 89.2% | 86.7% | 170 → 1030 |
 
 **Mean gap** is the average distance between the two *ratings* of the same
 player-match, in either direction: rate a match with `world_class` and XG rates
@@ -202,8 +208,10 @@ priced by XG's own equities, a player who made `world_class`'s recommended
 checker play every time would post a PR of 0.333, `world_class_fast` 0.353,
 `balanced` 0.412. All three are inside what XG itself calls world-class play.
 
-Cost is mean wall clock relative to `fast` over four matches, and varies with
-the match — see [the timings](docs/CLI.md#what-they-cost).
+Cost is milliseconds per ply over six matches, on a 24-core M2 Ultra and a
+4-core i5-7600 — absolutes rather than a multiple of `fast`, because that
+multiple is not constant across machines. Individual matches spread about 2×
+around these means. See [the timings](docs/CLI.md#what-they-cost).
 
 - **`world_class_fast` is the recommended analysis.** It lands 0.007 PR behind
   the deepest preset for a little under half the time. The two sit three times
@@ -215,9 +223,12 @@ the match — see [the timings](docs/CLI.md#what-they-cost).
   accurate. Its only real edge is on borderline cubes, and it gets there by
   rolling them out *less* often than `world_class_fast` does — which is
   XG-like, not demonstrably better. It costs roughly twice as much for that.
-- **`balanced` is the quality/speed option**, and the only one of the three with
-  real headroom: upgrading it recovers eight times as much error as upgrading
-  `world_class_fast` does.
+- **`balanced` is not the speed option it was.** After the retune it costs
+  about the same as `world_class_fast` on a workstation and *more* on a laptop,
+  so it is kept for having the most headroom — upgrading it recovers eight
+  times as much error as upgrading `world_class_fast` does — rather than for
+  being cheap. If you want cheap, the gap below it is `deep`, which is an order
+  of magnitude less.
 
 Every number above measures *similarity to XG*, which is not the same as being
 right — where the two engines differ there is no arbiter here to say which is

@@ -85,17 +85,30 @@ argument-length limits. Pass both flags to print the URL *and* open it.
 
 ### Parallelism
 
-Two independent axes, because bgsage's core is C++ holding the GIL:
+Two independent axes. **Threads fill a decision; processes fill a machine.**
 
 | Flag | Axis | Meaning |
 |---|---|---|
-| `--threads N` | A | Engine-internal threads, per worker. `0` = auto. |
-| `--jobs N` | B | Worker **processes**, one decision each. `0` = auto (~cpu/2), `1` = serial. |
+| `--threads N` | A | How many of a decision's ~15 candidate moves are evaluated at once. `0` (default) = every core. |
+| `--jobs N` | B | Worker **processes**, one decision each. `0` (default) = auto = `ceil(cpu/7)`, at least 2. `1` = serial. |
 
-Threads alone do not scale past the GIL wall, which is why the decision-level
-axis exists. Auto deliberately oversubscribes (jobs × threads ≈ 3× cores)
-because the 1-ply luck sweep cannot use engine threads. **Output is
-byte-identical to the serial path** at any setting.
+Both axes exist because thread scaling has a ceiling that is not the GIL.
+Analysis elevates about fifteen candidate moves per decision and overlaps them,
+so a single decision draws roughly **seven cores and no more** — enough to fill
+a laptop, not enough to fill a workstation. Processes supply the rest by
+putting several decisions in flight at once.
+
+Defaults are sized from that: `ceil(cpu/7)` workers, each using every core. The
+floor of two is deliberate — the fifteen candidates finish unevenly, so a
+second decision in flight covers the first's tail, which is worth ~4% even on a
+4-core machine and makes timings markedly more stable when something else
+(a browser, say) is competing for cores.
+
+`--jobs 1` forces the old serial path. It costs about 4% on 8 cores and 44% on
+24, because one decision cannot fill a large machine.
+
+**Output is byte-identical to the serial path** at any setting — parallelism
+changes wall-clock time and nothing else.
 
 ---
 
@@ -190,46 +203,71 @@ presets judge everything at the first pass.
 | `fast` (`f`) | `2ply` | — | `3ply` | Fast |
 | `deep` (`d`) | `3ply` | — | — | Deep |
 | `balanced` (`b`) | `2ply` | `3ply` (both kinds) | `truncated2` | — (quality/speed) |
-| `world_class` (`wc`) | `4ply` | — | `truncated2` | World Class (XG Roller+) |
+| `world_class` (`wc`) | `3ply` | `4ply` (both kinds) | `truncated2` | World Class (XG Roller+) |
 | `world_class_fast` (`wcf`) | `3ply` | `truncated2` (**cube only**) | `truncated2` | World Class (3-tier) |
 
 `fast` is the default.
 
 ### How the tiers fire
 
-The **second pass** runs on an *error* — the played checker move or cube action
-disagreed with the first pass.
+The two tiers answer two different questions, and each has its own threshold.
 
-The **middle tier** runs on a *borderline* decision, one the screen would
-otherwise have settled. A cube is borderline when it is within
-`close_threshold` of its double point, or of its take point on a take/pass.
+The **middle tier** is a *second look before judging*. It runs on a borderline
+decision — one the screen cannot call confidently — and its job is to settle it.
+Borderline means the top two checker moves are within `close_threshold`, or a
+cube is that close to its double point, or to its take point on a take/pass.
 
-Two consequences worth knowing:
+The **second pass** is *sizing an error you already believe in*. It runs when a
+decision is wrong by more than `error_threshold`, where the magnitude is
+something a rollout can actually measure.
+
+A decision reaches the second pass straight from the screen, or by way of the
+middle tier when the closer look is what revealed the error.
+
+Three consequences worth knowing:
 
 - A close decision deepens **without** an error, but only on the three-tier
   presets. Two-tier presets leave it at the screen on purpose.
-- An error only reaches the second pass if it costs *more* than
-  `close_threshold`. Inside that margin there is nothing for a rollout to size,
-  so the middle tier takes it where one exists.
+- An error at or under `error_threshold` stays at the screen — or takes the
+  middle tier where one exists. There is nothing inside that margin for a
+  rollout to size.
+- A borderline decision that the middle tier then finds to be a real error
+  **does** reach the second pass. A near-tied top two says nothing about how
+  far down the list the player actually went.
+
+`error_threshold` defaults to `0.02`, the standard cutoff below which an error
+is not worth sizing precisely. It exists to ration rollouts, so a preset whose
+second pass is an ordinary ply level rather than a rollout may sensibly set it
+to `0` — `fast` does, because 3-ply depth is cheap enough to spend on every
+error.
+
+Both thresholds take either a single number or a `{checker, cube}` mapping,
+the same shape `mid_pass` takes.
 
 `world_class_fast`'s middle tier is **cube-only**, and names the same level as
 its second pass — so the cube rule reads "borderline *or* wrong → roll it out".
 Checker plays go straight from the 3-ply screen to `truncated2` when they are
 wrong, and stay at the screen when they are right.
 
-That asymmetry is measured, not arbitrary. A middle tier fires on decisions the
-screen would otherwise have settled, so what decides whether it pays is its cost
-against the *screen below*, not against the tier above — and off a 3-ply screen,
-4-ply costs 19× on a move list but only 4× on one pre-roll cube. Restoring a
-checker middle tier runs the preset 48% slower *and* diverts most of its
-rollouts into 4-ply, which a separate test found to be the weaker estimator on
-exactly these decisions. `gvanalysis/presets.py` records both measurements
+That asymmetry is measured, not arbitrary, and what measures it is how often
+"borderline" fires. At a 0.04 window a cube is borderline about 5% of the time
+and a checker play 53.8% of the time — so the same "borderline or wrong → roll
+it out" rule costs well under a second per match on cubes and tens of seconds
+per match on checker plays. `gvanalysis/presets.py` records the measurements
 beside the constants they set.
 
 ### Choosing one
 
 `fast` is a good default for a quick look. For analysis you intend to trust,
 the three strong presets were compared against eXtreme Gammon over 493 matches:
+
+> **Pending re-measurement.** The agreement figures in this section were
+> measured before `balanced`, `world_class` and `world_class_fast` were retuned
+> (the two thresholds, the middle-tier escalation, and `world_class`'s move
+> from a flat 4-ply pass to 3-ply with a 4-ply middle tier). The *ordering* is
+> expected to survive; the numbers are not current for any of the three. The
+> timings in *What they cost* below were re-measured after the retune and are
+> current.
 
 | | mean gap to XG's match PR | same checker play as XG | PR within 1 of XG |
 |---|---|---|---|
@@ -241,13 +279,15 @@ the three strong presets were compared against eXtreme Gammon over 493 matches:
   deepest preset, and indistinguishable from it on checker play. The two sit
   three times closer to each other than either does to XG: the remaining gap is
   the engine difference, not the search depth.
-- **`world_class`** matches XG's *search tier* (a 4-ply first pass, as XG World
-  Class uses), so it is the one to reach for when reproducing XG is itself the
-  goal. It is not more accurate than `world_class_fast` in any way that
-  experiment demonstrates.
-- **`balanced`** trades PR fidelity for speed and is the only one of the three
-  with real headroom left. Over a long record its near-zero bias makes it the
-  closest of the three; on any single match it is the worst.
+- **`world_class`** matches XG's *search routing* — a 3-ply pass that deepens to
+  4-ply on near-ties, which is what XG World Class actually does — so it is the
+  one to reach for when reproducing XG is itself the goal. It is not more
+  accurate than `world_class_fast` in any way that experiment demonstrates.
+- **`balanced`** no longer trades fidelity for speed — after the retune it
+  costs about what `world_class_fast` does (see *What they cost*). What it
+  still offers is near-zero bias over a long record, which makes it the closest
+  of the three there, and the most headroom left; on any single match it is the
+  worst.
 
 These are agreement numbers, not accuracy numbers — where bgsage and XG differ,
 neither is the arbiter. **[`PRESET_ACCURACY.md`](PRESET_ACCURACY.md)** is the
@@ -256,40 +296,52 @@ evidence that the residual difference is systematic.
 
 ### What they cost
 
-The other half of the dial. Four corpus matches — 99 to 272 plies, 709 in all —
-analyzed end to end on a 24-core Apple M2 Ultra at the default `--jobs`:
+The other half of the dial. Six tournament matches — 84 to 459 plies, 1,429 in
+all — analyzed end to end at the default `--jobs`, on three machines.
+**Milliseconds per ply**, because the per-match figure depends entirely on how
+long your matches are:
 
-| Preset | Mean per match | Per ply | Relative to `fast` |
+| Preset | M2 Ultra (24c) | M3 (8c) | i5-7600 (4c) |
 |---|---|---|---|
-| `very_quick` | 1.1 s | 6 ms | 0.6× |
-| `fast` | 1.8 s | 10 ms | 1× |
-| `deep` | 2.9 s | 16 ms | 1.6× |
-| `balanced` | 10.0 s | 56 ms | 5.7× |
-| `world_class_fast` | 42.1 s | 238 ms | 24× |
-| `world_class` | 79.2 s | 447 ms | 45× |
+| `very_quick` | 5.8 ms | 11.6 ms | 40.8 ms |
+| `fast` | 9.6 ms | 31.4 ms | 75.5 ms |
+| `deep` | 18.0 ms | 65.5 ms | 143.0 ms |
+| `balanced` | 170.4 ms | 751.8 ms | 1030 ms |
+| `world_class_fast` | 165.6 ms | 611.0 ms | 1016 ms |
+| `world_class` | 291.3 ms | 1371 ms | 2048 ms |
 
-Per ply is the figure that travels; the per-match column depends entirely on how
-long the matches are. Neither is a constant. Even per ply, the four matches
-spread by about 2× at every preset — repeat runs land within 2%, so that is
-content, not noise. What a preset costs depends on how often a given match
-trips *its* escalation triggers, and a cube-heavy match is disproportionately
-expensive at the presets that roll cubes out.
+For a sense of scale on one 13-point match (459 plies): `world_class_fast` is
+about 1 minute on the workstation, 4 minutes on the laptop and 9 minutes on the
+4-core desktop; `world_class` is roughly double each.
 
-Two of these ratios are the argument for the lineup:
+**There is no machine-independent "relative to `fast`" number**, which is why
+this table gives absolutes on named hardware. The multiple for
+`world_class_fast` measures 17.2×, 19.5× and 13.5× on the three machines above,
+and for `world_class` 30.3×, 43.6× and 27.1× — the ratio moves because its
+denominator is machine-dependent too, and not even monotonically with how fast
+the machine is. Only `deep` is stable enough to quote as a ratio (1.9–2.1×
+`fast` everywhere).
 
-- `world_class` costs **1.9× `world_class_fast`** — a tight 1.7–2.3× across the
-  four matches — and buys 0.007 PR of XG agreement. That is why
-  `world_class_fast` is the recommendation and `world_class` is reserved for
-  deliberately reproducing XG.
-- `balanced` costs **a quarter of `world_class_fast`** for about 0.1 PR, which
-  is the trade that makes it right for bulk or interactive work. This is the
-  least stable ratio here: 3.0× on one match and 5.4× on another.
+Two comparisons are the argument for the lineup, and both hold on every machine:
+
+- `world_class` costs **1.8–2.2× `world_class_fast`** and buys a little under
+  0.01 PR of XG agreement. That is why `world_class_fast` is the
+  recommendation and `world_class` is reserved for deliberately reproducing XG.
+- `balanced` is **no cheaper than `world_class_fast`** — within a few percent
+  on the workstation and the 4-core desktop, and 23% *more* expensive on the
+  laptop. It is kept for its lower variance on long records, not for speed.
 
 The jump from `deep` to `balanced` is where rollouts enter — everything above it
 is pure full-width search, everything from `balanced` down sizes its errors with
 a truncated rollout. That step is the one to expect in any timing you take
-yourself. Process startup and engine construction cost about 0.1 s, so they do
-not distort even the cheapest row.
+yourself.
+
+Two cautions if you benchmark this yourself. Individual matches spread about 2×
+around these means at every preset, because what a preset costs depends on how
+often a given match trips *its* escalation triggers. And a fanless machine
+slows measurably as it heats — a MacBook Air drifted 2% per hour under
+sustained analysis — so compare runs taken at the same temperature, not an hour
+apart.
 
 ### Custom presets
 
