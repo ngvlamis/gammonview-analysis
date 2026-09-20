@@ -15,6 +15,13 @@ which is the most important section here.
 
 `very_quick`, `fast` and `deep` were not included.
 
+> **`balanced` has since been retired** (2026-09-20), so one of the four
+> readings below is of a preset you can no longer select. The study is kept
+> whole rather than edited down, because the `balanced` column is *why* it was
+> retired: re-timing it after the September 2026 retune showed it costing about
+> what `world_class_fast` costs, which left the 0.1 PR of agreement it gives up
+> here buying nothing. Its rows are a record, not a recommendation.
+
 ## The dataset
 
 | | |
@@ -190,18 +197,22 @@ Two consequences worth stating plainly:
   than `world_class_fast` in any way this experiment demonstrates; it is more
   XG-like on borderline cubes, because it rolls them out less often. Reach for
   it when matching XG's verdict is itself the goal — as in this study.
-- **`balanced` is the quality/speed option, and the only one with real
-  headroom.** Within 1 PR on 86.7% of matches, 90.3% blunder recall. Upgrading
-  it recovers eight times as much RMSE as upgrading `world_class_fast` does.
-  Worth knowing: over a long record its near-zero bias makes it the *closest* of
-  the three — pooling 100 matches, its 90th-percentile gap to XG is 0.109 PR
-  against 0.164 for `world_class_fast` — while being the worst on any single
-  match (1.150 against 0.885).
+- **`balanced` had real headroom and was retired anyway.** Within 1 PR on
+  86.7% of matches, 90.3% blunder recall; upgrading it recovers eight times as
+  much RMSE as upgrading `world_class_fast` does, and over a long record its
+  near-zero bias made it the *closest* of the three (pooling 100 matches, a
+  90th-percentile gap to XG of 0.109 PR against 0.164 for `world_class_fast`)
+  while being the worst on any single match, 1.150 against 0.885. None of that
+  survived the cost re-measurement: headroom is only worth having in a preset
+  that is cheaper than the one above it, and it was not.
 
 Cost is the other half of that choice and is not measured here; the wall-clock
 table is in [`CLI.md`](CLI.md#what-they-cost). Briefly: `world_class` costs
-about twice `world_class_fast` for the 0.007 PR above, and `balanced` costs
-about a quarter of `world_class_fast` for the 0.1 PR above.
+about twice `world_class_fast` for the 0.007 PR above. `balanced` was assumed
+to cost about a quarter of `world_class_fast` for the 0.1 PR above, and that
+assumption is what the later cross-machine timing overturned — it measured
+within a few percent of `world_class_fast`, and 23% dearer on a laptop. That is
+why it is gone.
 
 Luck is not a differentiator: it is evaluated at 1-ply in every preset, so all
 three return bit-identical luck totals. Against XG the per-player-match

@@ -202,7 +202,6 @@ presets judge everything at the first pass.
 | `very_quick` (`vq`) | `2ply` | — | — | Very quick |
 | `fast` (`f`) | `2ply` | — | `3ply` | Fast |
 | `deep` (`d`) | `3ply` | — | — | Deep |
-| `balanced` (`b`) | `2ply` | `3ply` (both kinds) | `truncated2` | — (quality/speed) |
 | `world_class` (`wc`) | `3ply` | `4ply` (both kinds) | `truncated2` | World Class (XG Roller+) |
 | `world_class_fast` (`wcf`) | `3ply` | `truncated2` (**cube only**) | `truncated2` | World Class (3-tier) |
 
@@ -259,21 +258,19 @@ beside the constants they set.
 ### Choosing one
 
 `fast` is a good default for a quick look. For analysis you intend to trust,
-the three strong presets were compared against eXtreme Gammon over 493 matches:
+the strong presets were compared against eXtreme Gammon over 493 matches:
 
 > **Pending re-measurement.** The agreement figures in this section were
-> measured before `balanced`, `world_class` and `world_class_fast` were retuned
-> (the two thresholds, the middle-tier escalation, and `world_class`'s move
-> from a flat 4-ply pass to 3-ply with a 4-ply middle tier). The *ordering* is
-> expected to survive; the numbers are not current for any of the three. The
-> timings in *What they cost* below were re-measured after the retune and are
-> current.
+> measured before `world_class` and `world_class_fast` were retuned (the two
+> thresholds, the middle-tier escalation, and `world_class`'s move from a flat
+> 4-ply pass to 3-ply with a 4-ply middle tier). The *ordering* is expected to
+> survive; the numbers are not current for either. The timings in *What they
+> cost* below were re-measured after the retune and are current.
 
 | | mean gap to XG's match PR | same checker play as XG | PR within 1 of XG |
 |---|---|---|---|
 | `world_class` | 0.434 | 90.3% | 91.8% |
 | `world_class_fast` | 0.441 | 90.0% | 90.7% |
-| `balanced` | 0.540 | 89.2% | 86.7% |
 
 - **`world_class_fast`** is the recommended analysis — 0.007 PR behind the
   deepest preset, and indistinguishable from it on checker play. The two sit
@@ -283,11 +280,13 @@ the three strong presets were compared against eXtreme Gammon over 493 matches:
   4-ply on near-ties, which is what XG World Class actually does — so it is the
   one to reach for when reproducing XG is itself the goal. It is not more
   accurate than `world_class_fast` in any way that experiment demonstrates.
-- **`balanced`** no longer trades fidelity for speed — after the retune it
-  costs about what `world_class_fast` does (see *What they cost*). What it
-  still offers is near-zero bias over a long record, which makes it the closest
-  of the three there, and the most headroom left; on any single match it is the
-  worst.
+- **A `balanced` preset used to sit between `deep` and these two** — a 2-ply
+  screen with a 3-ply middle tier. It was retired after the retune, when it
+  turned out to cost about what `world_class_fast` costs (see *What they cost*)
+  while agreeing with XG less often. `--preset balanced` now fails with a
+  message saying so rather than silently running something else. Below
+  `world_class_fast` the next step down is `deep`, an order of magnitude
+  cheaper.
 
 These are agreement numbers, not accuracy numbers — where bgsage and XG differ,
 neither is the arbiter. **[`PRESET_ACCURACY.md`](PRESET_ACCURACY.md)** is the
@@ -306,7 +305,6 @@ long your matches are:
 | `very_quick` | 5.8 ms | 11.6 ms | 40.8 ms |
 | `fast` | 9.6 ms | 31.4 ms | 75.5 ms |
 | `deep` | 18.0 ms | 65.5 ms | 143.0 ms |
-| `balanced` | 170.4 ms | 751.8 ms | 1030 ms |
 | `world_class_fast` | 165.6 ms | 611.0 ms | 1016 ms |
 | `world_class` | 291.3 ms | 1371 ms | 2048 ms |
 
@@ -327,14 +325,14 @@ Two comparisons are the argument for the lineup, and both hold on every machine:
 - `world_class` costs **1.8–2.2× `world_class_fast`** and buys a little under
   0.01 PR of XG agreement. That is why `world_class_fast` is the
   recommendation and `world_class` is reserved for deliberately reproducing XG.
-- `balanced` is **no cheaper than `world_class_fast`** — within a few percent
-  on the workstation and the 4-core desktop, and 23% *more* expensive on the
-  laptop. It is kept for its lower variance on long records, not for speed.
-
-The jump from `deep` to `balanced` is where rollouts enter — everything above it
-is pure full-width search, everything from `balanced` down sizes its errors with
-a truncated rollout. That step is the one to expect in any timing you take
-yourself.
+- The jump from `deep` to `world_class_fast` is **where rollouts enter** —
+  nearly an order of magnitude on every machine. Everything above that line is
+  pure full-width search; everything below it sizes its errors with a truncated
+  rollout. That step is the one to expect in any timing you take yourself, and
+  it is why the retired `balanced` preset was no bargain: it screened at 2-ply
+  but paid the same rollout tier, measuring 170.4 / 751.8 / 1030 ms on the three
+  machines — within a few percent of `world_class_fast` on two of them and 23%
+  *more* on the laptop.
 
 Two cautions if you benchmark this yourself. Individual matches spread about 2×
 around these means at every preset, because what a preset costs depends on how

@@ -169,7 +169,7 @@ block rather than replacing it. `--link` encodes the whole match into a
 ### Analysis presets
 
 `--preset` selects an eXtreme Gammon–style scheme: a cheap first pass screens
-every decision, and a stronger pass runs only where it is needed. The six
+every decision, and a stronger pass runs only where it is needed. The five
 built-ins:
 
 | Preset (aliases) | 1st pass | Middle tier | 2nd pass | XG equivalent |
@@ -177,7 +177,6 @@ built-ins:
 | `very_quick` (`vq`) | `2ply` | — | — | Very quick |
 | `fast` (`f`) | `2ply` | — | `3ply` | Fast |
 | `deep` (`d`) | `3ply` | — | — | Deep |
-| `balanced` (`b`) | `2ply` | `3ply` (both kinds) | `truncated2` | — (quality/speed) |
 | `world_class` (`wc`) | `3ply` | `4ply` (both kinds) | `truncated2` | World Class (XG Roller+) |
 | `world_class_fast` (`wcf`) | `3ply` | `truncated2` (**cube only**) | `truncated2` | World Class (3-tier) |
 
@@ -186,27 +185,26 @@ decision the screen would otherwise have settled. `fast` is the default.
 
 #### Which one to use
 
-493 matches were analyzed by XG at World Class and by each of the three strong
+493 matches were analyzed by XG at World Class and by each of the strong
 presets, then compared decision by decision:
 
-> **Accuracy figures pending re-measurement.** The three columns below predate
-> the retuning of all three presets (two separate thresholds, middle-tier
-> escalation, and `world_class` moving from a flat 4-ply pass to 3-ply with a
-> 4-ply middle tier). The ordering is expected to hold; the numbers are not
-> current. The cost column is current.
+> **Accuracy figures pending re-measurement.** The rows below predate the
+> retuning of both presets (two separate thresholds, middle-tier escalation,
+> and `world_class` moving from a flat 4-ply pass to 3-ply with a 4-ply middle
+> tier). The ordering is expected to hold; the numbers are not current. The
+> cost column is current.
 
 | | mean gap to XG's match PR | same checker play as XG | PR within 1 of XG | cost, ms/ply (24c → 4c) |
 |---|---|---|---|---|
 | `world_class` | 0.434 | 90.3% | 91.8% | 291 → 2048 |
 | `world_class_fast` | 0.441 | 90.0% | 90.7% | 166 → 1016 |
-| `balanced` | 0.540 | 89.2% | 86.7% | 170 → 1030 |
 
 **Mean gap** is the average distance between the two *ratings* of the same
 player-match, in either direction: rate a match with `world_class` and XG rates
 it 0.434 PR away, typically. It is not what following the preset costs you —
 priced by XG's own equities, a player who made `world_class`'s recommended
-checker play every time would post a PR of 0.333, `world_class_fast` 0.353,
-`balanced` 0.412. All three are inside what XG itself calls world-class play.
+checker play every time would post a PR of 0.333 and `world_class_fast`
+0.353. Both are inside what XG itself calls world-class play.
 
 Cost is milliseconds per ply over six matches, on a 24-core M2 Ultra and a
 4-core i5-7600 — absolutes rather than a multiple of `fast`, because that
@@ -223,12 +221,11 @@ around these means. See [the timings](docs/CLI.md#what-they-cost).
   accurate. Its only real edge is on borderline cubes, and it gets there by
   rolling them out *less* often than `world_class_fast` does — which is
   XG-like, not demonstrably better. It costs roughly twice as much for that.
-- **`balanced` is not the speed option it was.** After the retune it costs
-  about the same as `world_class_fast` on a workstation and *more* on a laptop,
-  so it is kept for having the most headroom — upgrading it recovers eight
-  times as much error as upgrading `world_class_fast` does — rather than for
-  being cheap. If you want cheap, the gap below it is `deep`, which is an order
-  of magnitude less.
+- **If you want cheap, drop to `deep`**, which costs an order of magnitude
+  less than either. There is nothing between them: a `balanced` preset used to
+  sit in that gap, but after the September 2026 retune it cost about what
+  `world_class_fast` costs while agreeing with XG less often, so it was
+  retired.
 
 Every number above measures *similarity to XG*, which is not the same as being
 right — where the two engines differ there is no arbiter here to say which is

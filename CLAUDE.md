@@ -209,7 +209,7 @@ in step when a flag changes; the rationale belongs only here.
   two-pass scheme: a cheap first pass screens every decision, a stronger second
   pass runs only on an error (the played checker move or cube action disagrees
   with the first pass). Single-pass presets judge everything at the first pass.
-  The six built-in presets live in `gvanalysis/presets.py` (always available). Optional
+  The five built-in presets live in `gvanalysis/presets.py` (always available). Optional
   `presets.yaml` overrides are layered on top from two locations, project-local
   winning over global: `~/.config/bgsage/presets.yaml` then `./presets.yaml`.
   Create either with `--init-presets` (add `--global` for the config-dir one).
@@ -222,7 +222,6 @@ in step when a flag changes; the rationale belongs only here.
   | `very_quick` (`vq`) | `2ply` | — | Very quick |
   | `fast` (`f`) | `2ply` | `3ply` | Fast |
   | `deep` (`d`) | `3ply` | — | Deep |
-  | `balanced` (`b`) | `2ply` → `3ply` on close | `truncated2` | — (quality/speed) |
   | `world_class` (`wc`) | `3ply` → `4ply` on close | `truncated2` | World Class (XG Roller+) |
   | `world_class_fast` (`wcf`) | `3ply` (cube: → rollout on close too) | `truncated2` | World Class (3-tier) |
 
@@ -292,23 +291,33 @@ in step when a flag changes; the rationale belongs only here.
   exact and re-running would buy the same answer twice. That makes it a no-op
   for `world_class_fast`'s cube tier by construction.
 
-  `balanced` is the same 3-tier machinery tuned for quality/speed rather than
-  XG parity: `2ply` screen on every decision, `3ply` on near-ties (wide `0.08`
-  threshold since 3-ply is cheap — XG's own crossover), `truncated2` to size
-  genuine errors bigger than `0.02`. The
-  sizing tier was `4ply` until the arbiter test above found it the weaker
-  estimator on precisely the decisions a sizing tier exists for. That test ran
-  on cubes; it has since been repeated on 175 real sizing-tier *checker* errors
-  with the same `truncated3` arbiter, and lands in the same place — `truncated2`
-  is nearer the arbiter on 123 of the 175, mean gap 0.0095 against 4-ply's
-  0.0132. Accuracy is now the whole of the argument. It was once also cheaper:
-  swapping the rollout in measured slightly *faster* (43.9s vs 46.6s), because
-  full-width 4-ply over a whole move list cost more than a 360-trial truncated
-  rollout. `checker_eval.py` inverted that — 4-ply sizing would now run ~13%
-  quicker (34.3s vs 38.9s on three matches), so the better estimator costs a few
-  seconds a match rather than saving them. Cost stays bounded, deterministic and
-  cacheable: the rollout seed is fixed and its trial count and truncation depth
-  are constants, so the preset remains suited to server-hosted analysis.
+  **Every sizing tier is `truncated2`, never `4ply`, and that holds for both
+  decision kinds.** The cube half is the arbiter test above (12%/0.0091 against
+  4-ply's 14%/0.0127); the same test was repeated on 175 real sizing-tier
+  *checker* errors and lands in the same place — `truncated2` is nearer the
+  `truncated3` arbiter on 123 of the 175, mean gap 0.0095 against 4-ply's
+  0.0132. Accuracy is now the whole of the argument. The rollout was once also
+  the cheaper option, but `checker_eval.py` inverted that: 4-ply sizing would
+  now run ~13% quicker (34.3s vs 38.9s on three matches), so the better
+  estimator costs a few seconds a match rather than saving them. Cost stays
+  bounded and cacheable — fixed seed, fixed trial count, fixed truncation depth
+  — so the presets remain suited to server-hosted analysis.
+
+  **`balanced` was retired 2026-09-20.** It was the same 3-tier machinery tuned
+  for quality/speed rather than XG parity — `2ply` screen, `3ply` on near-ties,
+  `truncated2` sizing — and the point of it was to be the cheap strong preset.
+  It stopped being one. Because the sizing tier dominates the cost and it paid
+  the same one, cross-machine timing put it at 170.4 / 751.8 / 1030 ms per ply
+  against `world_class_fast`'s 165.6 / 611.0 / 1016 — within a few percent on
+  two machines and 23% *worse* on the laptop — while agreeing with XG less
+  often (0.540 mean PR gap against 0.441, on pre-retune figures). A preset that
+  is neither faster nor better has no argument left. `resolve_preset` keeps the
+  name in `_RETIRED` and fails with an explanation rather than a bare "unknown
+  preset"; it is deliberately **not** aliased to `world_class_fast`, since the
+  preset name is written into the output document and a silent redirect would
+  mislabel the analysis. The gap below `world_class_fast` is now `deep`, an
+  order of magnitude cheaper. Don't reinvent it without a sizing tier cheaper
+  than `truncated2`, because that is the whole of what went wrong.
 
 - **`gvan-batch`** (`gvanalysis/batch.py`) — Batch-analyze many match files
   (`.mat`/`.gva`/`.ogxm`/`.gvab`), writing one output per input. A thin wrapper

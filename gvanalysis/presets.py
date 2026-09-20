@@ -51,32 +51,6 @@ _BUILTIN_SPECS: dict[str, dict] = {
     "fast": {"display": "Fast", "first_pass": "2ply", "second_pass": "3ply",
              "error_threshold": 0.0, "aliases": ["f"]},
     "deep": {"display": "Deep", "first_pass": "3ply", "second_pass": None, "aliases": ["d"]},
-    # 3-tier balanced scheme (quality/speed, not an XG analog): cheap 2-ply
-    # screen on every decision, 3-ply to resolve near-ties (cheap enough to keep
-    # a wide threshold), truncated2 to size genuine errors. The sizing tier was
-    # 4-ply until both were scored against an independent truncated3 arbiter on
-    # 175 real sizing-tier checker errors: truncated2 landed nearer the arbiter
-    # on 123 of them, mean gap 0.0095 against 4-ply's 0.0132 (the cube arbiter
-    # test behind world_class_fast found 0.0091 vs 0.0127 -- the same result on
-    # the other decision kind). Being the better estimator on exactly the
-    # decisions the tier exists for is now the ONLY reason for the choice. It
-    # used to be the cheaper one too: before checker_eval.py screened checker
-    # plays, full-width 4-ply over a whole move list cost more than a 360-trial
-    # truncated rollout, and swapping the rollout in measured slightly faster.
-    # Screening made 4-ply 1.6x cheaper and inverted that -- the rollout sizing
-    # tier now costs ~13% more wall clock than 4-ply would (38.9s vs 34.3s on
-    # three matches). The accuracy is worth the seconds. Fixed seed, fixed trial
-    # count, fixed truncation depth, so cost stays bounded and cacheable.
-    # close_threshold is 0.08, not the 0.04 it shipped as, because that is
-    # where XG's own depth crossover sits: mining 63,548 XG World Class checker
-    # decisions, the share evaluated at 4-ply falls from 64.9% (top-2 gap
-    # 0.05-0.08) to 15.0% (0.08-0.12). Widening it is close to free -- a 3-ply
-    # middle tier costs 0.036s against a rollout's 1.2s -- and was only ever
-    # coupled to the rollout tier because one number gated both. Measured over
-    # 101 matches against XG's own PR: MAE 0.4586 at close 0.08 / error 0.02,
-    # against 0.5129 for close 0.04 with no error threshold and no escalation.
-    "balanced": {"display": "Balanced", "first_pass": "2ply", "mid_pass": "3ply",
-                 "second_pass": "truncated2", "close_threshold": 0.08, "aliases": ["b"]},
     # XG World Class, modelled on XG's ROUTING rather than on a single depth.
     # This shipped for a long time as a flat 4-ply screen, which was never what
     # XG does. Mining 63,548 XG World Class checker decisions for the level it
@@ -149,8 +123,8 @@ _BUILTIN_SPECS: dict[str, dict] = {
     # names second_pass's own level, the escalation re-check is a no-op here --
     # the analyzers are one object and game_eval skips the second call.
     #
-    # close_threshold is 0.08 for the same reason balanced's is: it is XG's own
-    # depth crossover, and there is no principled reason the cube boundary
+    # close_threshold is 0.08 for the same reason world_class's is: it is XG's
+    # own depth crossover, and there is no principled reason the cube boundary
     # should sit at half the checker one. Only the cube value bites here (no
     # checker middle tier for the checker one to gate). Measured, 33 holdout
     # matches paired against 0.04 on the same matches: MAE 0.4826 -> 0.4840,
@@ -167,6 +141,21 @@ _BUILTIN_SPECS: dict[str, dict] = {
     # outplay-vs-error escalation trigger, so it is not yet defined.
 }
 _BUILTIN_DEFAULT = "fast"
+
+#: Presets that were built in and no longer are, mapped to what to say instead.
+#: A removed preset would otherwise fail as a plain "unknown preset" alongside
+#: names that were never real, which tells a user with `--preset balanced` in a
+#: script that they made a typo. Deliberately NOT silently aliased to its
+#: replacement: the preset name is recorded in the output document, so a quiet
+#: redirect would label the analysis as something it is not.
+_RETIRED: dict[str, str] = {
+    "balanced": (
+        "retired after 1.0.0 -- it cost about what world_class_fast costs "
+        "while agreeing with XG less often. Use world_class_fast for analysis "
+        "you intend to trust, or deep for something genuinely cheap."
+    ),
+    "b": "balanced",   # its alias, resolved to the entry above
+}
 
 # Optional user overrides are read from two locations, lowest precedence first:
 #   1. a global per-user file (~/.config/bgsage/presets.yaml, or $XDG_CONFIG_HOME)
@@ -195,7 +184,7 @@ TEMPLATE = """\
 #   - global:  ~/.config/bgsage/presets.yaml
 #   - project: ./presets.yaml (next to the scripts)
 #
-# Built-in presets: very_quick (vq), fast (f), deep (d), balanced (b),
+# Built-in presets: very_quick (vq), fast (f), deep (d),
 #                   world_class (wc), world_class_fast (wcf). Default: fast.
 #
 # Each preset is a two-pass scheme: a cheap first_pass screens every decision,
@@ -223,7 +212,7 @@ TEMPLATE = """\
 # precisely.
 #
 # Optional 3-tier: add mid_pass + close_threshold. mid_pass is either a level
-# (both decision kinds get that middle tier, as in balanced) or a
+# (both decision kinds get that middle tier, as in world_class) or a
 # {checker, cube} mapping naming one per kind, since the same level is not
 # equally cheap on a move list and on a single cube -- see world_class_fast,
 # which gives cubes a middle tier and leaves checker plays 2-tier. An omitted
@@ -549,5 +538,10 @@ def resolve_preset(name: str | None) -> Preset:
     key = _ALIASES.get(key, key)
     if key not in PRESETS:
         valid = ", ".join(sorted(PRESETS))
+        note = _RETIRED.get(key)
+        if note is not None:
+            note = _RETIRED.get(note, note)   # an alias points at its preset
+            raise ValueError(
+                f"Preset {name!r} is {note} Valid presets: {valid}")
         raise ValueError(f"Unknown preset {name!r}. Valid presets: {valid}")
     return PRESETS[key]

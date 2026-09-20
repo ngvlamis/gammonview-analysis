@@ -13,6 +13,35 @@ when the repository was opened; they are kept because they record why things
 are the way they are — particularly the breaking changes and the measurements
 behind several design decisions. Dates are the tag dates.
 
+## Unreleased
+
+**The `balanced` preset is retired** *(breaking)*
+
+`--preset balanced` (and its `b` alias) now fails. It existed to be the cheap
+strong preset — a 2-ply screen with a 3-ply middle tier, where `world_class`
+screens at 3-ply and deepens to 4 — and it stopped being one. Because a preset's
+cost is dominated by its sizing tier, and `balanced` paid the same `truncated2`
+tier as everything above it, re-timing after the September 2026 retune put it at
+170.4 / 751.8 / 1030 ms per ply on a 24-core M2 Ultra, an 8-core M3 and a 4-core
+i5-7600, against `world_class_fast`'s 165.6 / 611.0 / 1016 — within a few
+percent on two machines and 23% *worse* on the laptop. It also agreed with XG
+less often (0.540 mean PR gap against 0.441). Neither faster nor better leaves
+nothing to recommend.
+
+Use `world_class_fast`, or `deep` if you want something genuinely cheap — the
+gap `balanced` was meant to fill is now the gap between those two, about an
+order of magnitude.
+
+The name is **not** aliased to a replacement. The preset name is written into
+the output document, so a silent redirect would label the analysis as something
+it is not; `resolve_preset` raises instead, and the message names the
+replacement. A `presets.yaml` may still define a preset called `balanced` — it
+is a removed built-in, not a reserved word.
+
+[`docs/PRESET_ACCURACY.md`](docs/PRESET_ACCURACY.md) keeps the 493-match study
+that included it, unedited. The `balanced` column there is the evidence for the
+removal, not a recommendation.
+
 ## 1.0.0 — 2026-09-15
 
 **First public release.** The repository is now open source under MIT, and
