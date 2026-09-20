@@ -36,10 +36,20 @@ VALID_LEVELS: frozenset[str] = frozenset({
 
 # Canonical built-in presets (spec dicts, same shape as presets.yaml entries).
 # These are the guaranteed baseline. second_pass None => single pass; mid_pass +
-# close_threshold add the optional 3-tier scheme (checker plays and cubes).
+# close_threshold add the optional 3-tier scheme (checker plays and cubes);
+# error_threshold is what a decision has to cost to earn the second pass.
 _BUILTIN_SPECS: dict[str, dict] = {
     "very_quick": {"display": "Very quick", "first_pass": "2ply", "second_pass": None, "aliases": ["vq"]},
-    "fast": {"display": "Fast", "first_pass": "2ply", "second_pass": "3ply", "aliases": ["f"]},
+    # error_threshold 0, not the 0.02 default, because `fast`'s second pass is
+    # 3-ply rather than a rollout. The default exists to RATION ROLLOUTS -- on a
+    # checker move list a rollout costs ~1.2s against a 3-ply look's ~0.036s, so
+    # an error too small for a rollout to size usefully is worth leaving at the
+    # screen. Here the second pass costs ~6x the screen, not ~200x, and the
+    # trade goes the other way: measured over the five golden matches, 0.02 saves
+    # 6% of wall clock (40.7s -> 38.2s) and moves PR by a mean of 0.14 (max
+    # 0.35). Cheap depth is worth taking on every error.
+    "fast": {"display": "Fast", "first_pass": "2ply", "second_pass": "3ply",
+             "error_threshold": 0.0, "aliases": ["f"]},
     "deep": {"display": "Deep", "first_pass": "3ply", "second_pass": None, "aliases": ["d"]},
     # 3-tier balanced scheme (quality/speed, not an XG analog): cheap 2-ply
     # screen on every decision, 3-ply to resolve near-ties (cheap enough to keep
@@ -57,27 +67,102 @@ _BUILTIN_SPECS: dict[str, dict] = {
     # tier now costs ~13% more wall clock than 4-ply would (38.9s vs 34.3s on
     # three matches). The accuracy is worth the seconds. Fixed seed, fixed trial
     # count, fixed truncation depth, so cost stays bounded and cacheable.
+    # close_threshold is 0.08, not the 0.04 it shipped as, because that is
+    # where XG's own depth crossover sits: mining 63,548 XG World Class checker
+    # decisions, the share evaluated at 4-ply falls from 64.9% (top-2 gap
+    # 0.05-0.08) to 15.0% (0.08-0.12). Widening it is close to free -- a 3-ply
+    # middle tier costs 0.036s against a rollout's 1.2s -- and was only ever
+    # coupled to the rollout tier because one number gated both. Measured over
+    # 101 matches against XG's own PR: MAE 0.4586 at close 0.08 / error 0.02,
+    # against 0.5129 for close 0.04 with no error threshold and no escalation.
     "balanced": {"display": "Balanced", "first_pass": "2ply", "mid_pass": "3ply",
-                 "second_pass": "truncated2", "close_threshold": 0.04, "aliases": ["b"]},
-    "world_class": {"display": "World Class", "first_pass": "4ply", "second_pass": "truncated2", "aliases": ["wc", "worldclass"]},
+                 "second_pass": "truncated2", "close_threshold": 0.08, "aliases": ["b"]},
+    # XG World Class, modelled on XG's ROUTING rather than on a single depth.
+    # This shipped for a long time as a flat 4-ply screen, which was never what
+    # XG does. Mining 63,548 XG World Class checker decisions for the level it
+    # actually used, bucketed by top-2 gap:
+    #
+    #     gap < 0.005     93.7% 4-ply    1.1% 3-ply
+    #     gap 0.05-0.08   64.9% 4-ply    0.2% 3-ply
+    #     gap 0.08-0.12   15.0% 4-ply   57.5% 3-ply
+    #     gap 0.12 +       8.3% 4-ply   74.2% 3-ply
+    #
+    # XG's DEFAULT is 3-ply; 4-ply is what it spends on a decision near enough
+    # to a tie that depth is what settles it, and the crossover is at 0.08. So
+    # the faithful analog is a 3-ply screen with a 4-ply middle tier on
+    # near-ties, not 4-ply everywhere -- and it is cheaper, since the 4-ply pass
+    # now runs on the ~54% of checker decisions that are borderline at 0.08
+    # instead of all of them. Errors above 0.02 still go to the rollout, from
+    # whichever tier last looked at them.
+    #
+    # Measured against the flat-4-ply shape on three matches, 353 checker
+    # decisions, serial: 104.9 -> 55.7 s/match, a 1.88x speedup. It comes from
+    # both tiers at once --
+    #
+    #     flat 4-ply   4-ply 71.1%   rollout 28.9%
+    #     3+4-ply      3-ply 37.4%   4-ply 49.0%   rollout 13.6%
+    #
+    # -- the full-width 4-ply pass falling to half the decisions, and the
+    # rollout share halving again because the old shape had no error_threshold
+    # and rolled out on ANY disagreement. Agreement with XG moved the right way
+    # on the same three matches (MAE 0.5087 -> 0.4505), but three matches
+    # cannot resolve that: the 95% CI is [-0.0370, +0.1735]. The speedup is the
+    # measured claim here; the accuracy is not yet.
+    #
+    # Unlike world_class_fast, the cube middle tier here is 4-ply rather than
+    # truncated2, so both kinds deepen before they roll out. That is safe only
+    # because a borderline decision now ESCALATES: the arbiter test that made
+    # 4-ply the weaker cube estimator (14% wrong verdicts, mean gap error
+    # 0.0127, against truncated2's 12%/0.0091) was scoring it as a TERMINAL
+    # tier, which it no longer is. A borderline cube the 4-ply tier then sizes
+    # above error_threshold goes to truncated2 on 4-ply's own numbers.
+    "world_class": {"display": "World Class", "first_pass": "3ply",
+                    "mid_pass": "4ply", "second_pass": "truncated2",
+                    "close_threshold": 0.08, "aliases": ["wc", "worldclass"]},
     # 3-tier XG World Class analog: 3-ply screen, truncated2 rollout on error,
-    # and a middle tier on cubes only. The checker middle tier was dropped after
-    # measuring it: 4-ply on a whole move list costs ~19x the 3-ply screen it
-    # would be added to, and most of what it rescued was a decision the rollout
-    # above it would have taken anyway. Re-measured once checker_eval.py made
-    # 4-ply 1.6x cheaper, it still does not pay: restoring it runs the preset
-    # 48% slower (142.7s vs 96.4s on three matches) AND diverts 65 of the 83
-    # checker rollouts into 4-ply instead -- the weaker estimator by the arbiter
-    # test above. Dearer and shallower at once, so it stays gone. Cubes keep
-    # a middle tier, but it is truncated2 rather than 4-ply: a borderline cube is
-    # the one place 4-ply looked like a bargain, and against an independent
-    # truncated3 arbiter it still lost to the rollout, at a difference in cost
+    # and a middle tier on cubes only.
+    #
+    # The checker middle tier stays gone, but on one argument rather than the
+    # two it used to rest on. What decides it is how often "borderline" fires:
+    # at a 0.04 window a cube is borderline ~5% of the time and a checker play
+    # 53.8% of the time, so the same rule costs ~0.4s per match on cubes and
+    # ~42-91s per match on checker plays depending on the level named. The
+    # second argument -- that restoring it "diverts 65 of the 83 checker
+    # rollouts into 4-ply, the weaker estimator" -- described the escalation
+    # defect, not the tier: a borderline decision used to be capped at the
+    # middle tier however large its error turned out to be. It escalates now,
+    # so a middle tier no longer steals rollouts. It would still cost, and
+    # more than before, since those decisions would pay both tiers.
+    #
+    # (Also note the cost order has flipped since that measurement: on 760
+    # paired checker decisions 4-ply is faster than truncated2 on 710 of them,
+    # median 2.23x, because checker_eval.py screens candidates before the
+    # full-width pass. The old "4-ply on a move list is the dear one" framing
+    # no longer holds -- the borderline rate is the whole argument.)
+    #
+    # Cubes keep a middle tier, and it is truncated2 rather than 4-ply: a
+    # borderline cube is the one place 4-ply looked like a bargain, and against
+    # a truncated3 arbiter it still lost to the rollout, at a difference in cost
     # too small to buy the accuracy back. So the cube tier is really "borderline
     # OR wrong -> roll it out"; the middle tier survives only to widen what
-    # counts as worth rolling out, not to name a shallower level.
+    # counts as worth rolling out, not to name a shallower level. Because it
+    # names second_pass's own level, the escalation re-check is a no-op here --
+    # the analyzers are one object and game_eval skips the second call.
+    #
+    # close_threshold is 0.08 for the same reason balanced's is: it is XG's own
+    # depth crossover, and there is no principled reason the cube boundary
+    # should sit at half the checker one. Only the cube value bites here (no
+    # checker middle tier for the checker one to gate). Measured, 33 holdout
+    # matches paired against 0.04 on the same matches: MAE 0.4826 -> 0.4840,
+    # 95% CI [-0.0235, +0.0192], wall +1.5%, and 2 of 33 matches produced any PR
+    # change at all. So this is adopted as a coherence fix, NOT a measured gain
+    # -- 489 of 686 cube decisions already reached the rollout at 0.04, leaving
+    # about one per match that widening can touch. What the test does establish
+    # is that it is not harmful. The corpus mining points the same way: missed
+    # errors fall from 7.2% of mid-tier cubes at 0.04 to 3.3% at 0.08.
     "world_class_fast": {"display": "World Class Fast", "first_pass": "3ply",
                          "mid_pass": {"cube": "truncated2"},
-                         "second_pass": "truncated2", "close_threshold": 0.04, "aliases": ["wcf"]},
+                         "second_pass": "truncated2", "close_threshold": 0.08, "aliases": ["wcf"]},
     # TODO Extensive: needs a full-completion `rollout` second pass plus a tiered
     # outplay-vs-error escalation trigger, so it is not yet defined.
 }
@@ -115,17 +200,36 @@ TEMPLATE = """\
 #
 # Each preset is a two-pass scheme: a cheap first_pass screens every decision,
 # a stronger second_pass runs only on an error (the played checker move or cube
-# action disagrees with the first pass). Omit second_pass (null) for single-pass.
+# action disagrees with the first pass, by more than error_threshold). Omit
+# second_pass (null) for single-pass.
 #
-# Optional 3-tier: add mid_pass + close_threshold to deepen a borderline
-# decision to mid_pass instead of leaving it at the screen. Borderline means the
-# top two checker moves are within close_threshold, or a cube is that close to
-# its double point / take point. mid_pass is either a level (both decision kinds
-# get that middle tier, as in balanced) or a {checker, cube} mapping naming one
-# per kind, since the same level is not equally cheap on a move list and on a
-# single cube -- see world_class_fast, which gives cubes a middle tier and
-# leaves checker plays 2-tier. An omitted kind stays plain 2-tier. Naming the
-# same level as second_pass is allowed and costs nothing extra (one analyzer is
+# The two tiers answer two different questions, so they have two thresholds:
+#
+#   mid_pass   is a SECOND LOOK BEFORE JUDGING. It fires on a decision the
+#              screen cannot call confidently -- the top two checker moves
+#              within close_threshold, or a cube that close to its double or
+#              take point -- and its job is to settle it.
+#   second_pass is SIZING AN ERROR YOU ALREADY BELIEVE IN. It fires when a
+#              decision is wrong by more than error_threshold, where the
+#              magnitude is what a rollout can actually measure.
+#
+# A decision reaches second_pass straight from the screen, or by way of
+# mid_pass when the closer look is what revealed the error.
+#
+# Pick the two independently: a middle tier is cheap (a 3-ply look at a move
+# list costs ~0.036s) and a rollout is not (~1.2s), so close_threshold can
+# afford to be generous where error_threshold cannot. error_threshold defaults
+# to 0.02, the standard cutoff below which an error is not worth sizing
+# precisely.
+#
+# Optional 3-tier: add mid_pass + close_threshold. mid_pass is either a level
+# (both decision kinds get that middle tier, as in balanced) or a
+# {checker, cube} mapping naming one per kind, since the same level is not
+# equally cheap on a move list and on a single cube -- see world_class_fast,
+# which gives cubes a middle tier and leaves checker plays 2-tier. An omitted
+# kind stays plain 2-tier. close_threshold and error_threshold take the same
+# bare-value-or-{checker, cube}-mapping shape. Naming the same level as
+# second_pass in mid_pass is allowed and costs nothing extra (one analyzer is
 # built and shared); it means "borderline as well as wrong earns the top tier".
 #
 # Valid levels (shallow -> deep):
@@ -139,7 +243,15 @@ presets: {}
   #   display: My Preset
   #   first_pass: 3ply
   #   second_pass: truncated2   # omit or null for a single-pass preset
+  #   error_threshold: 0.02     # error worth a rollout (default 0.02)
   #   aliases: [mp]
+  # my_3tier:
+  #   display: My 3-tier Preset
+  #   first_pass: 2ply
+  #   mid_pass: {checker: 3ply, cube: truncated2}
+  #   second_pass: truncated2
+  #   close_threshold: {checker: 0.08, cube: 0.04}
+  #   error_threshold: 0.02
 """
 
 
@@ -150,9 +262,15 @@ class Preset:
     first_pass: str            # bgsage eval_level for pass 1 (the screen)
     second_pass: str | None    # None => single pass; else the on-error tier
     # Optional 3-tier scheme (XG World Class style): a decision the first pass
-    # calls borderline -- top-2 moves within close_threshold, or a cube within it
-    # of its double/take point -- is deepened to that kind's mid pass instead of
-    # the rollout; errors bigger than close_threshold still go to second_pass.
+    # calls borderline -- top-2 moves within close_threshold, or a cube within
+    # it of its double/take point -- is deepened to that kind's mid pass. An
+    # error costing more than error_threshold goes to second_pass instead, and
+    # a borderline decision the middle tier then finds to be such an error is
+    # escalated there too. (Until Sep 2026 that last rule was documented but
+    # only implemented for cubes, and even there only off the screen's numbers:
+    # a borderline checker play was capped at the middle tier however large its
+    # error proved to be. 10% of borderline checker plays cost more than the
+    # threshold; the worst cost 0.56.)
     # Set per decision kind: a checker play and a cube have opposite cost
     # profiles at the same level. A middle tier is added on top of the screen
     # -- it fires on decisions the screen would otherwise have settled -- so
@@ -163,12 +281,36 @@ class Preset:
     # either may be None, leaving that kind plain 2-tier.
     mid_pass_checker: str | None = None    # e.g. "4ply"; None => 2-tier checker
     mid_pass_cube: str | None = None       # e.g. "4ply"; None => 2-tier cube
-    close_threshold: float | None = None   # equity gap gating the mid tier
+    # Two thresholds, not one. `close_threshold` gates the MIDDLE tier: how
+    # near a tie a decision has to be before the screen's verdict stops being
+    # trusted. `error_threshold` gates the SECOND pass: how much a decision has
+    # to cost before its size is worth a rollout. They answer different
+    # questions and want different values -- measured against XG's own routing
+    # over 78,661 decisions, the depth crossover sits near 0.08 and the rollout
+    # cliff at 0.02 -- and they have wildly different price tags, since a
+    # middle tier is ~34x cheaper than a rollout on a checker move list. Both
+    # are per decision kind for the same reason `mid_pass` is.
+    close_threshold_checker: float | None = None
+    close_threshold_cube: float | None = None
+    error_threshold_checker: float = 0.02
+    error_threshold_cube: float = 0.02
 
     @property
     def has_mid(self) -> bool:
         """True if either decision kind has a middle tier."""
         return self.mid_pass_checker is not None or self.mid_pass_cube is not None
+
+    @property
+    def close_threshold(self) -> float | None:
+        """The shared close threshold, or None when the kinds differ.
+
+        Back-compatible read for callers (and tests) written before the
+        threshold was split per decision kind; reporting code uses it to print
+        one number when there is only one to print.
+        """
+        if self.close_threshold_checker == self.close_threshold_cube:
+            return self.close_threshold_checker
+        return None
 
 
 class PresetConfigError(ValueError):
@@ -208,12 +350,65 @@ def _mid_levels(key: str, spec: dict) -> tuple[str | None, str | None]:
     )
 
 
+DEFAULT_ERROR_THRESHOLD = 0.02
+"""Default `error_threshold`: the standard cutoff below which an error is not
+worth sizing precisely.
+
+Three independent measurements land on this number. XG's own World Class
+routing rolls out 22.9% of decisions whose error is 0.015-0.020 and 94.7% of
+those in 0.020-0.030 -- a cliff, not a ramp. Scored against XG as referee, a
+rollout improves error sizing by +8.3% below 0.02 and +31.9% above it. And
+across a 101-match corpus the errors under 0.02 are 43-46% of everything a
+screen flags while carrying 7-8% of the error equity: nearly half the rollouts
+for a PR fidelity cost of roughly 0.02.
+"""
+
+
+def _kind_thresholds(key: str, spec: dict, field: str,
+                     default: float | None) -> tuple[float | None, float | None]:
+    """Resolve a threshold field into (checker, cube).
+
+    A bare number sets both kinds (the original shape, so every preset and
+    presets.yaml written before the split still means what it did); a
+    `{checker, cube}` mapping sets them separately, exactly as `mid_pass`
+    does. An omitted kind falls back to `default`.
+    """
+    raw = spec.get(field, None)
+    if raw is None:
+        return default, default
+    if isinstance(raw, bool):  # bool is an int subclass; never a threshold
+        raise PresetConfigError(f"preset {key!r}: {field} must be a number")
+    if isinstance(raw, (int, float)):
+        return float(raw), float(raw)
+    if isinstance(raw, dict):
+        unknown = sorted(str(k) for k in raw if k not in _MID_KINDS)
+        if unknown:
+            raise PresetConfigError(
+                f"preset {key!r}: {field} keys must be "
+                f"{' / '.join(map(repr, _MID_KINDS))}, got {', '.join(unknown)}"
+            )
+        out = []
+        for kind in _MID_KINDS:
+            v = raw.get(kind, default)
+            if v is not None and (isinstance(v, bool) or not isinstance(v, (int, float))):
+                raise PresetConfigError(
+                    f"preset {key!r}: {field}.{kind} must be a number")
+            out.append(float(v) if v is not None else None)
+        return out[0], out[1]
+    raise PresetConfigError(
+        f"preset {key!r}: {field} must be a number or a "
+        f"{{checker, cube}} mapping, got {type(raw).__name__}"
+    )
+
+
 def _make_preset(key: str, spec: dict) -> Preset:
     """Validate one preset spec dict into a Preset. Raises PresetConfigError."""
     first_pass = spec.get("first_pass")
     second_pass = spec.get("second_pass")  # may be absent/null
     mid_checker, mid_cube = _mid_levels(key, spec)
-    close_threshold = spec.get("close_threshold")
+    close_checker, close_cube = _kind_thresholds(key, spec, "close_threshold", None)
+    err_checker, err_cube = _kind_thresholds(key, spec, "error_threshold",
+                                             DEFAULT_ERROR_THRESHOLD)
     for label, lvl in (("first_pass", first_pass), ("second_pass", second_pass),
                        ("mid_pass.checker", mid_checker), ("mid_pass.cube", mid_cube)):
         if lvl is None and label != "first_pass":
@@ -224,20 +419,34 @@ def _make_preset(key: str, spec: dict) -> Preset:
                 f"(valid: {', '.join(sorted(VALID_LEVELS))})"
             )
     has_mid = mid_checker is not None or mid_cube is not None
-    if has_mid:
-        if second_pass is None:
+    if has_mid and second_pass is None:
+        raise PresetConfigError(
+            f"preset {key!r}: mid_pass requires second_pass (3-tier needs a "
+            f"rollout tier for errors)"
+        )
+    # A middle tier needs a threshold to fire on; a kind without one does not.
+    for kind, mid, close in (("checker", mid_checker, close_checker),
+                             ("cube", mid_cube, close_cube)):
+        if mid is not None and not (isinstance(close, float) and close > 0):
             raise PresetConfigError(
-                f"preset {key!r}: mid_pass requires second_pass (3-tier needs a "
-                f"rollout tier for errors)"
+                f"preset {key!r}: mid_pass.{kind} requires a positive "
+                f"close_threshold (the equity gap gating the middle tier)"
             )
-        if not isinstance(close_threshold, (int, float)) or close_threshold <= 0:
+    for kind, err in (("checker", err_checker), ("cube", err_cube)):
+        if err is not None and err < 0:
             raise PresetConfigError(
-                f"preset {key!r}: mid_pass requires a positive close_threshold "
-                f"(equity gap gating the middle tier)"
-            )
+                f"preset {key!r}: error_threshold.{kind} must not be negative")
+    # A threshold for a kind with no middle tier would never be read; drop it
+    # so `Preset.close_threshold` reports honestly and repr stays truthful.
+    if mid_checker is None:
+        close_checker = None
+    if mid_cube is None:
+        close_cube = None
     return Preset(key, str(spec.get("display", key)), first_pass, second_pass,
                   mid_checker, mid_cube,
-                  float(close_threshold) if has_mid else None)
+                  close_checker, close_cube,
+                  0.0 if err_checker is None else err_checker,
+                  0.0 if err_cube is None else err_cube)
 
 
 def _assemble(specs: dict[str, dict], default: str) -> tuple[dict[str, Preset], dict[str, str], str]:

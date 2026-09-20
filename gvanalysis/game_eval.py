@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-import os
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -69,13 +68,6 @@ def _eq2mwc(equity: float, away1: int, away2: int, cube_value: int, is_crawford:
 # derivation). The former 0.001 was an order of magnitude too aggressive and ran
 # PR ~2% high by under-counting the denominator.
 _CHECKER_SPREAD_EPS = 1e-4
-
-# EXPERIMENT (GVAN_MID_ESCALATE=1): let a borderline checker play that turns out
-# to be a real error escalate from the middle tier to the rollout, the way the
-# cube path already does with `real_error`. Off by default so the goldens and
-# the shipping presets are unchanged while this is measured.
-_MID_ESCALATE = os.environ.get("GVAN_MID_ESCALATE") == "1"
-
 
 def _trivial_cube(nd: float, dt: float, dp: float) -> bool:
     return (
@@ -254,7 +246,17 @@ class _EvalCtx:
     mid_analyzer_checker: "BgBotAnalyzer | None"
     mid_analyzer_cube: "BgBotAnalyzer | None"
     luck_analyzer: "BgBotAnalyzer | None"
-    close_threshold: float | None
+    # Two thresholds per decision kind, and they are not the same question.
+    # `close_*` gates the MIDDLE tier -- how near a tie before the screen's
+    # verdict stops being trusted. `error_*` gates the SECOND pass -- how much
+    # a decision has to cost before its size is worth a rollout. A middle tier
+    # is ~34x cheaper than a rollout on a checker move list, so the first can
+    # afford to be generous where the second cannot. None => that kind has no
+    # middle tier.
+    close_threshold_checker: float | None
+    close_threshold_cube: float | None
+    error_threshold_checker: float
+    error_threshold_cube: float
     verbose: bool
     all_moves: bool
     count_illegal: bool
@@ -385,50 +387,57 @@ def _eval_cube_decision(dec: dict, ctx: _EvalCtx) -> _DecResult:
         cube_upgraded = False
         cube_probs = None
         if ctx.base_analyzer is not None:
-            # Which way each side went at the screening ply, and by how much:
-            # the doubler's margin over its double point, the responder's over
-            # its take point. A side that disagrees with what was actually done
-            # is an error costing that side's margin.
-            opt_b = "double" if min(dt_b, dp_b) > nd_b else "no_double"
+            # What each side actually did. Which way a tier says they SHOULD
+            # have gone, and by how much, is read off that tier's own equities
+            # in `verdict` below -- never cached from the screen, because the
+            # whole point is that the screen can be wrong about it.
             played_cube = "double" if dec["doubled"] else "no_double"
-            doubler_gap = abs(nd_b - min(dt_b, dp_b))
-            doubler_wrong = played_cube != opt_b
-
             has_resp = dec["doubled"] and dec["response"] is not None
-            resp_opt_b = "take" if dt_b <= dp_b else "pass"
-            resp_gap = abs(dt_b - dp_b)
-            resp_wrong = has_resp and dec["response"] != resp_opt_b
 
-            # 3-tier presets only: `thr` is the margin under which a side counts
-            # as borderline. None => plain 2-tier, where nothing is marginal and
-            # every disagreement is a real error.
-            thr = None
-            if ctx.mid_analyzer_cube is not None and ctx.close_threshold is not None:
-                thr = ctx.close_threshold
+            # `close_thr` is the margin under which a side counts as
+            # borderline; None => no middle tier for cubes, so nothing is
+            # borderline. `err_thr` is the separate margin an error has to
+            # clear to be worth rolling out.
+            close_thr = (ctx.close_threshold_cube
+                         if ctx.mid_analyzer_cube is not None else None)
+            err_thr = ctx.error_threshold_cube
 
-            def marginal(gap: float) -> bool:
-                return thr is not None and gap <= thr
+            def verdict(nd_v: float, dt_v: float, dp_v: float) -> tuple[bool, bool]:
+                """(real_error, close) read off ONE tier's equities.
 
-            # A real error -- a side played wrong by MORE than the borderline
-            # margin -- is what the authoritative pass exists to size. Escalate
-            # on that alone, never on every non-trivial cube: this matches XG
-            # World Class, which judges cube decisions at the screening ply and
-            # only rolls out (XGRoller+) on a cube error.
-            real_error = ((doubler_wrong and not marginal(doubler_gap))
-                          or (resp_wrong and not marginal(resp_gap)))
+                Factored out because it is asked twice -- once of the screen to
+                route the decision, once of the middle tier to check the screen
+                was right about it -- and the two must not drift apart.
+                """
+                opt = "double" if min(dt_v, dp_v) > nd_v else "no_double"
+                d_gap = abs(nd_v - min(dt_v, dp_v))
+                d_wrong = played_cube != opt
+                r_opt = "take" if dt_v <= dp_v else "pass"
+                r_gap = abs(dt_v - dp_v)
+                r_wrong = has_resp and dec["response"] != r_opt
+                # A real error -- a side played wrong by MORE than the error
+                # margin -- is what the authoritative pass exists to size.
+                # Escalate on that alone, never on every non-trivial cube: this
+                # matches XG World Class, which judges cube decisions at the
+                # screening ply and only rolls out (XGRoller+) on a cube error.
+                real = ((d_wrong and d_gap > err_thr)
+                        or (r_wrong and r_gap > err_thr))
+                # Failing that, deepen a BORDERLINE cube to the middle tier.
+                # Within a hair of the double or take point the screen's
+                # verdict is least trustworthy, but the equity riding on it is
+                # bounded by that same hair -- so depth is what's wanted and a
+                # rollout would be waste. Same shape as the near-tied checker
+                # play below, and as there, a side too trivial to score (the
+                # _trivial_cube / _trivial_take_pass rules the PR count uses)
+                # cannot earn the upgrade.
+                cls = close_thr is not None and (
+                    (d_gap <= close_thr and not _trivial_cube(nd_v, dt_v, dp_v))
+                    or (has_resp and r_gap <= close_thr
+                        and not _trivial_take_pass(dt_v, dp_v))
+                )
+                return real, cls
 
-            # Failing that, deepen a BORDERLINE cube to the middle tier. Within
-            # a hair of the double or take point the screen's verdict is least
-            # trustworthy, but the equity riding on it is bounded by that same
-            # hair -- so depth is what's wanted and a rollout would be waste.
-            # Same shape as the near-tied checker play below, and as there, a
-            # side too trivial to score (the _trivial_cube / _trivial_take_pass
-            # rules the PR count uses) cannot earn the upgrade.
-            close = (
-                (marginal(doubler_gap) and not _trivial_cube(nd_b, dt_b, dp_b))
-                or (has_resp and marginal(resp_gap)
-                    and not _trivial_take_pass(dt_b, dp_b))
-            )
+            real_error, close = verdict(nd_b, dt_b, dp_b)
 
             if real_error:
                 full_result = cube_at(ctx.analyzer)
@@ -436,6 +445,24 @@ def _eval_cube_decision(dec: dict, ctx: _EvalCtx) -> _DecResult:
             elif close:
                 full_result = cube_at(ctx.mid_analyzer_cube)
                 cube_upgraded = True
+                # `real_error` above was read off the SCREEN's equities, and a
+                # screen can badly understate a margin: measured over 4,972
+                # cube decisions, 0.4% of them are called borderline here and
+                # then found by the middle tier to be real errors, by a median
+                # of 0.07 and up to 0.22. Re-test on the closer look rather
+                # than leaving those sized by the middle tier.
+                #
+                # Skipped when the middle tier IS the authoritative analyzer --
+                # a preset may name second_pass's level in mid_pass to mean
+                # "borderline as well as wrong earns the top tier", as
+                # world_class_fast does for cubes. Analyzers are memoized by
+                # level (see match.py), so identity is exact, and re-running
+                # would buy the same object's same answer twice.
+                if ctx.mid_analyzer_cube is not ctx.analyzer and verdict(
+                        float(full_result.equity_nd),
+                        float(full_result.equity_dt),
+                        float(full_result.equity_dp))[0]:
+                    full_result = cube_at(ctx.analyzer)
             else:
                 full_result = cheap_result
             nd = float(full_result.equity_nd)
@@ -662,13 +689,10 @@ def _eval_checker_decision(dec: dict, ctx: _EvalCtx) -> _DecResult:
                     # same depth). Defaults to the authoritative level.
                     tier_analyzer = ctx.analyzer
                     top2_gap = abs(best_eq_b - float(cheap_moves[1].equity))
-                    if (ctx.mid_analyzer_checker is not None
-                            and ctx.close_threshold is not None
-                            and top2_gap <= ctx.close_threshold):
-                        # 3-tier: near-tied decision -> middle tier, no
-                        # rollout (the top moves are ~equal).
-                        full_result = _checker_play(
-                            ctx.mid_analyzer_checker,
+
+                    def play_at(analyzer):
+                        return _checker_play(
+                            analyzer,
                             dec["board"], die1, die2,
                             cube_value=dec["cube_value"],
                             cube_owner=dec["cube_owner"],
@@ -677,47 +701,67 @@ def _eval_checker_decision(dec: dict, ctx: _EvalCtx) -> _DecResult:
                             is_crawford=dec["is_crawford"],
                             force_boards=[dec["board_played"]],
                         )
+
+                    def played_error(move_list) -> float | None:
+                        """What one tier says the played move lost, or None if
+                        that tier did not return it."""
+                        return next(
+                            (abs(float(m.equity_diff)) for m in move_list
+                             if tuple(m.board) == played_tuple), None)
+
+                    close_thr = (ctx.close_threshold_checker
+                                 if ctx.mid_analyzer_checker is not None else None)
+                    err_thr = ctx.error_threshold_checker
+                    two_pass = ctx.base_analyzer is not None
+
+                    # What the SCREEN already says the played move lost. An
+                    # error it can size confidently needs no middle tier on the
+                    # way to the rollout -- this is the cube path's shape, where
+                    # `real_error` is tested before `close`.
+                    screen_err = played_error(cheap_moves)
+                    screen_error = two_pass and (
+                        screen_err > err_thr if screen_err is not None
+                        # force_boards should always put the played move in the
+                        # list; if some engine ever fails to, fall back to the
+                        # unsized test rather than silently skipping the tier.
+                        else tuple(cheap_moves[0].board) != played_tuple)
+
+                    if (close_thr is not None and top2_gap <= close_thr
+                            and not screen_error):
+                        # 3-tier: near-tied decision -> middle tier. The top
+                        # moves are ~equal, so depth is what settles it and a
+                        # rollout would be waste.
+                        full_result = play_at(ctx.mid_analyzer_checker)
                         moves = list(full_result.moves)
                         checker_upgraded = True
                         tier_analyzer = ctx.mid_analyzer_checker
-                        # A near-tied TOP TWO says nothing about how far down
-                        # the list the player went -- top2_gap is best-vs-second
-                        # and the played move may be the eighth. Size a genuine
-                        # error at the rollout tier even though the decision
-                        # arrived as borderline: the rule the cube path already
-                        # applies via `real_error`, and the one presets.py
-                        # documents ("errors bigger than close_threshold still
-                        # go to second_pass").
-                        if _MID_ESCALATE and ctx.base_analyzer is not None:
-                            mid_err = next(
-                                (abs(float(m.equity_diff)) for m in moves
-                                 if tuple(m.board) == played_tuple), None)
-                            if mid_err is not None and mid_err > ctx.close_threshold:
-                                full_result = _checker_play(
-                                    ctx.analyzer,
-                                    dec["board"], die1, die2,
-                                    cube_value=dec["cube_value"],
-                                    cube_owner=dec["cube_owner"],
-                                    away1=dec["away1"],
-                                    away2=dec["away2"],
-                                    is_crawford=dec["is_crawford"],
-                                    force_boards=[dec["board_played"]],
-                                )
+                        # ... unless the closer look says the played move lost
+                        # a real amount after all. A near-tied TOP TWO says
+                        # nothing about how far down the list the player went:
+                        # top2_gap is best-vs-second and the played move may be
+                        # the eighth. Measured over 11,786 checker decisions,
+                        # 10% of borderline ones cost more than the threshold
+                        # and the worst cost 0.56, every one of them sized by
+                        # the middle tier of a preset whose second pass exists
+                        # for exactly those. Skipped when the middle tier IS
+                        # the authoritative analyzer (a preset may name
+                        # second_pass's level in mid_pass); analyzers are
+                        # memoized by level, so identity is exact.
+                        if two_pass and ctx.mid_analyzer_checker is not ctx.analyzer:
+                            mid_err = played_error(moves)
+                            if mid_err is not None and mid_err > err_thr:
+                                full_result = play_at(ctx.analyzer)
                                 moves = list(full_result.moves)
                                 tier_analyzer = ctx.analyzer
-                    elif (ctx.base_analyzer is not None
-                            and tuple(cheap_moves[0].board) != played_tuple):
-                        # Error (played != screen best) -> rollout tier.
-                        full_result = _checker_play(
-                            ctx.analyzer,
-                            dec["board"], die1, die2,
-                            cube_value=dec["cube_value"],
-                            cube_owner=dec["cube_owner"],
-                            away1=dec["away1"],
-                            away2=dec["away2"],
-                            is_crawford=dec["is_crawford"],
-                            force_boards=[dec["board_played"]],
-                        )
+                    elif two_pass and screen_error:
+                        # Error worth sizing -> rollout tier. A borderline
+                        # decision routed here by `screen_error` lands in this
+                        # branch too, which is the point: it skips a middle tier
+                        # it does not need. An error at or under err_thr stays
+                        # at the screen -- there is nothing there for a rollout
+                        # to size, and below 0.02 one buys ~6% of sizing
+                        # accuracy for ~45% of the rollouts.
+                        full_result = play_at(ctx.analyzer)
                         moves = list(full_result.moves)
                         checker_upgraded = True
                     else:
@@ -1006,7 +1050,10 @@ def evaluate_game(game: dict, analyzer: BgBotAnalyzer, recon: dict,
                   luck_analyzer: "BgBotAnalyzer | None" = None,
                   mid_analyzer_checker: "BgBotAnalyzer | None" = None,
                   mid_analyzer_cube: "BgBotAnalyzer | None" = None,
-                  close_threshold: float | None = None,
+                  close_threshold_checker: float | None = None,
+                  close_threshold_cube: float | None = None,
+                  error_threshold_checker: float = 0.02,
+                  error_threshold_cube: float = 0.02,
                   level: str = "3ply", all_moves: bool = False,
                   count_illegal: bool = False,
                   progress: "Callable[[], None] | None" = None) -> dict:
@@ -1024,7 +1071,11 @@ def evaluate_game(game: dict, analyzer: BgBotAnalyzer, recon: dict,
     ctx = _EvalCtx(
         analyzer=analyzer, base_analyzer=base_analyzer,
         mid_analyzer_checker=mid_analyzer_checker, mid_analyzer_cube=mid_analyzer_cube,
-        luck_analyzer=luck_analyzer, close_threshold=close_threshold,
+        luck_analyzer=luck_analyzer,
+        close_threshold_checker=close_threshold_checker,
+        close_threshold_cube=close_threshold_cube,
+        error_threshold_checker=error_threshold_checker,
+        error_threshold_cube=error_threshold_cube,
         verbose=verbose, all_moves=all_moves, count_illegal=count_illegal,
         level_display=level_display, game=game,
     )

@@ -157,7 +157,10 @@ def main() -> int:
 
     ctx = _EvalCtx(analyzer=None, base_analyzer=None, mid_analyzer_checker=None,
                    mid_analyzer_cube=None,
-                   luck_analyzer=None, close_threshold=None, verbose=False,
+                   luck_analyzer=None,
+                   close_threshold_checker=None, close_threshold_cube=None,
+                   error_threshold_checker=0.0, error_threshold_cube=0.0,
+                   verbose=False,
                    all_moves=False, count_illegal=False, level_display="",
                    game={"game_number": 4})
     impossible = {
