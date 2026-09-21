@@ -188,31 +188,36 @@ decision the screen would otherwise have settled. `fast` is the default.
 493 matches were analyzed by XG at World Class and by each of the strong
 presets, then compared decision by decision:
 
-> **Accuracy figures pending re-measurement.** The rows below predate the
-> retuning of both presets (two separate thresholds, middle-tier escalation,
-> and `world_class` moving from a flat 4-ply pass to 3-ply with a 4-ply middle
-> tier). The ordering is expected to hold; the numbers are not current. The
-> cost column is current.
-
 | | mean gap to XG's match PR | same checker play as XG | PR within 1 of XG | cost, ms/ply (24c → 4c) |
 |---|---|---|---|---|
-| `world_class` | 0.434 | 90.3% | 91.8% | 291 → 2048 |
-| `world_class_fast` | 0.441 | 90.0% | 90.7% | 166 → 1016 |
+| `world_class` | 0.423 | 90.3% | 91.7% | 291 → 2048 |
+| `world_class_fast` | 0.431 | 90.0% | 91.3% | 166 → 1016 |
+
+Re-measured 2026-09-20 over the same 493 matches after the retune. The retune
+moved both presets about 0.01 PR closer to XG, which is **not** a significant
+improvement — the paired confidence intervals span zero — but does establish
+that it cost nothing. The checker-play column is carried over from the original
+study; a like-for-like check says the retune moves it by at most 0.6 points, but
+its exact figure could not be reproduced (see
+[the write-up](experiments/2026-09-20-corpus-rerun.md)).
 
 **Mean gap** is the average distance between the two *ratings* of the same
 player-match, in either direction: rate a match with `world_class` and XG rates
 it 0.434 PR away, typically. It is not what following the preset costs you —
 priced by XG's own equities, a player who made `world_class`'s recommended
 checker play every time would post a PR of 0.333 and `world_class_fast`
-0.353. Both are inside what XG itself calls world-class play.
+0.353. Both are inside what XG itself calls world-class play. (Those two
+figures predate the retune and were not re-measured; everything else in this
+section was.)
 
 Cost is milliseconds per ply over six matches, on a 24-core M2 Ultra and a
 4-core i5-7600 — absolutes rather than a multiple of `fast`, because that
 multiple is not constant across machines. Individual matches spread about 2×
 around these means. See [the timings](docs/CLI.md#what-they-cost).
 
-- **`world_class_fast` is the recommended analysis.** It lands 0.007 PR behind
-  the deepest preset for a little under half the time. The two sit three times
+- **`world_class_fast` is the recommended analysis.** It lands 0.008 PR behind
+  the deepest preset for a little under half the time — a difference the
+  493-match corpus cannot resolve from zero (95% CI [−0.020, +0.004]). The two sit three times
   closer to each other (0.136) than either does to XG, because what separates
   them from XG is the *engine*, not the search depth — 95% of
   `world_class_fast`'s squared PR error against XG is that engine floor, which

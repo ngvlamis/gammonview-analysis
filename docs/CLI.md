@@ -260,21 +260,23 @@ beside the constants they set.
 `fast` is a good default for a quick look. For analysis you intend to trust,
 the strong presets were compared against eXtreme Gammon over 493 matches:
 
-> **Pending re-measurement.** The agreement figures in this section were
-> measured before `world_class` and `world_class_fast` were retuned (the two
-> thresholds, the middle-tier escalation, and `world_class`'s move from a flat
-> 4-ply pass to 3-ply with a 4-ply middle tier). The *ordering* is expected to
-> survive; the numbers are not current for either. The timings in *What they
-> cost* below were re-measured after the retune and are current.
-
 | | mean gap to XG's match PR | same checker play as XG | PR within 1 of XG |
 |---|---|---|---|
-| `world_class` | 0.434 | 90.3% | 91.8% |
-| `world_class_fast` | 0.441 | 90.0% | 90.7% |
+| `world_class` | 0.423 | 90.3% | 91.7% |
+| `world_class_fast` | 0.431 | 90.0% | 91.3% |
 
-- **`world_class_fast`** is the recommended analysis — 0.007 PR behind the
-  deepest preset, and indistinguishable from it on checker play. The two sit
-  three times closer to each other than either does to XG: the remaining gap is
+Re-measured over the same 493 matches on 2026-09-20, after the retune. Both
+presets moved about 0.01 PR closer to XG and neither move is significant — the
+paired intervals span zero — so the retune is established as *harmless* rather
+than as an improvement. The checker-play column is carried over from the
+original study: re-measuring it like-for-like shows the retune moving it by at
+most 0.6 points, but the study's exact figure could not be reproduced, which
+[the write-up](../experiments/2026-09-20-corpus-rerun.md) documents.
+
+- **`world_class_fast`** is the recommended analysis — 0.008 PR behind the
+  deepest preset, and indistinguishable from it on checker play. That 0.008 is
+  itself not separable from zero on 493 matches (95% CI [−0.020, +0.004]). The
+  two sit far closer to each other than either does to XG: the remaining gap is
   the engine difference, not the search depth.
 - **`world_class`** matches XG's *search routing* — a 3-ply pass that deepens to
   4-ply on near-ties, which is what XG World Class actually does — so it is the

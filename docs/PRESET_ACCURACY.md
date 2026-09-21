@@ -15,6 +15,15 @@ which is the most important section here.
 
 `very_quick`, `fast` and `deep` were not included.
 
+> **Re-measured after the September 2026 retune.** The figures in this document
+> describe the presets as they were when the study ran. Both `world_class` and
+> `world_class_fast` were retuned on 2026-09-19 and the corpus re-run on
+> 2026-09-20: mean gap to XG moved 0.434 → 0.423 and 0.441 → 0.431, neither
+> significantly, so this document's *conclusions* all survive. Two things did
+> not reproduce and are flagged where they appear: the "same checker play"
+> percentages, and the follow-the-preset PR figures. See
+> [`../experiments/2026-09-20-corpus-rerun.md`](../experiments/2026-09-20-corpus-rerun.md).
+
 > **`balanced` has since been retired** (2026-09-20), so one of the four
 > readings below is of a preset you can no longer select. The study is kept
 > whole rather than edited down, because the `balanced` column is *why* it was

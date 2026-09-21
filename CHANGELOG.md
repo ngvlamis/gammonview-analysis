@@ -131,6 +131,14 @@ interpolation. Output is byte-identical at any setting.
 `BrokenProcessPool`. That safety is no longer cheap: **pass `jobs=0` from a
 server or batch driver.**
 
+**Preset accuracy re-measured after the retune**
+
+The 493-match XG corpus was re-analyzed with both retuned presets. Mean gap to
+XG's match PR moves 0.434 → 0.423 for `world_class` and 0.441 → 0.431 for
+`world_class_fast`; neither change is significant (paired 95% intervals span
+zero), so the retune is established as harmless rather than as an improvement.
+The "pending re-measurement" notices are gone from the README and `CLI.md`.
+
 **Worker processes now exit with their parent**
 
 A `ProcessPoolExecutor` only cleans up when the parent exits normally. If it
