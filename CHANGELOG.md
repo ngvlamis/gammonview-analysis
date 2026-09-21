@@ -13,7 +13,7 @@ when the repository was opened; they are kept because they record why things
 are the way they are — particularly the breaking changes and the measurements
 behind several design decisions. Dates are the tag dates.
 
-## Unreleased
+## 1.1.0 — 2026-09-20
 
 **Analysis results change in this release.** The first four entries below all
 change what a fresh analysis produces — a preset is gone, two were retuned, one
