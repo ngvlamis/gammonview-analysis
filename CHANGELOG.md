@@ -13,7 +13,7 @@ when the repository was opened; they are kept because they record why things
 are the way they are — particularly the breaking changes and the measurements
 behind several design decisions. Dates are the tag dates.
 
-## Unreleased
+## 1.2.0 — 2026-09-29
 
 **A checker moved *backwards* is no longer lost on import** *(fix)*
 
