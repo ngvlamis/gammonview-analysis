@@ -46,6 +46,10 @@ counting anyway, so no rating moves. And a match holding one of these hashes
 differently than it did in 1.1.0, because the document genuinely changed; only
 matches with this shape are affected.
 
+The match this was found on is now in the sample corpus as `hQ8sVn2LbTdF4wRm`,
+as both a `.mat` and an `.xg` — one file per cause — and
+`test_illegal_play_steps` checks that the two land on the same board.
+
 ## 1.1.0 — 2026-09-20
 
 **Analysis results change in this release.** The first four entries below all

@@ -78,6 +78,11 @@ def _replay_holds(doc: dict) -> tuple[int, list[str]]:
             before, after = ply.get("ogid_before"), ply.get("ogid_after")
             if not before or not after or ply.get("d1") is None:
                 continue
+            # A set-position ply carries the dice of the play it stands in for,
+            # but states its board outright instead of moving to it -- there are
+            # no steps to replay. Same skip as test_xg_move_steps.
+            if ply.get("action_id") == 31:
+                continue
             total += 1
             replayed = _apply_moves_p1(
                 _to_p1(before), ply.get("moves") or [], bool(ply.get("color")),
@@ -196,6 +201,12 @@ def audit_stems(root: Path) -> None:
     for stem in golden:
         check((root / "mat" / f"{stem}.mat").is_file(),
               f"golden stem has a source .mat ({stem})")
+    # The backwards-hop match, named by test_illegal_play_steps and its JS
+    # mirror. They skip rather than fail without it -- everything else in them is
+    # synthetic -- so this is the only thing that would notice it going missing.
+    for ext in ("mat", "xg"):
+        check((root / ext / f"hQ8sVn2LbTdF4wRm.{ext}").is_file(),
+              f"the backwards-hop match keeps its .{ext} (hQ8sVn2LbTdF4wRm)")
 
 
 def audit_js_references(root: Path) -> None:

@@ -5,20 +5,23 @@ Copyright (C) 2026 Nicholas Vlamis
 
 # The sample corpus
 
-Eleven matches in four formats, committed so the test suite can run anywhere.
-Every player name, match ID, date and site string here is synthetic — see
-[Anonymization](#anonymization).
+Twelve matches, each in two to four formats, committed so the test suite can run
+anywhere. Every player name, match ID, date and site string here is synthetic —
+see [Anonymization](#anonymization).
 
-Most of what they buy is breadth. The suite replays **2,101 plies with 14,032
-alternatives** through the XG converter and the same 2,101 plies with 11,791
-alternatives through the BGF one, and the two bugs this directory exists to
-catch — the XG and BGF step splitters inferring the wrong intermediate point —
-were both found by a board shape that no hand-picked match happened to contain.
-This is why the corpus is chosen for coverage rather than trimmed to a minimum.
+Most of what they buy is breadth. The suite replays **2,138 plies with 15,263
+alternatives** through the XG converter and 2,101 plies with 11,791 alternatives
+through the BGF one, and the two bugs this directory exists to catch — the XG and
+BGF step splitters inferring the wrong intermediate point — were both found by a
+board shape that no hand-picked match happened to contain. This is why the corpus
+is chosen for coverage rather than trimmed to a minimum.
 
-**Everything here is portable.** Seven tests read these files and none of them
-imports bgsage: parsing, byte round-trips and board replay are pure stdlib and
-land identically on any machine. That is worth separating from
+**Almost everything here is portable.** Eight tests read these files and seven
+import no engine at all: parsing, byte round-trips and board replay are pure
+stdlib and land identically on any machine. `test_illegal_play_steps` is the
+eighth, and only its closing section reaches bgsage — to check that an
+impossible board comes back as an error naming the ply rather than as a
+segfault. That is worth separating from
 `tests/golden/`, which is engine output and does *not* travel — see
 [Goldens are not part of this corpus](#goldens-are-not-part-of-this-corpus).
 
@@ -30,10 +33,15 @@ whether a corpus change broke a requirement.
 
 | Directory | Files | Read by |
 |---|---|---|
-| `mat/` | 11 `.mat` | `test_ogxm_pipeline`, `test_count_illegal`, and every engine test via `tests/fixtures.py` |
-| `xg/` | 11 `.xg` | `test_xg_move_steps`, `test_alternative_move_steps`, `test_xg_eval_levels`, `test_xg_zero_win_eval` |
+| `mat/` | 12 `.mat` | `test_ogxm_pipeline`, `test_count_illegal`, `test_illegal_play_steps`, and every engine test via `tests/fixtures.py` |
+| `xg/` | 12 `.xg` | `test_xg_move_steps`, `test_alternative_move_steps`, `test_xg_eval_levels`, `test_xg_zero_win_eval`, `test_illegal_play_steps` |
 | `bgf/` | 11 `.bgf` | `test_bgf_move_steps` |
 | `gv/` | 11 `.gvab` + 1 `.gva` | `test_share_link`, `test_chunk_passthrough` |
+
+The counts differ by a column because a match is added in whatever forms it
+arrived in. `hQ8sVn2LbTdF4wRm` has no `.bgf` (BGBlitz never saw it) and no
+`.gvab` — that one is derived, and nothing needs its derivation; see
+[below](#the-three-matches-that-are-not-like-the-others).
 
 The JS suite reads `mat/`, `xg/` and `bgf/` from here too — see
 [The JavaScript mirror](#the-javascript-mirror).
@@ -113,14 +121,14 @@ exercise different fields.
   branch, which is the failure mode the explicit lookup exists to prevent.
   `eXBNG5wZHS5Alu3P` and `XCu3RJ0UvDg_Tldl` are the two that fall short.
 
-Five of the eleven satisfy both. The current pick is
+Five of the twelve satisfy both. The current pick is
 `3WNK_g1Z-PLsh_HyvQ5j4a` — 7-point, 7 games, 272 plies, the longest.
 
 There is deliberately no fallback to "whatever `.mat` is present". A silent
 substitution is how the drop branch would stop being tested without anyone
 noticing; a loud skip naming `MATCH` is the better failure.
 
-### The two matches that are not like the others
+### The three matches that are not like the others
 
 * **`5nqfGw9bWG3deTaU`** contains a genuine **illegal play** — `14/10 13/12`
   off a 1-3, three die-moves for a two-hop roll — and is the only file in the
@@ -135,12 +143,36 @@ noticing; a loud skip naming `MATCH` is the better failure.
   Its `.gvab` is a golden, so the flag is pinned byte-for-byte.
 * **`B4_SrGcsKAQmoTyHlgJCbM`** carries the Roller levels and the rollout, as
   above, and is the readable `.gva`.
+* **`hQ8sVn2LbTdF4wRm`** is the other illegal play, and it is a different one.
+  `5nqfGw9bWG3deTaU` spends too many die-moves; this one sends a checker
+  *backwards* — white played a 6-5 as `14/8 15/10 6/8` at game 2's twentieth
+  play. A ply record cannot hold that hop at all, `pips` being an unsigned
+  3-bit forward distance, so the play is recorded as the position it left
+  (`action_id` 31 with the roll still on it) rather than as steps. It is the
+  only file in the corpus that exercises that encoding, and
+  `test_illegal_play_steps` / `test-illegal-play-steps.js` name it.
 
-Losing either one costs a requirement no other file supplies.
+  It is here **twice**, as a `.mat` and as an `.xg` of the same match, and both
+  are load-bearing: the two converters reach the set-position ply by different
+  routes. The `.mat` states the play in notation, so `fit_move_steps` refuses it
+  on the notation alone; the `.xg`'s step list is simply short, and it is the
+  played candidate's own stored position — flagged `invalid_m == 2` — that gives
+  the board away. That they land on the same board is what the user sees: XG
+  itself draws this play wrong and then draws the next one right.
+
+  Two consequences to know before curating it. A set-position ply **states** its
+  board instead of moving to it, so it has no steps to replay and every
+  whole-file replay check has to skip `action_id == 31` — `audit_corpus.py` and
+  `test_xg_move_steps` both do. And it carries **no analysis**, because the
+  format allows a checker evaluation only on a decision ply (0–23); the
+  evaluations XG recorded for that play are dropped on import, deliberately, and
+  its PR is unaffected because the ply was already outside the count.
+
+Losing any one of them costs a requirement no other file supplies.
 
 ## Names the suite hard-codes
 
-Four places, all of which `tests/audit_corpus.py` verifies:
+Five places, all of which `tests/audit_corpus.py` verifies:
 
 1. **`tests/fixtures.py:MATCH`** — the engine tests' match.
 2. **`tests/golden/*.fast.gvab`** — five stems, each needing a matching
@@ -149,9 +181,13 @@ Four places, all of which `tests/audit_corpus.py` verifies:
    both name `B4_SrGcsKAQmoTyHlgJCbM` literally, and between them need its
    `.gvab` and its `.gva`, both in `gv/`.
 4. **`tests/test_illegal_move.py`** and **`tests/test_count_illegal.py`** —
-   both name `5nqfGw9bWG3deTaU`, the one match with an illegal play; the first
-   reads its golden `.gvab`, the second its `.mat`. It is already a golden
-   stem, so check 2 covers the name.
+   both name `5nqfGw9bWG3deTaU`, the match whose illegal play spends too many
+   die-moves; the first reads its golden `.gvab`, the second its `.mat`. It is
+   already a golden stem, so check 2 covers the name.
+5. **`tests/test_illegal_play_steps.py`** and its JS mirror — both name
+   `hQ8sVn2LbTdF4wRm` and read *both* of its files. They **skip** rather than
+   fail when it is missing, since everything else in them is synthetic, so the
+   audit is what would catch its loss.
 
 ## Regenerating the derived files
 
@@ -214,17 +250,36 @@ Identifying data lives in:
 
 * **`.mat`** — `Player 1`/`Player 2`, `Site`, `Match ID`, `EventDate`,
   `EventTime`, and each game's score line. Plain text.
-* **`.xg`** — the *uncompressed* header record: ANSI Pascal strings at offsets
-  9 and 50, UTF-16 `TShortUnicodeString`s at 880 and 1138, ELO ratings at 104
-  and 112, the date at 128, event at 136/622, location at 1396. All
-  fixed-width, so an in-place patch never shifts a length. The embedded JPEG
-  thumbnail is a rendered board only — no names.
+* **`.xg`** — two places, and the second is easy to miss.
+
+  The `tsHeaderMatch` record, inside the compressed record stream: ANSI Pascal
+  strings at offsets 9 and 50, UTF-16 `TShortUnicodeString`s at 880 and 1138,
+  ELO ratings at 104 and 112, the date at 128, event at 136/622, location at
+  1396. All fixed-width, so an in-place patch never shifts a length. It is the
+  only one of the several hundred records that carries any of this. The embedded
+  JPEG thumbnail is a rendered board only — no names.
+
+  And the **rich-game header**, the uncompressed first 8,232 bytes, which is
+  what Windows shows about the file without opening it: null-terminated UTF-16
+  strings at 40 (`Played on <site>`), 2088 (`<p1> vs. <p2>, <n> point match<score>`)
+  and 4136 (`Event: <event> Round: <n>`). Patching these means writing the
+  replacement, then blanking the rest of what the old string occupied. This
+  section did not mention them for a long time, because the `.xg` files here had
+  been re-analyzed rather than patched and XG wrote its own header — which is a
+  good reminder that the two halves of a file can disagree about who played.
 * **`.bgf`** — inside the gzip/zlib Smile payload. `gvformat` decodes Smile but
   has no encoder, so this is a byte patch on the decompressed stream, where
   strings are length-prefixed.
 
-The `.xg` and `.bgf` files here were re-analyzed from the anonymized `.mat`
-rather than patched, which is why they carry no trace of the originals.
+Most of the `.xg` and `.bgf` files here were re-analyzed from the anonymized
+`.mat` rather than patched, which is why they carry no trace of the originals.
+
+`hQ8sVn2LbTdF4wRm.xg` is the exception and **had to be**: what makes it worth
+keeping is how XG recorded one illegal play, and re-analyzing would have XG
+record it again, correctly, destroying the only thing the file is for. It was
+patched in place instead — both halves above, then `zlib`-recompressed — and
+`convert_xg` returns the same document before and after, down to every
+evaluation, with the timestamp the only field that moves.
 
 ## The JavaScript mirror
 

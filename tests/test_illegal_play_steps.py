@@ -12,6 +12,10 @@ that ply on the replayed board was one checker off, later plies lifted checkers
 off empty points, and the resulting 16-checker position segfaulted the engine's
 bearoff lookup.
 
+The match the whole thing came from is in the corpus as
+``hQ8sVn2LbTdF4wRm``, in both of the forms it was reported in -- see the
+last section, and samples/README.md.
+
 Run directly:
     uv run python tests/test_illegal_play_steps.py
 """
@@ -26,11 +30,14 @@ sys.path.insert(0, str(_REPO_ROOT))
 
 from gvformat import read_gvab, write_gvab  # noqa: E402
 from gvformat.export import (  # noqa: E402
-    _notation_to_steps, _notation_to_steps_unsplit, _p1_to_absolute,
+    _flip_board, _notation_to_steps, _notation_to_steps_unsplit, _p1_to_absolute,
     _steps_per_roll, board_diff_has_non_forward_hop, fit_move_steps,
     notation_has_non_forward_hop,
 )
 from gvformat.mat import mat_to_ogxm  # noqa: E402
+from gvformat.notation import canonical_notation  # noqa: E402
+from gvformat.ogid import parse_ogid  # noqa: E402
+from gvformat.xg import convert_xg  # noqa: E402
 from gvformat.legality import board_problems  # noqa: E402
 from gvformat.reader import _absolute_to_p1, _apply_moves_p1  # noqa: E402
 
@@ -241,6 +248,74 @@ def main() -> int:
               "set_position": _p1_to_absolute(stated),
           })))["games"][0]["plies"][0].get("ogid_before"),
           "a set-position ply with no dice opens a game and gets none")
+
+    # --- the real match, in both of the forms it was reported in -----------
+    #
+    # `hQ8sVn2LbTdF4wRm` is where this came from: a HedgeHog transcription where
+    # white played a 6-5 as `14/8 15/10 6/8`, the last hop running two pips
+    # *backwards*. It is in the corpus twice over, and the two files reach the
+    # set-position ply along different routes -- the .mat states the play in
+    # notation, so `fit_move_steps` refuses it on the notation alone, while the
+    # .xg's step list is simply short and it is the played candidate's own stored
+    # position that gives the board away (`invalid_m == 2`, see
+    # `_xg_candidate_board`). Landing on the same board is the whole point: that
+    # board is what a user can see, since XG draws this play wrong and then
+    # draws the next one right.
+    mat_path = _REPO_ROOT / "samples" / "mat" / "hQ8sVn2LbTdF4wRm.mat"
+    xg_path = _REPO_ROOT / "samples" / "xg" / "hQ8sVn2LbTdF4wRm.xg"
+    if not mat_path.is_file() or not xg_path.is_file():
+        print("SKIP  the real match (hQ8sVn2LbTdF4wRm is not in samples/)")
+    else:
+        def _mover_board(ogid: str, color: int) -> list[int]:
+            """The ply's board from the mover's own side of it."""
+            st = parse_ogid(ogid)
+            board = list(st.board)
+            if st.on_roll != "W":
+                board = _flip_board(board)
+            return board if color else _flip_board(board)
+
+        pair = {
+            "the .mat": mat_to_ogxm(mat_path.read_text()),
+            "the .xg": convert_xg(xg_path),
+        }
+        restated = {}
+        for name, doc in pair.items():
+            found = [(gi, pi, ply)
+                     for gi, game in enumerate(doc["games"])
+                     for pi, ply in enumerate(game["plies"])
+                     if ply.get("action_id") == 31]
+            check(len(found) == 1,
+                  f"{name} of the real match holds exactly one set-position ply")
+            gi, pi, ply = found[0]
+            restated[name] = (gi, pi, ply, doc)
+            check((gi, pi) == (1, 37),
+                  f"{name} puts it at game 2's twentieth play, where the 6-5 was")
+            check(ply["d1"] == 6 and ply["d2"] == 5,
+                  f"{name} keeps the roll it stands in for")
+            check(canonical_notation(_mover_board(ply["ogid_before"], ply["color"]),
+                                     _mover_board(ply["ogid_after"], ply["color"]),
+                                     ply["d1"], ply["d2"]) == "15/10 14/8 6/8",
+                  f"{name} states a board the backwards hop reads back out of")
+            check(not ply.get("analysis"),
+                  f"{name} carries no analysis on it -- the known cost of the encoding")
+            nxt = doc["games"][gi]["plies"][pi + 1]
+            check(_checkers(nxt["ogid_before"]) == _checkers(ply["ogid_after"]),
+                  f"{name} has the next play carry on from the board it stated")
+
+        (_, _, mat_ply, _), (gi, pi, xg_ply, xg_doc) = (restated["the .mat"],
+                                                         restated["the .xg"])
+        check(mat_ply["ogid_before"] == xg_ply["ogid_before"]
+              and mat_ply["ogid_after"] == xg_ply["ogid_after"],
+              "and the two files, read by two different routes, agree on both boards")
+
+        # Through the binary, where the hop was being dropped. The synthetic
+        # case above covers the encoding; this covers it on a ply deep inside a
+        # game, with a live cube and a full analysis block around it.
+        round_tripped = read_gvab(write_gvab(xg_doc))["games"][gi]["plies"][pi]
+        check(round_tripped["action_id"] == 31
+              and round_tripped["ogid_before"] == xg_ply["ogid_before"]
+              and round_tripped["ogid_after"] == xg_ply["ogid_after"],
+              "and a saved match brings that ply back with its boards intact")
 
     # --- the corruption this all prevents is recognisable ------------------
     check(board_problems(stated) == [],

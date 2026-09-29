@@ -12,15 +12,30 @@
 // write; from that ply on the replayed board was one checker off, later plies
 // lifted checkers off empty points, and the resulting 16-checker position
 // segfaulted the engine's bearoff lookup.
+//
+// The match the whole thing came from is in the corpus as `hQ8sVn2LbTdF4wRm`,
+// in both of the forms it was reported in -- see the last section, and
+// samples/README.md.
+
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import {
-  _notationToSteps, _notationToStepsUnsplit, _p1ToAbsolute, _stepsPerRoll,
-  boardDiffHasNonForwardHop, fitMoveSteps, notationHasNonForwardHop,
+  _flipBoard, _notationToSteps, _notationToStepsUnsplit, _p1ToAbsolute,
+  _stepsPerRoll, boardDiffHasNonForwardHop, fitMoveSteps,
+  notationHasNonForwardHop,
 } from '../src/export.js';
 import { convertMat } from '../src/mat2gva.js';
+import { convertXg } from '../src/xg2gva.js';
+import { canonicalNotation } from '../src/notation.js';
+import { parseOgid } from '../src/ogid.js';
 import { boardProblems } from '../src/legality.js';
 import { write_gvab } from '../src/binary.js';
 import { readGvab, _absoluteToP1, _applyMovesP1 } from '../src/reader.js';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const SAMPLES_DIR = path.join(__dirname, '..', '..', 'samples');
 
 let passed = 0;
 let failed = 0;
@@ -214,6 +229,73 @@ assert(!readGvab(write_gvab(doc({
   color: 1, action_id: 31, set_position: _p1ToAbsolute(stated),
 }))).games[0].plies[0].ogid_before,
   'a set-position ply with no dice states where a game starts and gets none');
+
+// --- the real match, in both of the forms it was reported in ---------------
+//
+// `hQ8sVn2LbTdF4wRm` is where this came from: a HedgeHog transcription where
+// white played a 6-5 as `14/8 15/10 6/8`, the last hop running two pips
+// *backwards*. It is in the corpus twice over, and the two files reach the
+// set-position ply along different routes -- the .mat states the play in
+// notation, so `fitMoveSteps` refuses it on the notation alone, while the .xg's
+// step list is simply short and it is the played candidate's own stored position
+// that gives the board away (`invalidM === 2`, see `_xgCandidateBoard`). Landing
+// on the same board is the whole point: that board is what a user can see, since
+// XG draws this play wrong and then draws the next one right.
+const MATCH_MAT = path.join(SAMPLES_DIR, 'mat', 'hQ8sVn2LbTdF4wRm.mat');
+const MATCH_XG = path.join(SAMPLES_DIR, 'xg', 'hQ8sVn2LbTdF4wRm.xg');
+
+if (!fs.existsSync(MATCH_MAT) || !fs.existsSync(MATCH_XG)) {
+  console.log('SKIP  the real match (hQ8sVn2LbTdF4wRm is not in samples/)');
+} else {
+  /** The ply's board from the mover's own side of it. */
+  const moverBoard = (ogid, color) => {
+    const st = parseOgid(ogid);
+    const p1 = st.onRoll === 'W' ? Array.from(st.board) : _flipBoard(Array.from(st.board));
+    return color ? p1 : _flipBoard(p1);
+  };
+
+  const pair = [
+    ['the .mat', convertMat(fs.readFileSync(MATCH_MAT, 'utf8'))],
+    ['the .xg', await convertXg(new Uint8Array(fs.readFileSync(MATCH_XG)))],
+  ];
+  const restated = {};
+  for (const [name, doc] of pair) {
+    const found = [];
+    doc.games.forEach((game, gi) => game.plies.forEach((ply, pi) => {
+      if (ply.action_id === 31) found.push([gi, pi, ply]);
+    }));
+    assert(found.length === 1,
+      `${name} of the real match holds exactly one set-position ply`);
+    const [gi, pi, ply] = found[0];
+    restated[name] = ply;
+    assert(gi === 1 && pi === 37,
+      `${name} puts it at game 2's twentieth play, where the 6-5 was`);
+    assert(ply.d1 === 6 && ply.d2 === 5,
+      `${name} keeps the roll it stands in for`);
+    assert(canonicalNotation(moverBoard(ply.ogid_before, ply.color),
+      moverBoard(ply.ogid_after, ply.color), ply.d1, ply.d2) === '15/10 14/8 6/8',
+      `${name} states a board the backwards hop reads back out of`);
+    assert(!ply.analysis,
+      `${name} carries no analysis on it -- the known cost of the encoding`);
+    const next = doc.games[gi].plies[pi + 1];
+    assert(checkers(next.ogid_before) === checkers(ply.ogid_after),
+      `${name} has the next play carry on from the board it stated`);
+  }
+
+  assert(restated['the .mat'].ogid_before === restated['the .xg'].ogid_before
+    && restated['the .mat'].ogid_after === restated['the .xg'].ogid_after,
+    'and the two files, read by two different routes, agree on both boards');
+
+  // Through the binary, where the hop was being dropped. The synthetic case
+  // above covers the encoding; this covers it on a ply deep inside a game, with
+  // a live cube and a full analysis block around it.
+  const xgPly = restated['the .xg'];
+  const roundTripped = readGvab(write_gvab(pair[1][1])).games[1].plies[37];
+  assert(roundTripped.action_id === 31
+    && roundTripped.ogid_before === xgPly.ogid_before
+    && roundTripped.ogid_after === xgPly.ogid_after,
+    'and a saved match brings that ply back with its boards intact');
+}
 
 console.log();
 console.log(`${passed} passed, ${failed} failed`);
