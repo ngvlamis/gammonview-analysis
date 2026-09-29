@@ -789,7 +789,35 @@ function _deriveOgids(ogxm) {
           cube_action: turn.cubeAction,
         });
       } else if (aid === ACTION_SET_POSITION) {
+        // Dice on a set-position ply mean it stands in for a *play* -- an
+        // illegal one no checker ply could carry (see export.js's
+        // `fitMoveSteps`). That is a turn like any other, so it gets the OGIDs
+        // and the turn-state advance a checker ply gets; without them a reader
+        // has no position to draw the row from, and every later ply's move
+        // counter is one short. A set-position ply with no dice states where a
+        // game *starts* (the first ply of an exported saved position) and keeps
+        // its bare board override.
+        const hasDice = ply.d1 !== null && ply.d1 !== undefined && ply.d1 !== 0;
+        if (hasDice) {
+          ply.ogid_before = ogid(board, {
+            on_roll: onRoll,
+            game_state: turn.isFirstPly ? _OGID_STATE_INITIAL_BOTH : _OGID_STATE_ROLLED,
+            cube_action: turn.cubeAction,
+            dice: [ply.d1, ply.d2],
+          });
+          turn.moveId += 1;
+          turn.isFirstPly = false;
+          turn.curState = _OGID_STATE_CHECKER_DONE;
+          turn.cubeAction = _OGID_ACTION_NONE;
+        }
         board = _absoluteToP1(ply.set_position || new Array(26).fill(0));
+        if (hasDice) {
+          ply.ogid_after = ogid(board, {
+            on_roll: opp,
+            game_state: _OGID_STATE_CHECKER_DONE,
+            cube_action: _OGID_ACTION_NONE,
+          });
+        }
       } else if (_TERMINAL_ACTIONS.has(aid)) {
         ply.ogid_before = ogid(board, {
           on_roll: onRoll,

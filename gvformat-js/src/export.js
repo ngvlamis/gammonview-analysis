@@ -170,7 +170,11 @@ function _hitPoints(before, after) {
   return pts;
 }
 
-function _matchedSpans(before, after, d1, d2) {
+// The points a play vacated and the points it filled, in the mover's own
+// numbering (25 = the mover's bar, 0 = off). Every checker that moved appears
+// once in each list; which vacated point goes with which filled one is the
+// matching `_matchedSpans` then does against the dice.
+function _diffEndpoints(before, after) {
   const fromPts = [];
   const toPts = [];
 
@@ -202,6 +206,12 @@ function _matchedSpans(before, after, d1, d2) {
 
   fromPts.sort((a, b) => b - a);
   toPts.sort((a, b) => b - a);
+
+  return [fromPts, toPts];
+}
+
+function _matchedSpans(before, after, d1, d2) {
+  const [fromPts, toPts] = _diffEndpoints(before, after);
 
   const dice = d1 === d2 ? [d1, d1, d1, d1] : [d1, d2];
   const spans = [];
@@ -425,6 +435,52 @@ export function _p1ToAbsolute(boardP1) {
   return boardAbs;
 }
 
+// A hop that runs *backwards*, up the board instead of down it.
+//
+// Only an illegal play has one. One real match plays a 6-5 as
+// `14/8 15/10 6/8`: both dice forward, and then a checker 2 pips the wrong way,
+// which the site let through and both XG and HedgeHog record verbatim. No
+// checker ply can carry that hop -- `pips` is an unsigned 3-bit *forward*
+// distance -- so the play has to be restated as a set position however few
+// hops it has.
+//
+// It needs a check of its own because the span splitters answer a non-forward
+// span with no steps at all, so the hop left nothing behind for the step count
+// to catch: the three-hop play came out as two steps, the count looked right,
+// and the hop was simply gone -- leaving every board for the rest of the game
+// one checker out of place.
+function _hasNonForwardSpan(spans) {
+  return spans.some(([f, t]) => _spanDistance(f, t) <= 0);
+}
+
+/** True when this notation moves a checker backwards (or nowhere). */
+export function notationHasNonForwardHop(notation) {
+  return _hasNonForwardSpan(_parseNotation(notation));
+}
+
+/**
+ * True when no all-forward play explains this board diff.
+ *
+ * For callers working from a board diff rather than a notation, where which
+ * vacated point goes with which filled one is not stated. Pairing the two
+ * lists largest-with-largest maximises every gap at once, so if that pairing
+ * still sends a checker backwards, no pairing can avoid it -- which makes this
+ * a property of the diff and not of `_matchedSpans`' die-matching, whose
+ * leftover pass would otherwise be able to invent a backwards span for a legal
+ * play.
+ */
+export function boardDiffHasNonForwardHop(boardBeforeP1, boardAfterP1, moverIsWhite) {
+  const [fromPts, toPts] = _diffEndpoints(
+    moverIsWhite ? boardBeforeP1 : _flipBoard(boardBeforeP1),
+    moverIsWhite ? boardAfterP1 : _flipBoard(boardAfterP1),
+  );
+  const n = Math.min(fromPts.length, toPts.length);
+  for (let i = 0; i < n; i++) {
+    if (fromPts[i] <= toPts[i]) return true;
+  }
+  return false;
+}
+
 // Steps that fit a ply record, or `null` if no checker ply can hold them.
 //
 // One rule for all three converters. A `.gvab` checker ply carries exactly the
@@ -439,7 +495,8 @@ export function _p1ToAbsolute(boardP1) {
 //   1. the steps as built -- split across the dice, right for a legal play;
 //   2. one step per span (`_notationToStepsUnsplit`), which is what an illegal
 //      play usually needs and usually fits;
-//   3. `null` -- too tangled for even one step per checker, so the caller must
+//   3. `null` -- too tangled for even one step per checker, or moving a checker
+//      *backwards*, which no step can express at all, so the caller must
 //      restate the ply with `setPositionPly`.
 //
 // Rung 2 needs the notation. A converter working from a board *diff* has none,
@@ -448,6 +505,10 @@ export function _p1ToAbsolute(boardP1) {
 // silently changes the position.
 export function fitMoveSteps(steps, notation, moverIsWhite, d1, d2) {
   const room = _stepsPerRoll(d1, d2);
+  // A backwards hop goes straight to rung 3: it is unrepresentable rather than
+  // merely over-long, so the step count never reports it (see
+  // `notationHasNonForwardHop`).
+  if (notation && notationHasNonForwardHop(notation)) return null;
   if (steps.length <= room) return steps;
   if (notation) {
     const unsplit = _notationToStepsUnsplit(notation, moverIsWhite, d1, d2);
@@ -750,10 +811,16 @@ function _convertCheckerPly(entry, playerWhite, scoreWhite, scoreBlack,
   // This path derives steps from a board diff, so it has no notation of its
   // own -- the .mat converter threads the source's through on the entry (see
   // mat2gva.js) precisely so the middle rung is reachable here.
-  const steps = fitMoveSteps(
-    _computeMoveSteps(boardBefore, boardAfter, isWhite, d1, d2),
-    entry.notation || entry.player_move, isWhite, d1, d2,
-  );
+  //
+  // The diff is also asked directly whether any checker moved backwards, and
+  // not only through the notation: an entry that arrives without one still has
+  // to reach the set-position rung rather than lose the hop silently.
+  const steps = boardDiffHasNonForwardHop(boardBefore, boardAfter, isWhite)
+    ? null
+    : fitMoveSteps(
+      _computeMoveSteps(boardBefore, boardAfter, isWhite, d1, d2),
+      entry.notation || entry.player_move, isWhite, d1, d2,
+    );
   if (steps === null) {
     return setPositionPly(isWhite, d1, d2, boardAfter, ogidBefore, ogidAfter);
   }

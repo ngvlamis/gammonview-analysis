@@ -31,6 +31,7 @@ sys.path.insert(0, str(_REPO_ROOT))
 from gvformat import convert_xg, parse_ogid  # noqa: E402
 from gvformat.export import _flip_board, _notation_to_steps  # noqa: E402
 from gvformat.reader import _apply_moves_p1  # noqa: E402
+from gvformat.xg import _xg_candidate_board  # noqa: E402
 
 _SAMPLES = _REPO_ROOT / "samples" / "xg"
 
@@ -102,6 +103,12 @@ def main() -> int:
                 before, after = ply.get("ogid_before"), ply.get("ogid_after")
                 if not before or not after or ply.get("d1") is None:
                     continue
+                # A set-position ply carries the dice of the play it stands in
+                # for, but states its board outright instead of moving to it --
+                # there are no steps to replay (see
+                # tests/test_illegal_play_steps.py).
+                if ply["action_id"] == 31:
+                    continue
                 total += 1
                 replayed = _apply_moves_p1(
                     _to_p1(before), ply.get("moves") or [], bool(ply.get("color")),
@@ -115,6 +122,33 @@ def main() -> int:
     check(total > 0, f"corpus plies with dice replayed ({total})")
     check(mismatched == 0,
           f"every ply's moves replay onto its own ogid_after ({mismatched} do not)")
+
+    # --- a played candidate's own stored position ---------------------------
+    #
+    # The hop list is not the only record XG keeps of a played move: the
+    # candidate carries the position it produced. For an *illegal* play the two
+    # disagree, and the position is the half to trust -- one real match plays a
+    # 6-5 as ``14/8 15/10 6/8``, and XG stores only the two forward hops while
+    # its position has all three moves in it (see
+    # tests/test_illegal_play_steps.py).
+    #
+    # The position is in the *mover's* frame, and holds the two bars the
+    # opposite way round from the raw P1 frame the tracker uses: XG's index 25 is
+    # the mover's own bar and its index 0 the opponent's. Getting that backwards
+    # would mirror the board rather than fail, so it is pinned here.
+    xg_pos = [0] * 26
+    xg_pos[1] = 3      # three of the mover's checkers on its 1-point
+    xg_pos[24] = -2    # two of the opponent's on the mover's 24
+    xg_pos[25] = 1     # one of the mover's on the bar
+    xg_pos[0] = -2     # two of the opponent's on theirs
+
+    as_p1 = _xg_candidate_board(xg_pos, True)
+    check(as_p1[1] == 3 and as_p1[24] == -2 and as_p1[0] == 1 and as_p1[25] == -2,
+          "a P1 mover's position keeps its numbering and swaps only the bars")
+    as_p2 = _xg_candidate_board(xg_pos, False)
+    check(as_p2[24] == -3 and as_p2[1] == 2 and as_p2[25] == -1 and as_p2[0] == 2,
+          "a P2 mover's position is mirrored into the P1 frame, bars included")
+
 
     print(f"\n{_checks - len(_failures)}/{_checks} checks passed")
     return 1 if _failures else 0

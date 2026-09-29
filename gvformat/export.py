@@ -287,9 +287,14 @@ def _hit_points(before: list[int], after: list[int]) -> set[int]:
     return pts
 
 
-def _matched_spans(before: list[int], after: list[int], d1: int, d2: int) -> list[tuple[int, int]]:
-    """Diff two mover-perspective boards into (from, to) spans, mover numbering
-    (1-24 board points, 25 = mover's bar, 0 = borne off)."""
+def _diff_endpoints(before: list[int], after: list[int]) -> tuple[list[int], list[int]]:
+    """The points a play vacated and the points it filled, mover numbering
+    (1-24 board points, 25 = mover's bar, 0 = borne off).
+
+    Every checker that moved appears once in each list; which vacated point goes
+    with which filled one is the matching ``_matched_spans`` then does against
+    the dice.
+    """
     from_pts: list[int] = []
     to_pts: list[int] = []
 
@@ -317,6 +322,14 @@ def _matched_spans(before: list[int], after: list[int], d1: int, d2: int) -> lis
 
     from_pts.sort(reverse=True)
     to_pts.sort(reverse=True)
+
+    return from_pts, to_pts
+
+
+def _matched_spans(before: list[int], after: list[int], d1: int, d2: int) -> list[tuple[int, int]]:
+    """Diff two mover-perspective boards into (from, to) spans, mover numbering
+    (1-24 board points, 25 = mover's bar, 0 = borne off)."""
+    from_pts, to_pts = _diff_endpoints(before, after)
 
     dice = [d1, d1, d1, d1] if d1 == d2 else [d1, d2]
     spans: list[tuple[int, int]] = []
@@ -580,6 +593,49 @@ def _p1_to_absolute(board_p1: list[int]) -> list[int]:
     return board_abs
 
 
+# A hop that runs *backwards*, up the board instead of down it.
+#
+# Only an illegal play has one. One real match plays a 6-5 as
+# ``14/8 15/10 6/8``: both dice forward, and then a checker 2 pips the wrong
+# way, which the site let through and both XG and HedgeHog record verbatim. No
+# checker ply can carry that hop -- ``pips`` is an unsigned 3-bit *forward*
+# distance -- so the play has to be restated as a set position however few hops
+# it has.
+#
+# It needs a check of its own because the span splitters answer a non-forward
+# span with no hops at all, so the hop left nothing behind for the step count to
+# catch: the three-hop play came out as two steps, the count looked right, and
+# the hop was simply gone -- leaving every board for the rest of the game one
+# checker out of place.
+def _has_non_forward_span(spans: list[tuple[int, int]]) -> bool:
+    return any(_span_distance(f, t) <= 0 for f, t in spans)
+
+
+def notation_has_non_forward_hop(notation: str) -> bool:
+    """True when this notation moves a checker backwards (or nowhere)."""
+    return _has_non_forward_span(_parse_notation(notation))
+
+
+def board_diff_has_non_forward_hop(
+    board_before_p1: list[int], board_after_p1: list[int], mover_is_white: bool,
+) -> bool:
+    """True when no all-forward play explains this board diff.
+
+    For callers working from a board diff rather than a notation, where which
+    vacated point goes with which filled one is not stated. Pairing the two
+    lists largest-with-largest maximises every gap at once, so if that pairing
+    still sends a checker backwards, no pairing can avoid it -- which makes this
+    a property of the diff and not of ``_matched_spans``' die-matching, whose
+    leftover pass would otherwise be able to invent a backwards span for a legal
+    play.
+    """
+    from_pts, to_pts = _diff_endpoints(
+        board_before_p1 if mover_is_white else _flip_board(board_before_p1),
+        board_after_p1 if mover_is_white else _flip_board(board_after_p1),
+    )
+    return any(f <= t for f, t in zip(from_pts, to_pts))
+
+
 def fit_move_steps(
     steps: list[dict], notation: str | None,
     mover_is_white: bool, d1: int, d2: int,
@@ -599,7 +655,8 @@ def fit_move_steps(
     1. the steps as built -- split across the dice, right for a legal play;
     2. one step per span (``_notation_to_steps_unsplit``), which is what an
        illegal play usually needs and usually fits;
-    3. ``None`` -- too tangled for even one step per checker, so the caller
+    3. ``None`` -- too tangled for even one step per checker, or moving a
+       checker *backwards*, which no step can express at all, so the caller
        must restate the ply with ``set_position_ply``.
 
     Rung 2 needs the notation. A converter working from a board *diff* has
@@ -608,6 +665,11 @@ def fit_move_steps(
     checker and silently changes the position.
     """
     room = _steps_per_roll(d1, d2)
+    # A backwards hop goes straight to rung 3: it is unrepresentable rather than
+    # merely over-long, so the step count never reports it (see
+    # ``notation_has_non_forward_hop``).
+    if notation and notation_has_non_forward_hop(notation):
+        return None
     if len(steps) <= room:
         return steps
     if notation:
@@ -1017,10 +1079,15 @@ def _convert_checker_ply(entry: dict, player_white: str, score_white: int, score
     # This path derives steps from a board diff, so it has no notation of its
     # own -- the .mat converter threads the source's through on the entry (see
     # mat._decisions_to_moves) precisely so the middle rung is reachable here.
-    steps = fit_move_steps(
-        _compute_move_steps(board_before, board_after, is_white, d1, d2),
-        entry.get("notation") or entry.get("player_move"), is_white, d1, d2,
-    )
+    #
+    # The diff is also asked directly whether any checker moved backwards, and
+    # not only through the notation: an entry that arrives without one still has
+    # to reach the set-position rung rather than lose the hop silently.
+    steps = None if board_diff_has_non_forward_hop(board_before, board_after, is_white) else \
+        fit_move_steps(
+            _compute_move_steps(board_before, board_after, is_white, d1, d2),
+            entry.get("notation") or entry.get("player_move"), is_white, d1, d2,
+        )
     if steps is None:
         return set_position_ply(is_white, d1, d2, board_after, ogid_before, ogid_after)
 

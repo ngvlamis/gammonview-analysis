@@ -23,7 +23,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { _notationToSteps, _flipBoard } from '../src/export.js';
-import { convertXg } from '../src/xg2gva.js';
+import { convertXg, _xgCandidateBoard } from '../src/xg2gva.js';
 import { parseOgid } from '../src/ogid.js';
 import { _applyMovesP1 } from '../src/reader.js';
 
@@ -97,6 +97,10 @@ if (xgFiles.length === 0) {
     for (const game of gva.games) {
       for (const ply of game.plies) {
         if (!ply.ogid_before || !ply.ogid_after || ply.d1 == null) continue;
+        // A set-position ply carries the dice of the play it stands in for, but
+        // states its board outright instead of moving to it -- there are no
+        // steps to replay (see test-illegal-play-steps.js).
+        if (ply.action_id === 31) continue;
         total++;
         const replayed = _applyMovesP1(toP1(ply.ogid_before), ply.moves || [], Boolean(ply.color));
         if (JSON.stringify(replayed) !== JSON.stringify(toP1(ply.ogid_after))) {
@@ -111,6 +115,35 @@ if (xgFiles.length === 0) {
   assert(total > 0, `corpus plies with dice replayed (${total})`);
   assert(mismatched === 0,
          `every ply's moves replay onto its own ogid_after (${mismatched} do not)`);
+}
+
+
+// --- a played candidate's own stored position -------------------------------
+//
+// The hop list is not the only record XG keeps of a played move: the candidate
+// carries the position it produced. For an *illegal* play the two disagree, and
+// the position is the half to trust -- one real match plays a 6-5 as
+// `14/8 15/10 6/8`, and XG stores only the two forward hops while its position
+// has all three moves in it (see test-illegal-play-steps.js).
+//
+// The position is in the *mover's* frame, and holds the two bars the opposite
+// way round from the raw P1 frame the tracker uses: XG's index 25 is the
+// mover's own bar and its index 0 the opponent's. Getting that backwards would
+// mirror the board rather than fail, so it is pinned here.
+{
+  const xgPos = new Array(26).fill(0);
+  xgPos[1] = 3;     // three of the mover's checkers on its 1-point
+  xgPos[24] = -2;   // two of the opponent's on the mover's 24
+  xgPos[25] = 1;    // one of the mover's on the bar
+  xgPos[0] = -2;    // two of the opponent's on theirs
+
+  const asP1 = _xgCandidateBoard(xgPos, true);
+  assert(asP1[1] === 3 && asP1[24] === -2 && asP1[0] === 1 && asP1[25] === -2,
+    "a P1 mover's position keeps its numbering and swaps only the bar slots");
+
+  const asP2 = _xgCandidateBoard(xgPos, false);
+  assert(asP2[24] === -3 && asP2[1] === 2 && asP2[25] === -1 && asP2[0] === 2,
+    "a P2 mover's position is mirrored into the P1 frame, bars included");
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

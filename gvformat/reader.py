@@ -712,9 +712,31 @@ def _derive_ogids(ogxm: dict) -> None:
                                          cube_action=turn.cube_action)
 
             elif aid == ACTION_SET_POSITION:  # 31
+                # Dice on a set-position ply mean it stands in for a *play* -- an
+                # illegal one no checker ply could carry (see export.fit_move_steps).
+                # That is a turn like any other, so it gets the OGIDs and the
+                # turn-state advance a checker ply gets; without them a reader has
+                # no position to draw the row from, and every later ply's move
+                # counter is one short. A set-position ply with no dice states
+                # where a game *starts* (the first ply of an exported saved
+                # position) and keeps its bare board override.
+                has_dice = bool(ply.get("d1"))
+                if has_dice:
+                    before_state = (_OGID_STATE_INITIAL_BOTH if turn.is_first_ply
+                                    else _OGID_STATE_ROLLED)
+                    ply["ogid_before"] = ogid(
+                        board, on_roll=on_roll, game_state=before_state,
+                        cube_action=turn.cube_action,
+                        dice=(ply.get("d1"), ply.get("d2")))
+                    turn.move_id += 1
+                    turn.is_first_ply = False
+                    turn.cur_state = _OGID_STATE_CHECKER_DONE
+                    turn.cube_action = _OGID_ACTION_NONE
                 board = _absolute_to_p1(ply.get("set_position") or [0] * 26)
-                # No exporter emits set_position, so there is no reference OGID
-                # to match; skip rather than invent one.
+                if has_dice:
+                    ply["ogid_after"] = ogid(
+                        board, on_roll=opp, game_state=_OGID_STATE_CHECKER_DONE,
+                        cube_action=_OGID_ACTION_NONE)
 
             elif aid in _TERMINAL_ACTIONS:  # game/match end, resign, forfeit
                 ply["ogid_before"] = ogid(board, on_roll=on_roll, game_state=turn.cur_state,

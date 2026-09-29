@@ -335,6 +335,11 @@ play is written as a set-position ply (action_id 31) stating the resulting
 board. Either way the ply replays to the position the source recorded — a
 truncated play would leave every later board in the game wrong.
 
+A hop that runs *backwards* goes straight to the set-position ply: `pips` is an
+unsigned forward distance, so no step can hold one however much room the record
+has. (A 6-5 played `14/8 15/10 6/8` is a real example — both dice forward, then
+a checker 2 pips the wrong way.)
+
 ### Action ID Table
 
 | ID | Meaning | ID | Meaning |

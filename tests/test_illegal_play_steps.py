@@ -27,8 +27,10 @@ sys.path.insert(0, str(_REPO_ROOT))
 from gvformat import read_gvab, write_gvab  # noqa: E402
 from gvformat.export import (  # noqa: E402
     _notation_to_steps, _notation_to_steps_unsplit, _p1_to_absolute,
-    _steps_per_roll,
+    _steps_per_roll, board_diff_has_non_forward_hop, fit_move_steps,
+    notation_has_non_forward_hop,
 )
+from gvformat.mat import mat_to_ogxm  # noqa: E402
 from gvformat.legality import board_problems  # noqa: E402
 from gvformat.reader import _absolute_to_p1, _apply_moves_p1  # noqa: E402
 
@@ -141,6 +143,104 @@ def main() -> int:
     checker = next(d for d in decs if d["kind"] == "checker")
     check(checker["board"] == flip_board(stated),
           "the decision after a set-position ply sits on the board it stated")
+
+    # --- a hop that runs backwards -----------------------------------------
+    #
+    # The other illegal shape, and the one no step can hold: one real match
+    # plays a 6-5 as ``14/8 15/10 6/8`` -- both dice forward, then a checker 2
+    # pips the wrong way, which the site let through. XG and HedgeHog both
+    # record it. ``pips`` is an unsigned 3-bit *forward* distance, so the hop has
+    # to reach the set-position rung, and it cannot get there on the step count:
+    # the splitters answer a non-forward span with no steps at all.
+    backwards = "14/8 15/10 6/8"
+
+    check(len(_notation_to_steps(backwards, True, 6, 5)) == 2,
+          "the dice split drops the backwards hop, leaving two steps for three")
+    check(len(_notation_to_steps_unsplit(backwards, True, 6, 5)) == 2,
+          "and so does one-step-per-span -- neither count can report the loss")
+
+    check(notation_has_non_forward_hop(backwards),
+          "the backwards hop is recognised from the notation instead")
+    check(not notation_has_non_forward_hop(_ILLEGAL_NOTATION),
+          "an over-long but all-forward illegal play is not confused with one")
+    check(not notation_has_non_forward_hop("13/7 8/7"), "nor is a legal play")
+    check(not notation_has_non_forward_hop("bar/22* 13/8"),
+          "nor an entry from the bar")
+    check(not notation_has_non_forward_hop("2/off 1/off"), "nor a bear-off")
+
+    check(fit_move_steps(_notation_to_steps(backwards, True, 6, 5),
+                         backwards, True, 6, 5) is None,
+          "so no checker ply is offered for it -- straight to set position")
+    check(fit_move_steps(_notation_to_steps(_ILLEGAL_NOTATION, True, 3, 1),
+                         _ILLEGAL_NOTATION, True, 3, 1) is not None,
+          "while the all-forward illegal play still collapses into a ply")
+
+    # The same judgement from a board diff alone, for a converter with no
+    # notation in hand. This is the real ply: white on 3(2) 5(2) 6(3) 7(4) 8(2)
+    # 14 15.
+    back_before = _board_p1(p3=2, p5=2, p6=3, p7=4, p8=2, p14=1, p15=1,
+                            p2=-2, p16=-1, p20=-1, p21=-3, p22=-4, p23=-2, p24=-2)
+    back_after = _board_p1(p3=2, p5=2, p6=2, p7=4, p8=4, p10=1,
+                           p2=-2, p16=-1, p20=-1, p21=-3, p22=-4, p23=-2, p24=-2)
+    check(board_diff_has_non_forward_hop(back_before, back_after, True),
+          "the board diff says the same: no all-forward play reaches that board")
+    legal_after = _board_p1(p3=2, p5=2, p6=3, p7=4, p8=3, p10=1,
+                            p2=-2, p16=-1, p20=-1, p21=-3, p22=-4, p23=-2, p24=-2)
+    check(not board_diff_has_non_forward_hop(back_before, legal_after, True),
+          "and clears the legal 14/8 15/10 from the same board")
+
+    # --- end to end, through the .mat converter ----------------------------
+    #
+    # A `.mat` states the play in notation and replays it verbatim, so its board
+    # is right and only the ply record was losing the hop. Every board for the
+    # rest of the game used to sit one checker out of place, with nothing
+    # downstream able to tell.
+    def _synthetic(white2: str) -> str:
+        return f"""; [Site "test"]
+
+ 1 point match
+
+ Game 1
+ A : 0                                 B : 0
+  1) 31: 8/5 6/5                          42: 24/22 13/9
+  2) {white2}                    31: 9/6 22/21
+  3) 11: 8/7 8/7 7/6 7/6
+   Wins 1 point
+"""
+
+    illegal_doc = mat_to_ogxm(_synthetic("65: 13/7 13/8 6/8"))
+    illegal_ply = illegal_doc["games"][0]["plies"][2]
+    check(illegal_ply["action_id"] == 31,
+          "the .mat converter states the backwards play as a set position")
+    check(illegal_ply["d1"] == 6 and illegal_ply["d2"] == 5,
+          "keeping the roll it stands in for")
+    stated_board = _absolute_to_p1(illegal_ply["set_position"])
+    check(stated_board[8] == 4 and stated_board[6] == 3,
+          "and the board it states has the backwards checker on 8, not on 6")
+
+    legal_ply = mat_to_ogxm(_synthetic("65: 13/7 13/8"))["games"][0]["plies"][2]
+    check(legal_ply["action_id"] == 19 and len(legal_ply["moves"]) == 2
+          and "set_position" not in legal_ply,
+          "the same play without the hop stays an ordinary 6-5 checker ply")
+
+    # The dice are what tell a restated *play* from the set-position ply that
+    # opens an exported saved position, so the reader gives one OGIDs and the
+    # other none.
+    illegal_back = read_gvab(write_gvab(illegal_doc))["games"][0]
+    check(illegal_back["plies"][2].get("ogid_before"),
+          "a set-position ply with dice reads back with the OGIDs of its turn")
+
+    def _checkers(ogid: str) -> str:
+        return ":".join(ogid.split(":")[:2])
+
+    check(_checkers(illegal_back["plies"][3]["ogid_before"])
+          == _checkers(illegal_back["plies"][2]["ogid_after"]),
+          "and the ply after it carries on from the board it stated")
+    check(not read_gvab(write_gvab(_doc({
+              "color": 1, "action_id": 31,
+              "set_position": _p1_to_absolute(stated),
+          })))["games"][0]["plies"][0].get("ogid_before"),
+          "a set-position ply with no dice opens a game and gets none")
 
     # --- the corruption this all prevents is recognisable ------------------
     check(board_problems(stated) == [],

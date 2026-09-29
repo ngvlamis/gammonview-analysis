@@ -15,7 +15,9 @@
 
 import {
   _notationToSteps, _notationToStepsUnsplit, _p1ToAbsolute, _stepsPerRoll,
+  boardDiffHasNonForwardHop, fitMoveSteps, notationHasNonForwardHop,
 } from '../src/export.js';
+import { convertMat } from '../src/mat2gva.js';
 import { boardProblems } from '../src/legality.js';
 import { write_gvab } from '../src/binary.js';
 import { readGvab, _absoluteToP1, _applyMovesP1 } from '../src/reader.js';
@@ -116,6 +118,102 @@ assert(boardProblems(boardP1({ 6: 8, 8: 8, 20: -2 })).length > 0,
 assert(eq(boardProblems(boardP1({
   6: 5, 8: 3, 13: 5, 24: 1, 25: 1, 1: -2, 12: -5, 17: -3, 19: -5,
 })), []), 'checkers on both bars are counted to the right side, not the mover');
+
+
+// --- a hop that runs backwards ----------------------------------------------
+//
+// The other illegal shape, and the one no step can hold: one real match plays a
+// 6-5 as `14/8 15/10 6/8` -- both dice forward, then a checker 2 pips the wrong
+// way, which the site let through. XG and HedgeHog both record it. `pips` is an
+// unsigned 3-bit *forward* distance, so the hop has to reach the set-position
+// rung, and it cannot get there on the step count: the splitters answer a
+// non-forward span with no steps at all.
+
+const BACKWARDS = '14/8 15/10 6/8';
+
+assert(_notationToSteps(BACKWARDS, true, 6, 5).length === 2,
+  'the dice split drops the backwards hop, leaving two steps for a three-hop play');
+assert(_notationToStepsUnsplit(BACKWARDS, true, 6, 5).length === 2,
+  'and so does one-step-per-span -- neither count can report the loss');
+
+assert(notationHasNonForwardHop(BACKWARDS),
+  'the backwards hop is recognised from the notation instead');
+assert(!notationHasNonForwardHop(ILLEGAL),
+  'an over-long but all-forward illegal play is not confused with one');
+assert(!notationHasNonForwardHop('13/7 8/7'), 'nor is a legal play');
+assert(!notationHasNonForwardHop('bar/22* 13/8'), 'nor an entry from the bar');
+assert(!notationHasNonForwardHop('2/off 1/off'), 'nor a bear-off');
+
+assert(fitMoveSteps(_notationToSteps(BACKWARDS, true, 6, 5), BACKWARDS, true, 6, 5) === null,
+  'so no checker ply is offered for it -- straight to the set-position rung');
+assert(fitMoveSteps(_notationToSteps(ILLEGAL, true, 3, 1), ILLEGAL, true, 3, 1) !== null,
+  'while the all-forward illegal play still collapses into a ply that fits');
+
+// The same judgement from a board diff alone, for a converter with no notation
+// in hand. This is the real ply: white on 3(2) 5(2) 6(3) 7(4) 8(2) 14 15.
+const backBefore = boardP1({
+  3: 2, 5: 2, 6: 3, 7: 4, 8: 2, 14: 1, 15: 1,
+  2: -2, 16: -1, 20: -1, 21: -3, 22: -4, 23: -2, 24: -2,
+});
+const backAfter = boardP1({
+  3: 2, 5: 2, 6: 2, 7: 4, 8: 4, 10: 1,
+  2: -2, 16: -1, 20: -1, 21: -3, 22: -4, 23: -2, 24: -2,
+});
+assert(boardDiffHasNonForwardHop(backBefore, backAfter, true),
+  'the board diff says the same: no all-forward play reaches that position');
+const legalAfter = boardP1({
+  3: 2, 5: 2, 6: 3, 7: 4, 8: 3, 10: 1,
+  2: -2, 16: -1, 20: -1, 21: -3, 22: -4, 23: -2, 24: -2,
+});
+assert(!boardDiffHasNonForwardHop(backBefore, legalAfter, true),
+  'and clears the legal 14/8 15/10 from the same board');
+
+// --- end to end, through the .mat converter ---------------------------------
+//
+// A `.mat` states the play in notation and replays it verbatim, so its board is
+// right and only the ply record was losing the hop. Every board for the rest of
+// the game used to sit one checker out of place, with nothing downstream able
+// to tell.
+
+const synthetic = (white2) => `; [Site "test"]
+
+ 1 point match
+
+ Game 1
+ A : 0                                 B : 0
+  1) 31: 8/5 6/5                          42: 24/22 13/9
+  2) ${white2}                    31: 9/6 22/21
+  3) 11: 8/7 8/7 7/6 7/6
+   Wins 1 point
+`;
+
+const illegalDoc = convertMat(synthetic('65: 13/7 13/8 6/8'));
+const illegalPly = illegalDoc.games[0].plies[2];
+assert(illegalPly.action_id === 31,
+  'the .mat converter states the backwards play as a set position');
+assert(illegalPly.d1 === 6 && illegalPly.d2 === 5,
+  'keeping the roll it stands in for');
+const statedBoard = _absoluteToP1(illegalPly.set_position);
+assert(statedBoard[8] === 4 && statedBoard[6] === 3,
+  'and the board it states has the backwards checker on 8, not left on 6');
+
+const legalDoc = convertMat(synthetic('65: 13/7 13/8'));
+const legalPly = legalDoc.games[0].plies[2];
+assert(legalPly.action_id === 19 && legalPly.moves.length === 2 && !legalPly.set_position,
+  'the same play without the backwards hop stays an ordinary 6-5 checker ply');
+
+// The dice are what tell a restated *play* from the set-position ply that opens
+// an exported saved position, so the reader gives one OGIDs and the other none.
+const illegalBack = readGvab(write_gvab(illegalDoc)).games[0];
+assert(illegalBack.plies[2].action_id === 31 && illegalBack.plies[2].ogid_before,
+  'a set-position ply with dice reads back with the OGIDs of the turn it is');
+const checkers = (id) => id.split(':').slice(0, 2).join(':');
+assert(checkers(illegalBack.plies[3].ogid_before) === checkers(illegalBack.plies[2].ogid_after),
+  'and the ply after it carries on from exactly the board it stated');
+assert(!readGvab(write_gvab(doc({
+  color: 1, action_id: 31, set_position: _p1ToAbsolute(stated),
+}))).games[0].plies[0].ogid_before,
+  'a set-position ply with no dice states where a game starts and gets none');
 
 console.log();
 console.log(`${passed} passed, ${failed} failed`);

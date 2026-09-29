@@ -471,6 +471,32 @@ function fmtXgMove(fromPts, toPts, board = null, moverIsP1 = true) {
   return [parts.join(" "), work];
 }
 
+/**
+ * A candidate's own stored resulting position, mapped into the raw P1 frame the
+ * board tracker uses.
+ *
+ * XG stores a candidate position in the *mover's* frame -- the mover positive,
+ * counting down from 24 -- and holds the two bars the opposite way round from
+ * our raw frame: its index 25 is the mover's own bar (positive) and its index 0
+ * the opponent's (negative). Checked against every ply of a real match: mapped
+ * this way, a played candidate's stored position equals the board rebuilt from
+ * that candidate's own hops -- except where the hop list is short, which is
+ * what the caller checks for.
+ */
+export function _xgCandidateBoard(pos, moverIsP1) {
+  const out = new Array(26).fill(0);
+  if (moverIsP1) {
+    for (let i = 1; i <= 24; i++) out[i] = pos[i];
+    out[0] = pos[25];   // the mover is P1: its own bar, a positive count
+    out[25] = pos[0];   // P2's bar, stored negative either way
+  } else {
+    for (let i = 1; i <= 24; i++) out[25 - i] = -pos[i];
+    out[0] = -pos[0];   // P1's bar: the opponent's slot, negated back positive
+    out[25] = -pos[25]; // P2's own bar, negated into the negative slot
+  }
+  return out;
+}
+
 // ---------------------------------------------------------------------------
 // Round helper
 // ---------------------------------------------------------------------------
@@ -856,6 +882,7 @@ export async function convertXg(fileBytes) {
           // needs the flip-corrected `isWhite`.
           const playedCand = m.candidates.find(c => c.isPlayed);
           let moveSteps, boardAfter;
+          let forceSetPosition = false;
           if (playedCand) {
             // `fmtXgMove` renders a no-move (dance) candidate as an empty
             // string, so a dance yields no steps here.
@@ -888,16 +915,38 @@ export async function convertXg(fileBytes) {
             if (fitted !== null) {
               moveSteps = fitted;
             } else {
-              // Still overflowing at one step per span. Keep the collapsed
-              // form so the check below sees it is too long and demotes the
-              // ply to a set position.
+              // Still overflowing at one step per span, or moving a checker
+              // backwards. Either way no checker ply can carry the play, so
+              // say so and let the ply be demoted to a set position below.
               moveSteps = _notationToStepsUnsplit(playedNotation, isWhite, d1, d2);
+              forceSetPosition = true;
             }
             // XG's own posAfter "can roll forward across a turn" (see
             // comment above) -- rederive boardAfter from the authoritative
             // played move instead, and carry it forward as the tracker for
             // the next ply.
             rawBoard = playedWork;
+            // ...unless the hop list does not account for the position the
+            // candidate itself records. That happens for an illegal play, and
+            // the DataMoves list is the half that is wrong: one real match
+            // plays a 6-5 as `14/8 15/10 6/8` -- a checker 2 pips *backwards*,
+            // which the site let through -- and XG stores only the two forward
+            // hops while its position has all three moves in it. Replaying the
+            // hops then left every board for the rest of that game one checker
+            // out of place, and nothing downstream could tell.
+            //
+            // A backwards hop is unrepresentable anyway (see
+            // `notationHasNonForwardHop`), so the play is stated as the
+            // position it produced. Guarded on `invalidM === 2` because a
+            // disagreement on a *legal* play says nothing about which half to
+            // trust, and today's reading of those is not in question.
+            if (m.invalidM === 2) {
+              const recorded = _xgCandidateBoard(playedCand.pos, isP1);
+              if (!recorded.every((v, j) => v === rawBoard[j])) {
+                rawBoard = recorded;
+                forceSetPosition = true;
+              }
+            }
             boardAfter = xgToAbsolute(rawBoard);
             if (flip) boardAfter = _flipBoard(boardAfter);
           } else {
@@ -1055,14 +1104,15 @@ export async function convertXg(fileBytes) {
 
           let ply;
           if (actionId >= 0 && actionId <= 20
-              && moveSteps.length > _stepsPerRoll(d1, d2)) {
-            // An illegal play too tangled for even one step per checker (three
-            // checkers moved on a two-hop roll, say). No checker ply can carry
-            // it, and truncating it would corrupt every board after this one,
-            // so state the resulting position outright -- what action 31 is for
-            // (the spec notes its optional dice are exactly this case). The
-            // play itself is lost; it broke the rules, so there is no move to
-            // score.
+              && (forceSetPosition || moveSteps.length > _stepsPerRoll(d1, d2))) {
+            // An illegal play no checker ply can carry: too tangled for even
+            // one step per checker (three checkers moved on a two-hop roll,
+            // say), or sending one backwards, which no step can express at all.
+            // Truncating it would corrupt every board after this one, so state
+            // the resulting position outright -- what action 31 is for (the spec
+            // notes its optional dice are exactly this case). The play is not
+            // scored; it broke the rules. It is still *shown*, read back out of
+            // the board diff, which is the only way a backwards hop displays.
             ply = setPositionPly(isWhite, d1, d2, boardAfter, ogidBefore, ogidAfter);
           } else {
             ply = {

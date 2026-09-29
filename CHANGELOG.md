@@ -13,6 +13,39 @@ when the repository was opened; they are kept because they record why things
 are the way they are — particularly the breaking changes and the measurements
 behind several design decisions. Dates are the tag dates.
 
+## Unreleased
+
+**A checker moved *backwards* is no longer lost on import** *(fix)*
+
+A play that sends a checker the wrong way up the board — a 6-5 played
+`14/8 15/10 6/8`, which a site let through and both XG and HedgeHog record
+verbatim — used to vanish from the ply that carried it, leaving every board for
+the rest of that game one checker out of place. Two separate causes:
+
+- `export.py` / `export.js`: the span splitters answer a non-forward span with no
+  hops at all, so the hop left nothing behind for `fit_move_steps`' step count to
+  catch. The three-hop play came out as two steps, the count looked right, and the
+  hop was simply gone. A backwards hop is now recognised in its own right
+  (`notation_has_non_forward_hop`, `board_diff_has_non_forward_hop`) and sends the
+  ply straight to the set-position rung: `pips` is an unsigned 3-bit *forward*
+  distance, so no step can hold one however much room the record has.
+- `xg.py` / `xg2gva.js`: XG's DataMoves list for such a play holds only the
+  forward hops, while the played candidate's own stored *position* has all of them.
+  Where the two disagree on a play XG flagged illegal (`invalid_m == 2`), the
+  position is now believed and the hop list is not.
+
+The ply is written as a set-position ply carrying the roll's dice, which is what
+the spec already reserved for a play no checker ply can carry. Reading such a
+ply, the reader now derives its OGIDs and advances the turn state, as a checker
+ply's would be — a set-position ply with *no* dice still states only where a game
+starts (the first ply of an exported saved position) and gets none.
+
+Two consequences worth knowing. The ply keeps no analysis: the format hangs a
+checker eval on a dice ply, and an illegal play was excluded from PR and decision
+counting anyway, so no rating moves. And a match holding one of these hashes
+differently than it did in 1.1.0, because the document genuinely changed; only
+matches with this shape are affected.
+
 ## 1.1.0 — 2026-09-20
 
 **Analysis results change in this release.** The first four entries below all
