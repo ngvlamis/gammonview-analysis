@@ -33,6 +33,14 @@ export const HEADER_FLAG_HAS_ANALYSIS = 0x0001;
 export const GVAN_VERSION = 3;
 
 export const MAX_ALTS_PER_DECISION = 50;
+
+// The largest hop a ply record can hold. A move step is one byte -- the start
+// point in five bits and `pips` in three (binary.js `_pack_move_step`) -- so
+// seven is the ceiling and an eighth pip wraps round to nothing. A legal hop is
+// at most 6, so only an illegal play can reach this (see export.js
+// `fitMoveSteps`).
+export const MAX_STEP_PIPS = 7;
+
 export const MAX_PLAYER_NAME = 255;
 export const DEFAULT_BOARD_SENTINEL = 0xFF;
 export const WINNER_INCOMPLETE = 0xFF;

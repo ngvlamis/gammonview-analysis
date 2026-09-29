@@ -129,6 +129,13 @@ GVAN_CHECKER_REC_V2 = 7
 GVAN_CUBE_REC_V2 = 6
 
 MAX_ALTS_PER_DECISION = 50
+
+# The largest hop a ply record can hold. A move step is one byte -- the start
+# point in five bits and ``pips`` in three (``_pack_move_step``) -- so seven is
+# the ceiling and an eighth pip wraps round to nothing. A legal hop is at most
+# 6, so only an illegal play can reach this (see export.fit_move_steps).
+MAX_STEP_PIPS = 7
+
 MAX_PLAYER_NAME = 255
 DEFAULT_BOARD_SENTINEL = 0xFF
 WINNER_WHITE = 0
@@ -221,6 +228,12 @@ def _enc_equity_loss(loss: float) -> int:
 
 
 def _pack_move_step(start: int, pips: int) -> int:
+    """One move step, one byte: the start point in five bits, ``pips`` in three.
+
+    The masks are the record's shape, not a range check -- a caller handing over
+    more than ``MAX_STEP_PIPS`` would have the eighth pip wrap round to nothing,
+    so each writer below checks its own steps first.
+    """
     return (start & 0x1F) | ((pips & 0x07) << 5)
 
 
@@ -359,7 +372,21 @@ def _encode_ply(ply: dict, action_id: int) -> bytes:
     for i in range(n_moves):
         if i < len(moves):
             m = moves[i]
-            step_bytes.append(_pack_move_step(int(m.get("from", 0)), int(m.get("pips", 0))))
+            pips = int(m.get("pips", 0))
+            if pips > MAX_STEP_PIPS:
+                # ``pips`` is three bits, so an eighth pip wraps rather than
+                # overflows: the 10-pip span of an illegal ``13/3`` off a 3-3 was
+                # stored as 2 and read back as ``13/11``. Silence is the danger
+                # here -- the step count is right and the ply replays to a
+                # plausible board -- so refuse, for the same reason the hop count
+                # above does. A converter must reshape the play first
+                # (export.fit_move_steps), not hand it over as-is.
+                raise ValueError(
+                    f"ply move step {i} moves {pips} pips but a step record holds "
+                    f"at most {MAX_STEP_PIPS}; an illegal play must be written as "
+                    "a set-position ply"
+                )
+            step_bytes.append(_pack_move_step(int(m.get("from", 0)), pips))
         else:
             step_bytes.append(0)
     move0 = step_bytes[0] if step_bytes else 0
@@ -617,9 +644,16 @@ def _encode_eval_entry(ce: dict) -> bytes:
 def _encode_alt_entry(alt: dict) -> bytes:
     move_bytes = bytearray(4)
     steps = alt.get("move") or []
-    for i in range(min(4, len(steps))):
-        s = steps[i]
-        move_bytes[i] = _pack_move_step(int(s.get("from", 0)), int(s.get("pips", 0)))
+    # An alternative's steps are read only for display -- its notation and its
+    # move arrows -- so a hop ``pips`` cannot hold is dropped rather than refused
+    # the way a ply's is: nothing replays these, and an alternative with no steps
+    # draws nothing, where a wrapped one draws the wrong move. Only the played
+    # candidate of an illegal play can get here (converters clear it themselves);
+    # this is the backstop.
+    if all(int(s.get("pips", 0)) <= MAX_STEP_PIPS for s in steps):
+        for i in range(min(4, len(steps))):
+            s = steps[i]
+            move_bytes[i] = _pack_move_step(int(s.get("from", 0)), int(s.get("pips", 0)))
     probs = alt["probs"] if alt["probs"] is not None else [0.0, 0.0, 0.0, 0.0, 0.0]
     return struct.pack(
         "<4sh5HB",

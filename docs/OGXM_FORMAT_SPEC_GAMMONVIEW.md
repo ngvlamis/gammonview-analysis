@@ -324,7 +324,12 @@ Each byte is a signed int8: positive = white checkers, negative = black checkers
 | Bits | Width | Field |
 |------|-------|-------|
 | 0-4  | 5     | start_point (0-25 absolute) |
-| 5-7  | 3     | pips_moved (1-6; 0 = no move / padding) |
+| 5-7  | 3     | pips_moved (1-7; 0 = no move / padding) |
+
+Three bits, so **7 pips is the ceiling** and an eighth wraps round rather than
+overflowing. A legal hop is at most 6; only an illegal play can want more, and a
+writer states such a play as a set-position ply instead (see the JSON spec's
+[Move](OGXM_JSON_SPEC_GAMMONVIEW.md#move)).
 
 ---
 

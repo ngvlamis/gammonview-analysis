@@ -12,9 +12,14 @@ that ply on the replayed board was one checker off, later plies lifted checkers
 off empty points, and the resulting 16-checker position segfaulted the engine's
 bearoff lookup.
 
-The match the whole thing came from is in the corpus as
-``hQ8sVn2LbTdF4wRm``, in both of the forms it was reported in -- see the
-last section, and samples/README.md.
+Three shapes of illegal play reach here, and only the first fits a ply record:
+too many die-moves (collapsed to one step per checker), a hop that runs
+*backwards*, and a hop longer than the three bits ``pips`` has. The last two are
+restated as the position they produced.
+
+The matches they came from are in the corpus as ``hQ8sVn2LbTdF4wRm`` (the
+backwards hop) and ``rK7pXm4TqLb9NzWd`` (the ten-pip one), each in both of the
+forms it was reported in -- see the last section, and samples/README.md.
 
 Run directly:
     uv run python tests/test_illegal_play_steps.py
@@ -66,6 +71,15 @@ def _board_p1(**points: int) -> list[int]:
     for k, v in points.items():
         b[int(k[1:])] = v
     return b
+
+
+def _mover_board_of(ogid: str, color: int) -> list[int]:
+    """The ply's board from the mover's own side of it."""
+    st = parse_ogid(ogid)
+    board = list(st.board)
+    if st.on_roll != "W":
+        board = _flip_board(board)
+    return board if color else _flip_board(board)
 
 
 def main() -> int:
@@ -249,6 +263,73 @@ def main() -> int:
           })))["games"][0]["plies"][0].get("ogid_before"),
           "a set-position ply with no dice opens a game and gets none")
 
+    # --- a hop longer than ``pips`` can count -------------------------------
+    #
+    # The third illegal shape, and the one that hid the longest. A real 3-3 was
+    # played ``13/3 7/4``: the first span is ten pips, which the dice cannot
+    # explain, so the splitters keep it whole and hand over a single step of
+    # ``pips: 10``. ``pips`` is three bits, so ten was written as two and the
+    # play read back out of the file as ``13/11`` -- a move nobody made, on a
+    # ply whose step count and replayed board both looked right.
+    long_span = "13/3 7/4"
+
+    long_split = _notation_to_steps(long_span, True, 3, 3)
+    check(long_split == [{"from": 12, "pips": 10}, {"from": 18, "pips": 3}],
+          "the ten-pip span survives the dice split whole -- 3-3 cannot divide it")
+    check(len(long_split) <= _steps_per_roll(3, 3),
+          "so the step count reports nothing wrong: two steps for a four-hop roll")
+    check(not notation_has_non_forward_hop(long_span),
+          "and every hop runs forward, so that check clears it too")
+
+    check(fit_move_steps(long_split, long_span, True, 3, 3) is None,
+          "it still reaches the set-position rung -- on the hop length alone")
+    check(fit_move_steps(_notation_to_steps("13/7 8/7", True, 3, 3),
+                         "13/7 8/7", True, 3, 3) is not None,
+          "while a 3-3 the dice do explain splits into hops that fit")
+    check(fit_move_steps(_notation_to_steps("13/6", True, 4, 3),
+                         "13/6", True, 4, 3)
+          == [{"from": 12, "pips": 4}, {"from": 16, "pips": 3}],
+          "and a seven-pip span is split by its dice, not refused for its length")
+
+    long_threw = None
+    try:
+        write_gvab(_doc({"color": 1, "action_id": 11, "d1": 3, "d2": 3,
+                         "moves": long_split}))
+    except ValueError as err:
+        long_threw = err
+    check(long_threw is not None and "at most 7" in str(long_threw),
+          "and the writer refuses the ten-pip step rather than wrapping it to two")
+
+    # End to end: a `.mat` states the play in notation, so the converter sees
+    # the span at full length and never builds the step that cannot hold it.
+    long_mat = """; [Site "test"]
+
+ 1 point match
+
+ Game 1
+ A : 0                                 B : 0
+  1) 61: 13/7 8/7                         42: 13/9 13/11
+  2) 33: 13/3 7/4                         31: 11/8 9/8
+  3) 11: 8/7 8/7 7/6 7/6
+   Wins 1 point
+"""
+
+    long_doc = mat_to_ogxm(long_mat)
+    long_ply = long_doc["games"][0]["plies"][2]
+    check(long_ply["action_id"] == 31,
+          "the .mat converter states the ten-pip play as a set position")
+    check(long_ply["d1"] == 3 and long_ply["d2"] == 3,
+          "keeping the 3-3 it stands in for")
+    check(canonical_notation(_mover_board_of(long_ply["ogid_before"], long_ply["color"]),
+                             _mover_board_of(long_ply["ogid_after"], long_ply["color"]),
+                             3, 3) == long_span,
+          "and the board it states reads back out as 13/3 7/4, not 13/11 7/4")
+
+    long_back = read_gvab(write_gvab(long_doc))["games"][0]["plies"][2]
+    check(long_back["action_id"] == 31
+          and long_back["ogid_after"] == long_ply["ogid_after"],
+          "and it survives the .gvab round trip that used to corrupt it")
+
     # --- the real match, in both of the forms it was reported in -----------
     #
     # `hQ8sVn2LbTdF4wRm` is where this came from: a HedgeHog transcription where
@@ -266,14 +347,6 @@ def main() -> int:
     if not mat_path.is_file() or not xg_path.is_file():
         print("SKIP  the real match (hQ8sVn2LbTdF4wRm is not in samples/)")
     else:
-        def _mover_board(ogid: str, color: int) -> list[int]:
-            """The ply's board from the mover's own side of it."""
-            st = parse_ogid(ogid)
-            board = list(st.board)
-            if st.on_roll != "W":
-                board = _flip_board(board)
-            return board if color else _flip_board(board)
-
         pair = {
             "the .mat": mat_to_ogxm(mat_path.read_text()),
             "the .xg": convert_xg(xg_path),
@@ -292,8 +365,8 @@ def main() -> int:
                   f"{name} puts it at game 2's twentieth play, where the 6-5 was")
             check(ply["d1"] == 6 and ply["d2"] == 5,
                   f"{name} keeps the roll it stands in for")
-            check(canonical_notation(_mover_board(ply["ogid_before"], ply["color"]),
-                                     _mover_board(ply["ogid_after"], ply["color"]),
+            check(canonical_notation(_mover_board_of(ply["ogid_before"], ply["color"]),
+                                     _mover_board_of(ply["ogid_after"], ply["color"]),
                                      ply["d1"], ply["d2"]) == "15/10 14/8 6/8",
                   f"{name} states a board the backwards hop reads back out of")
             check(not ply.get("analysis"),

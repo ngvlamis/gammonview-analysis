@@ -8,7 +8,7 @@
 // ESM port of gvformat/export.py — GVA analysis result dicts -> OGXM-JSON.
 // Pure conversion layer: no bgsage / engine calls.
 
-import { RESIGN_ACTIONS } from "./constants.js";
+import { MAX_STEP_PIPS, RESIGN_ACTIONS } from "./constants.js";
 import { boardToOgid } from "./ogid.js";
 import { cleanPlace } from "./place.js";
 
@@ -458,6 +458,22 @@ export function notationHasNonForwardHop(notation) {
   return _hasNonForwardSpan(_parseNotation(notation));
 }
 
+// A hop too long for the `pips` field to hold.
+//
+// `pips` is three bits (constants.js `MAX_STEP_PIPS`), so seven is the ceiling
+// and an eighth pip wraps: a real 3-3 played `13/3 7/4` -- the 10-pip span an
+// illegal play can have and the dice cannot explain -- was written as `pips: 2`
+// and read back out of the file as `13/11`. Nothing downstream could tell,
+// because the step count is right: one span is still one step, only its length
+// is impossible.
+//
+// A legal hop is at most 6, so like a backwards hop this belongs to an illegal
+// play alone, and it gets the same answer -- restate the ply as the position it
+// produced rather than store a distance the record cannot hold.
+function _hasOversizedStep(steps) {
+  return steps.some((s) => Number(s.pips) > MAX_STEP_PIPS);
+}
+
 /**
  * True when no all-forward play explains this board diff.
  *
@@ -495,9 +511,10 @@ export function boardDiffHasNonForwardHop(boardBeforeP1, boardAfterP1, moverIsWh
 //   1. the steps as built -- split across the dice, right for a legal play;
 //   2. one step per span (`_notationToStepsUnsplit`), which is what an illegal
 //      play usually needs and usually fits;
-//   3. `null` -- too tangled for even one step per checker, or moving a checker
-//      *backwards*, which no step can express at all, so the caller must
-//      restate the ply with `setPositionPly`.
+//   3. `null` -- too tangled for even one step per checker, moving a checker
+//      *backwards*, or hopping further than `pips` can count, none of which a
+//      step can express, so the caller must restate the ply with
+//      `setPositionPly`.
 //
 // Rung 2 needs the notation. A converter working from a board *diff* has none,
 // and must not collapse the steps itself: a step from 11 cannot be told apart
@@ -509,12 +526,26 @@ export function fitMoveSteps(steps, notation, moverIsWhite, d1, d2) {
   // merely over-long, so the step count never reports it (see
   // `notationHasNonForwardHop`).
   if (notation && notationHasNonForwardHop(notation)) return null;
-  if (steps.length <= room) return steps;
+  if (steps.length <= room && !_hasOversizedStep(steps)) return steps;
   if (notation) {
     const unsplit = _notationToStepsUnsplit(notation, moverIsWhite, d1, d2);
-    if (unsplit.length <= room) return unsplit;
+    if (unsplit.length <= room && !_hasOversizedStep(unsplit)) return unsplit;
   }
   return null;
+}
+
+/**
+ * An alternative's steps, or none where no step list can hold the play.
+ *
+ * The same three rungs as `fitMoveSteps`, because an alternative can be the
+ * *played* candidate and the played candidate of an illegal play is the one
+ * move in a file that may not fit. The answer is softer than a ply's: nothing
+ * replays an alternative's steps -- they are read for its notation and its move
+ * arrows -- so an alternative with none draws nothing, where a truncated or
+ * wrapped one draws a move nobody made.
+ */
+export function fitAlternativeSteps(steps, notation, moverIsWhite, d1, d2) {
+  return fitMoveSteps(steps, notation, moverIsWhite, d1, d2) ?? [];
 }
 
 // An illegal play restated as the position it produced (action 31).
@@ -594,7 +625,10 @@ function _buildAlternatives(moveOptions, moverIsWhite, d1, d2, boardBeforeMover)
   const bestEquity = moveOptions.length ? moveOptions[0].equity : null;
   for (const opt of moveOptions) {
     const alt = {
-      move: _notationToSteps(opt.move || "", moverIsWhite, d1, d2, boardBeforeMover),
+      move: fitAlternativeSteps(
+        _notationToSteps(opt.move || "", moverIsWhite, d1, d2, boardBeforeMover),
+        opt.move || "", moverIsWhite, d1, d2,
+      ),
       notation: opt.move || "",
       equity: opt.equity,
       is_played: Boolean(opt.played),

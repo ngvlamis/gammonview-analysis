@@ -12,7 +12,8 @@ import {
   CHUNK_MHDR, CHUNK_GAME, CHUNK_ANAL, CHUNK_EVAL, CHUNK_ALTS,
   CHUNK_CUBE, CHUNK_GVAN, CHUNK_CSUM, CHUNK_SIGN, END_MAGIC,
   CHUNK_FLAG_CRITICAL, HEADER_FLAG_HAS_ANALYSIS,
-  MAX_ALTS_PER_DECISION, MAX_PLAYER_NAME, DEFAULT_BOARD_SENTINEL, GVAN_VERSION,
+  MAX_ALTS_PER_DECISION, MAX_PLAYER_NAME, MAX_STEP_PIPS,
+  DEFAULT_BOARD_SENTINEL, GVAN_VERSION,
   WINNER_INCOMPLETE,
   ACTION_DOUBLE, ACTION_TAKE, ACTION_DROP,
   ACTION_RESIGN_GAME, ACTION_RESIGN_MATCH, ACTION_SET_POSITION,
@@ -129,6 +130,10 @@ function _enc_equity_loss(loss) {
 // Pack helpers
 // ---------------------------------------------------------------------------
 
+// One move step, one byte: the start point in five bits, `pips` in three. The
+// masks are the record's shape, not a range check -- a caller handing over more
+// than `MAX_STEP_PIPS` would have the eighth pip wrap round to nothing, so each
+// writer below checks its own steps first.
 function _pack_move_step(start, pips) {
   return (start & 0x1F) | ((pips & 0x07) << 5);
 }
@@ -308,7 +313,21 @@ function _encode_ply(ply, action_id) {
   for (let i = 0; i < n_moves; i++) {
     if (i < moves.length) {
       const m = moves[i];
-      step_bytes.push(_pack_move_step(Number(m.from || 0), Number(m.pips || 0)));
+      const pips = Number(m.pips || 0);
+      if (pips > MAX_STEP_PIPS) {
+        // `pips` is three bits, so an eighth pip wraps rather than overflows:
+        // the 10-pip span of an illegal `13/3` off a 3-3 was stored as 2 and
+        // read back as `13/11`. Silence is the danger here -- the step count is
+        // right and the ply replays to a plausible board -- so refuse, for the
+        // same reason the hop count above does. A converter must reshape the
+        // play first (export.js `fitMoveSteps`), not hand it over as-is.
+        throw new Error(
+          `ply move step ${i} moves ${pips} pips but a step record holds at `
+          + `most ${MAX_STEP_PIPS}; an illegal play must be written as a `
+          + 'set-position ply',
+        );
+      }
+      step_bytes.push(_pack_move_step(Number(m.from || 0), pips));
     } else {
       step_bytes.push(0);
     }
@@ -558,9 +577,18 @@ function _encode_eval_entry(ce) {
 function _encode_alt_entry(alt) {
   const move_bytes = new Uint8Array(4);
   const steps = alt.move || [];
-  for (let i = 0; i < Math.min(4, steps.length); i++) {
-    const s = steps[i];
-    move_bytes[i] = _pack_move_step(Number(s.from || 0), Number(s.pips || 0));
+  // An alternative's steps are read only for display -- its notation and its
+  // move arrows -- so a hop `pips` cannot hold is dropped rather than refused
+  // the way a ply's is: nothing replays these, and an alternative with no steps
+  // draws nothing, where a wrapped one draws the wrong move. Only the played
+  // candidate of an illegal play can get here (converters clear it themselves);
+  // this is the backstop.
+  const fits = steps.every((s) => Number(s.pips || 0) <= MAX_STEP_PIPS);
+  if (fits) {
+    for (let i = 0; i < Math.min(4, steps.length); i++) {
+      const s = steps[i];
+      move_bytes[i] = _pack_move_step(Number(s.from || 0), Number(s.pips || 0));
+    }
   }
   const probs = alt.probs !== null && alt.probs !== undefined
     ? alt.probs : [0.0, 0.0, 0.0, 0.0, 0.0];

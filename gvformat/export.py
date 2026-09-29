@@ -60,7 +60,7 @@ from __future__ import annotations
 import re
 from datetime import datetime, timezone
 
-from .binary import RESIGN_ACTIONS, cap_points_won
+from .binary import MAX_STEP_PIPS, RESIGN_ACTIONS, cap_points_won
 from .ogid import board_to_ogid
 from .place import clean_place
 
@@ -616,6 +616,22 @@ def notation_has_non_forward_hop(notation: str) -> bool:
     return _has_non_forward_span(_parse_notation(notation))
 
 
+# A hop too long for the ``pips`` field to hold.
+#
+# ``pips`` is three bits (``binary.MAX_STEP_PIPS``), so seven is the ceiling and
+# an eighth pip wraps: a real 3-3 played ``13/3 7/4`` -- the 10-pip span an
+# illegal play can have and the dice cannot explain -- was written as ``pips: 2``
+# and read back out of the file as ``13/11``. Nothing downstream could tell,
+# because the step count is right: one span is still one step, only its length is
+# impossible.
+#
+# A legal hop is at most 6, so like a backwards hop this belongs to an illegal
+# play alone, and it gets the same answer -- restate the ply as the position it
+# produced rather than store a distance the record cannot hold.
+def _has_oversized_step(steps: list[dict]) -> bool:
+    return any(int(s.get("pips", 0)) > MAX_STEP_PIPS for s in steps)
+
+
 def board_diff_has_non_forward_hop(
     board_before_p1: list[int], board_after_p1: list[int], mover_is_white: bool,
 ) -> bool:
@@ -655,9 +671,10 @@ def fit_move_steps(
     1. the steps as built -- split across the dice, right for a legal play;
     2. one step per span (``_notation_to_steps_unsplit``), which is what an
        illegal play usually needs and usually fits;
-    3. ``None`` -- too tangled for even one step per checker, or moving a
-       checker *backwards*, which no step can express at all, so the caller
-       must restate the ply with ``set_position_ply``.
+    3. ``None`` -- too tangled for even one step per checker, moving a checker
+       *backwards*, or hopping further than ``pips`` can count, none of which a
+       step can express, so the caller must restate the ply with
+       ``set_position_ply``.
 
     Rung 2 needs the notation. A converter working from a board *diff* has
     none, and must not collapse the steps itself: a step from 11 cannot be told
@@ -670,13 +687,30 @@ def fit_move_steps(
     # ``notation_has_non_forward_hop``).
     if notation and notation_has_non_forward_hop(notation):
         return None
-    if len(steps) <= room:
+    if len(steps) <= room and not _has_oversized_step(steps):
         return steps
     if notation:
         unsplit = _notation_to_steps_unsplit(notation, mover_is_white, d1, d2)
-        if len(unsplit) <= room:
+        if len(unsplit) <= room and not _has_oversized_step(unsplit):
             return unsplit
     return None
+
+
+def fit_alternative_steps(
+    steps: list[dict], notation: str | None,
+    mover_is_white: bool, d1: int, d2: int,
+) -> list[dict]:
+    """An alternative's steps, or none where no step list can hold the play.
+
+    The same three rungs as ``fit_move_steps``, because an alternative can be
+    the *played* candidate and the played candidate of an illegal play is the one
+    move in a file that may not fit. The answer is softer than a ply's: nothing
+    replays an alternative's steps -- they are read for its notation and its move
+    arrows -- so an alternative with none draws nothing, where a truncated or
+    wrapped one draws a move nobody made.
+    """
+    fitted = fit_move_steps(steps, notation, mover_is_white, d1, d2)
+    return fitted if fitted is not None else []
 
 
 def set_position_ply(
@@ -787,8 +821,11 @@ def _build_alternatives(move_options: list[dict], mover_is_white: bool, d1: int,
     best_equity = move_options[0]["equity"] if move_options else None
     for opt in move_options:
         alt = {
-            "move": _notation_to_steps(opt.get("move", ""), mover_is_white, d1, d2,
-                                       board_before_mover),
+            "move": fit_alternative_steps(
+                _notation_to_steps(opt.get("move", ""), mover_is_white, d1, d2,
+                                   board_before_mover),
+                opt.get("move", ""), mover_is_white, d1, d2,
+            ),
             "notation": opt.get("move", ""),
             "equity": opt["equity"],
             "is_played": bool(opt.get("played", False)),

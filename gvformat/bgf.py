@@ -31,7 +31,7 @@ from pathlib import Path
 from .binary import RESIGN_ACTIONS
 from .export import (
     _canonical_orientation, _flip_board, _notation_to_steps,
-    fit_move_steps, set_position_ply,
+    fit_alternative_steps, fit_move_steps, set_position_ply,
 )
 from .legality import is_play_legal
 from .notation import canonical_notation, from_bgf_abs_frame
@@ -589,8 +589,10 @@ def _build_alternatives(
         # derived display string. Parse the candidate's notation into steps
         # with the same helper the analyze/XG paths use.
         notation = opt.get("move", "")
-        alt["move"] = _notation_to_steps(notation, mover_is_white, d1, d2,
-                                         board_before_mover)
+        alt["move"] = fit_alternative_steps(
+            _notation_to_steps(notation, mover_is_white, d1, d2, board_before_mover),
+            notation, mover_is_white, d1, d2,
+        )
         alt["notation"] = opt.get("notation") or notation
         alts.append(alt)
     return alts

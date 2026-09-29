@@ -53,6 +53,7 @@ from .export import (
     _p1_to_absolute,
     _probs_to_eval,
     _steps_per_roll,
+    fit_alternative_steps,
     fit_move_steps,
     set_position_ply,
 )
@@ -1219,18 +1220,19 @@ def convert_xg(xg_path: Path) -> dict:
                             # has made -- the board arrows come straight from
                             # these steps, so it shows a checker landing on a
                             # stack of enemy checkers and moving on.
-                            alt["move"] = _notation_to_steps(
-                                notation, is_white, d1, d2,
-                                board_before if is_white else _flip_board(board_before),
-                            )
-                            # Same collapse the played move gets above, so the
-                            # played alternative still describes the same play
-                            # as the ply's own ``moves``. Only an illegal play
-                            # can overflow, and only the played candidate is
+                            # Same reshaping the played move gets above, so
+                            # the played alternative still describes the same
+                            # play as the ply's own ``moves``. Only an illegal
+                            # play needs it, and only the played candidate is
                             # ever illegal.
-                            if len(alt["move"]) > _steps_per_roll(d1, d2):
-                                alt["move"] = _notation_to_steps_unsplit(
-                                    notation, is_white, d1, d2)
+                            alt["move"] = fit_alternative_steps(
+                                _notation_to_steps(
+                                    notation, is_white, d1, d2,
+                                    board_before if is_white
+                                    else _flip_board(board_before),
+                                ),
+                                notation, is_white, d1, d2,
+                            )
                             alt["notation"] = canonical_notation(
                                 from_xg_p1_frame(pre_move_raw, is_p1),
                                 from_xg_p1_frame(cand_work, is_p1),

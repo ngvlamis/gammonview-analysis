@@ -6,7 +6,7 @@
 
 import {
   _TurnState, _ogid, _diceActionId, _notationToSteps,
-  fitMoveSteps, setPositionPly,
+  fitAlternativeSteps, fitMoveSteps, setPositionPly,
   _canonicalOrientation, _flipBoard,
   _OGID_STATE_INITIAL_BOTH, _OGID_STATE_ROLLED, _OGID_STATE_CHECKER_DONE,
   _OGID_STATE_DOUBLE_OFFERED, _OGID_STATE_AFTER_TAKE, _OGID_STATE_GAME_OVER,
@@ -548,7 +548,10 @@ export function buildAlternatives(moveOptions, moverIsWhite, d1, d2, boardBefore
     // string. Parse the candidate's notation into steps with the same helper
     // the analyze/XG paths use.
     const notation = opt.move || "";
-    alt.move = _notationToSteps(notation, moverIsWhite, d1, d2, boardBeforeMover);
+    alt.move = fitAlternativeSteps(
+      _notationToSteps(notation, moverIsWhite, d1, d2, boardBeforeMover),
+      notation, moverIsWhite, d1, d2,
+    );
     alt.notation = opt.notation || notation;
     alts.push(alt);
   }

@@ -323,7 +323,7 @@ threshold policy over `equity_loss` that the reader owns (see
 | Field | Type | Description |
 |-------|------|-------------|
 | `from` | uint8 | Start point (0–25 absolute: 0=white bar, 25=black bar) |
-| `pips` | uint8 | Pips moved (1–6) |
+| `pips` | uint8 | Pips moved (1–7; a legal hop is 1–6) |
 
 A ply holds at most the hops its roll allows — two for a non-double, four for a
 double — because that is the room the binary ply record has. A legal play never
@@ -335,10 +335,14 @@ play is written as a set-position ply (action_id 31) stating the resulting
 board. Either way the ply replays to the position the source recorded — a
 truncated play would leave every later board in the game wrong.
 
-A hop that runs *backwards* goes straight to the set-position ply: `pips` is an
-unsigned forward distance, so no step can hold one however much room the record
-has. (A 6-5 played `14/8 15/10 6/8` is a real example — both dice forward, then
-a checker 2 pips the wrong way.)
+Two shapes of hop have no step at all and go straight to the set-position ply.
+One runs *backwards*: `pips` is an unsigned forward distance, so no step can
+hold it however much room the record has. (A 6-5 played `14/8 15/10 6/8` is a
+real example — both dice forward, then a checker 2 pips the wrong way.) The
+other is longer than **7 pips**, which is all the binary field holds — it is
+three bits, so an eighth pip wraps round rather than overflowing. Only an
+illegal play reaches it, since a span the dice explain splits into hops of 6 or
+less; a 3-3 played `13/3 7/4` is a real example, ten pips in one hop.
 
 ### Action ID Table
 
@@ -515,7 +519,7 @@ the base spec.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `move` | Step[] | The checker move, structured (source of truth). Each step is `{ "from": absolute point 0-25, "pips": 1-6 }`. |
+| `move` | Step[] | The checker move, structured (source of truth). Each step is `{ "from": absolute point 0-25, "pips": 1-6 }`. Empty where no step list can hold the play — see [Move](#move); nothing replays these steps, so an alternative keeps none rather than a wrong one. |
 | `notation` | string | **Derived** display view of `move` (e.g. `"13/7 8/5"`, `"bar/20"`). Not stored in binary; rendered from `move` + player color on output. |
 | `equity` | float | Equity of this move (authoritative; may be cubeful). |
 | `eval` | Eval | NN evaluation after this move |

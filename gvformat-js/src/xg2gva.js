@@ -7,7 +7,7 @@
 import {
   _TurnState, _ogid, _diceActionId, _flipBoard, _notationToSteps,
   _notationToStepsUnsplit, _p1ToAbsolute, _stepsPerRoll,
-  fitMoveSteps, setPositionPly,
+  fitAlternativeSteps, fitMoveSteps, setPositionPly,
   _canonicalOrientation, _STARTING_BOARD_P1,
   _OGID_STATE_INITIAL_BOTH, _OGID_STATE_ROLLED, _OGID_STATE_CHECKER_DONE,
   _OGID_STATE_DOUBLE_OFFERED, _OGID_STATE_AFTER_TAKE, _OGID_STATE_GAME_OVER,
@@ -1059,15 +1059,15 @@ export async function convertXg(fileBytes) {
               // routing through a point the opponent has made -- the board
               // arrows come straight from these steps, so it shows a checker
               // landing on a stack of enemy checkers and moving on.
-              alt.move = _notationToSteps(notation, isWhite, d1, d2,
-                isWhite ? boardBefore : _flipBoard(boardBefore));
-              // Same collapse the played move gets above, so the played
+              // Same reshaping the played move gets above, so the played
               // alternative still describes the same play as the ply's own
-              // `moves`. Only an illegal play can overflow, and only the played
+              // `moves`. Only an illegal play needs it, and only the played
               // candidate is ever illegal.
-              if (alt.move.length > _stepsPerRoll(d1, d2)) {
-                alt.move = _notationToStepsUnsplit(notation, isWhite, d1, d2);
-              }
+              alt.move = fitAlternativeSteps(
+                _notationToSteps(notation, isWhite, d1, d2,
+                  isWhite ? boardBefore : _flipBoard(boardBefore)),
+                notation, isWhite, d1, d2,
+              );
               alt.notation = canonicalNotation(
                 fromXgP1Frame(preMoveRaw, isP1),
                 fromXgP1Frame(candWork, isP1),

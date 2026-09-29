@@ -13,6 +13,38 @@ when the repository was opened; they are kept because they record why things
 are the way they are — particularly the breaking changes and the measurements
 behind several design decisions. Dates are the tag dates.
 
+## 1.3.0 — 2026-09-29
+
+**A hop longer than 7 pips is no longer written as a different move** *(fix)*
+
+The third shape of illegal play, and a near-miss of the same bug 1.2.0 fixed. A
+real 3-3 was played `13/3 7/4`: ten pips in one hop, which the dice cannot
+explain, so the span splitters keep it whole and hand over a single step of
+`pips: 10`. `pips` is three bits, so ten was **written as two** and the play read
+back out of the file as `13/11 7/4` — a move nobody made, on a ply whose step
+count and replayed board both looked right, which is why nothing downstream could
+tell. The wrap only showed once the document had been through a `.gvab`, so an
+import viewed in place was fine and the same match saved, shared or analyzed was
+not.
+
+`fit_move_steps` / `fitMoveSteps` now check hop *length* as well as hop count, so
+a span the field cannot hold reaches the set-position rung alongside a backwards
+hop, and the play is stated as the position it produced. The two writers say so
+rather than wrap: `binary._encode_ply` raises on an oversized step, as it already
+does on an over-long ply, and `_encode_alt_entry` — whose steps are read only for
+display, and where refusing would cost a whole file — drops them instead, so an
+alternative draws nothing rather than the wrong move. The same shaping is now
+applied to every alternative on the way in (`fit_alternative_steps`), which is
+where the played candidate of an illegal play gets its steps.
+
+New public API: `fit_alternative_steps` / `fitAlternativeSteps` in `export`, and
+`MAX_STEP_PIPS` (`binary.py`, `constants.js`).
+
+One existing sample moves: `hQ8sVn2LbTdF4wRm`'s 4-4 bear-off, which the diff
+matched as an 11-pip span and stored as 3, now splits into the four hops its
+notation states. Its `.mat` reference fixture was regenerated to match. The spec
+pages gained the ceiling: `pips` is 1–7, a legal hop 1–6.
+
 ## 1.2.0 — 2026-09-29
 
 **A checker moved *backwards* is no longer lost on import** *(fix)*
