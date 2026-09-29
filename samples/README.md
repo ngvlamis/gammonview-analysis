@@ -5,11 +5,11 @@ Copyright (C) 2026 Nicholas Vlamis
 
 # The sample corpus
 
-Twelve matches, each in two to four formats, committed so the test suite can run
-anywhere. Every player name, match ID, date and site string here is synthetic —
+Thirteen matches, each in two to four formats, committed so the test suite can
+run anywhere. Every player name, match ID, date and site string here is synthetic —
 see [Anonymization](#anonymization).
 
-Most of what they buy is breadth. The suite replays **2,138 plies with 15,263
+Most of what they buy is breadth. The suite replays **2,527 plies with 18,163
 alternatives** through the XG converter and 2,101 plies with 11,791 alternatives
 through the BGF one, and the two bugs this directory exists to catch — the XG and
 BGF step splitters inferring the wrong intermediate point — were both found by a
@@ -33,15 +33,16 @@ whether a corpus change broke a requirement.
 
 | Directory | Files | Read by |
 |---|---|---|
-| `mat/` | 12 `.mat` | `test_ogxm_pipeline`, `test_count_illegal`, `test_illegal_play_steps`, and every engine test via `tests/fixtures.py` |
-| `xg/` | 12 `.xg` | `test_xg_move_steps`, `test_alternative_move_steps`, `test_xg_eval_levels`, `test_xg_zero_win_eval`, `test_illegal_play_steps` |
+| `mat/` | 13 `.mat` | `test_ogxm_pipeline`, `test_count_illegal`, `test_illegal_play_steps`, and every engine test via `tests/fixtures.py` |
+| `xg/` | 13 `.xg` | `test_xg_move_steps`, `test_alternative_move_steps`, `test_xg_eval_levels`, `test_xg_zero_win_eval`, `test_illegal_play_steps` |
 | `bgf/` | 11 `.bgf` | `test_bgf_move_steps` |
 | `gv/` | 11 `.gvab` + 1 `.gva` | `test_share_link`, `test_chunk_passthrough` |
 
 The counts differ by a column because a match is added in whatever forms it
-arrived in. `hQ8sVn2LbTdF4wRm` has no `.bgf` (BGBlitz never saw it) and no
-`.gvab` — that one is derived, and nothing needs its derivation; see
-[below](#the-three-matches-that-are-not-like-the-others).
+arrived in. `hQ8sVn2LbTdF4wRm` and `rK7pXm4TqLb9NzWd` have no `.bgf` (BGBlitz
+never saw either) and no `.gvab` — that one is derived, and nothing needs their
+derivation; see
+[below](#the-four-matches-that-are-not-like-the-others).
 
 The JS suite reads `mat/`, `xg/` and `bgf/` from here too — see
 [The JavaScript mirror](#the-javascript-mirror).
@@ -70,7 +71,7 @@ not each file. `tests/audit_corpus.py` checks all of them.
   five probabilities zero**. `test_xg_zero_win_eval` asserts both, because the
   converter used to decide "did XG evaluate this?" by testing `win > 0` and so
   blanked the probabilities on every play in a hopelessly lost position. The
-  last plies of a lost game supply these for free (today: 238 and 116).
+  last plies of a lost game supply these for free (today: 298 and 119).
 * **All four non-ply eval levels must appear across the corpus** —
   `truncated1`, `truncated2`, `truncated3` and `database`.
   `test_xg_eval_levels` checks each by name, precisely so the round-trip check
@@ -128,7 +129,7 @@ There is deliberately no fallback to "whatever `.mat` is present". A silent
 substitution is how the drop branch would stop being tested without anyone
 noticing; a loud skip naming `MATCH` is the better failure.
 
-### The three matches that are not like the others
+### The four matches that are not like the others
 
 * **`5nqfGw9bWG3deTaU`** contains a genuine **illegal play** — `14/10 13/12`
   off a 1-3, three die-moves for a two-hop roll — and is the only file in the
@@ -159,6 +160,22 @@ noticing; a loud skip naming `MATCH` is the better failure.
   played candidate's own stored position — flagged `invalid_m == 2` — that gives
   the board away. That they land on the same board is what the user sees: XG
   itself draws this play wrong and then draws the next one right.
+* **`rK7pXm4TqLb9NzWd`** is the third illegal play, and the third distinct
+  shape. `5nqfGw9bWG3deTaU` spends too many die-moves and `hQ8sVn2LbTdF4wRm`
+  sends a checker backwards; this one takes **one hop the field cannot count
+  to** — a 3-3 played `13/3 7/4` at game 12's nineteenth play, ten pips in a
+  single span because 3 does not divide 10. `pips` is three bits, so storing it
+  wrapped ten to two and the play read back out of every `.gvab` as `13/11 7/4`,
+  a move nobody made, on a ply whose step count and replayed board both looked
+  right. It is the only file in the corpus where the hop *length* rather than the
+  hop count forces the set-position ply, and `test_illegal_play_steps` /
+  `test-illegal-play-steps.js` name it beside `hQ8sVn2LbTdF4wRm`.
+
+  It too is here **twice**, a `.mat` and an `.xg` of the same match, for the same
+  reason: notation on one side, XG's stored candidate position on the other, and
+  both land on the same board. Everything said above about curating a
+  set-position ply — no steps to replay, no analysis on it — applies here
+  unchanged.
 
   Two consequences to know before curating it. A set-position ply **states** its
   board instead of moving to it, so it has no steps to replay and every
@@ -185,9 +202,10 @@ Five places, all of which `tests/audit_corpus.py` verifies:
    die-moves; the first reads its golden `.gvab`, the second its `.mat`. It is
    already a golden stem, so check 2 covers the name.
 5. **`tests/test_illegal_play_steps.py`** and its JS mirror — both name
-   `hQ8sVn2LbTdF4wRm` and read *both* of its files. They **skip** rather than
-   fail when it is missing, since everything else in them is synthetic, so the
-   audit is what would catch its loss.
+   `hQ8sVn2LbTdF4wRm` and `rK7pXm4TqLb9NzWd`, the backwards hop and the ten-pip
+   one, and read *both* files of each. They **skip** rather than fail when one is
+   missing, since everything else in them is synthetic, so the audit is what
+   would catch a loss.
 
 ## Regenerating the derived files
 
@@ -274,12 +292,14 @@ Identifying data lives in:
 Most of the `.xg` and `.bgf` files here were re-analyzed from the anonymized
 `.mat` rather than patched, which is why they carry no trace of the originals.
 
-`hQ8sVn2LbTdF4wRm.xg` is the exception and **had to be**: what makes it worth
-keeping is how XG recorded one illegal play, and re-analyzing would have XG
-record it again, correctly, destroying the only thing the file is for. It was
-patched in place instead — both halves above, then `zlib`-recompressed — and
-`convert_xg` returns the same document before and after, down to every
-evaluation, with the timestamp the only field that moves.
+`hQ8sVn2LbTdF4wRm.xg` and `rK7pXm4TqLb9NzWd.xg` are the exceptions and **had to
+be**: what makes each worth keeping is how XG recorded one illegal play, and
+re-analyzing would have XG record it again, correctly, destroying the only thing
+the file is for. They were patched in place instead — both halves above, then
+`zlib`-recompressed — and `convert_xg` returns the same document before and
+after, down to every evaluation, with the timestamp the only field that moves.
+(`rK7pXm4TqLb9NzWd` arrived with both ELO ratings at XG's default 1600, so those
+two fields identify nobody and were left alone.)
 
 ## The JavaScript mirror
 

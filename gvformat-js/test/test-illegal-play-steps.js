@@ -307,26 +307,49 @@ assert(longBack.action_id === 31 && longBack.ogid_after === longPly.ogid_after,
   'and it survives the .gvab round trip that used to corrupt it');
 
 
-// --- the real match, in both of the forms it was reported in ---------------
+// --- the real matches, in both of the forms each was reported in -----------
 //
-// `hQ8sVn2LbTdF4wRm` is where this came from: a HedgeHog transcription where
-// white played a 6-5 as `14/8 15/10 6/8`, the last hop running two pips
-// *backwards*. It is in the corpus twice over, and the two files reach the
-// set-position ply along different routes -- the .mat states the play in
-// notation, so `fitMoveSteps` refuses it on the notation alone, while the .xg's
-// step list is simply short and it is the played candidate's own stored position
-// that gives the board away (`invalidM === 2`, see `_xgCandidateBoard`). Landing
-// on the same board is the whole point: that board is what a user can see, since
-// XG draws this play wrong and then draws the next one right.
-const MATCH_MAT = path.join(SAMPLES_DIR, 'mat', 'hQ8sVn2LbTdF4wRm.mat');
-const MATCH_XG = path.join(SAMPLES_DIR, 'xg', 'hQ8sVn2LbTdF4wRm.xg');
+// Two matches, one per unrepresentable hop, and each is in the corpus twice
+// over -- as a `.mat` and as an `.xg` of the same match -- because the two
+// converters reach the set-position ply along different routes. The .mat states
+// the play in notation, so `fitMoveSteps` refuses it on the notation alone,
+// while the .xg's own step list is short or over-long and it is the played
+// candidate's stored position that gives the board away (`invalidM === 2`, see
+// `_xgCandidateBoard`). Landing on the same board is the whole point: that board
+// is what a user can see, since XG draws these plays wrong and then draws the
+// next one right.
+//
+//   hQ8sVn2LbTdF4wRm  a 6-5 played `14/8 15/10 6/8` -- the last hop two pips
+//                     *backwards*, which no step can express at all.
+//   rK7pXm4TqLb9NzWd  a 3-3 played `13/3 7/4` -- ten pips in one hop, which
+//                     `pips` cannot count to. Stored anyway, it wrapped to two
+//                     and the play read back as `13/11 7/4`.
+const REAL_MATCHES = [
+  {
+    stem: 'hQ8sVn2LbTdF4wRm',
+    what: 'the backwards hop',
+    game: 1, ply: 37, d1: 6, d2: 5, notation: '15/10 14/8 6/8',
+    where: "game 2's twentieth play",
+  },
+  {
+    stem: 'rK7pXm4TqLb9NzWd',
+    what: 'the ten-pip hop',
+    game: 11, ply: 18, d1: 3, d2: 3, notation: '13/3 7/4',
+    where: "game 12's nineteenth play",
+  },
+];
 
-if (!fs.existsSync(MATCH_MAT) || !fs.existsSync(MATCH_XG)) {
-  console.log('SKIP  the real match (hQ8sVn2LbTdF4wRm is not in samples/)');
-} else {
+for (const m of REAL_MATCHES) {
+  const matPath = path.join(SAMPLES_DIR, 'mat', `${m.stem}.mat`);
+  const xgPath = path.join(SAMPLES_DIR, 'xg', `${m.stem}.xg`);
+  if (!fs.existsSync(matPath) || !fs.existsSync(xgPath)) {
+    console.log(`SKIP  ${m.what} (${m.stem} is not in samples/)`);
+    continue;
+  }
+
   const pair = [
-    ['the .mat', convertMat(fs.readFileSync(MATCH_MAT, 'utf8'))],
-    ['the .xg', await convertXg(new Uint8Array(fs.readFileSync(MATCH_XG)))],
+    ['the .mat', convertMat(fs.readFileSync(matPath, 'utf8'))],
+    ['the .xg', await convertXg(new Uint8Array(fs.readFileSync(xgPath)))],
   ];
   const restated = {};
   for (const [name, doc] of pair) {
@@ -335,16 +358,16 @@ if (!fs.existsSync(MATCH_MAT) || !fs.existsSync(MATCH_XG)) {
       if (ply.action_id === 31) found.push([gi, pi, ply]);
     }));
     assert(found.length === 1,
-      `${name} of the real match holds exactly one set-position ply`);
+      `${name} of ${m.stem} holds exactly one set-position ply`);
     const [gi, pi, ply] = found[0];
     restated[name] = ply;
-    assert(gi === 1 && pi === 37,
-      `${name} puts it at game 2's twentieth play, where the 6-5 was`);
-    assert(ply.d1 === 6 && ply.d2 === 5,
+    assert(gi === m.game && pi === m.ply,
+      `${name} puts it at ${m.where}, where ${m.what} was`);
+    assert(ply.d1 === m.d1 && ply.d2 === m.d2,
       `${name} keeps the roll it stands in for`);
     assert(canonicalNotation(moverBoardOf(ply.ogid_before, ply.color),
-      moverBoardOf(ply.ogid_after, ply.color), ply.d1, ply.d2) === '15/10 14/8 6/8',
-      `${name} states a board the backwards hop reads back out of`);
+      moverBoardOf(ply.ogid_after, ply.color), ply.d1, ply.d2) === m.notation,
+      `${name} states a board ${m.notation} reads back out of`);
     assert(!ply.analysis,
       `${name} carries no analysis on it -- the known cost of the encoding`);
     const next = doc.games[gi].plies[pi + 1];
@@ -354,13 +377,13 @@ if (!fs.existsSync(MATCH_MAT) || !fs.existsSync(MATCH_XG)) {
 
   assert(restated['the .mat'].ogid_before === restated['the .xg'].ogid_before
     && restated['the .mat'].ogid_after === restated['the .xg'].ogid_after,
-    'and the two files, read by two different routes, agree on both boards');
+    `and the two files of ${m.stem}, read by two different routes, agree on both boards`);
 
-  // Through the binary, where the hop was being dropped. The synthetic case
-  // above covers the encoding; this covers it on a ply deep inside a game, with
-  // a live cube and a full analysis block around it.
+  // Through the binary, where the hop was being lost or wrapped. The synthetic
+  // cases above cover the encoding; this covers it on a ply deep inside a game,
+  // with a live cube and a full analysis block around it.
   const xgPly = restated['the .xg'];
-  const roundTripped = readGvab(write_gvab(pair[1][1])).games[1].plies[37];
+  const roundTripped = readGvab(write_gvab(pair[1][1])).games[m.game].plies[m.ply];
   assert(roundTripped.action_id === 31
     && roundTripped.ogid_before === xgPly.ogid_before
     && roundTripped.ogid_after === xgPly.ogid_after,

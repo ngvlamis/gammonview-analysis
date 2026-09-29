@@ -201,12 +201,15 @@ def audit_stems(root: Path) -> None:
     for stem in golden:
         check((root / "mat" / f"{stem}.mat").is_file(),
               f"golden stem has a source .mat ({stem})")
-    # The backwards-hop match, named by test_illegal_play_steps and its JS
-    # mirror. They skip rather than fail without it -- everything else in them is
-    # synthetic -- so this is the only thing that would notice it going missing.
-    for ext in ("mat", "xg"):
-        check((root / ext / f"hQ8sVn2LbTdF4wRm.{ext}").is_file(),
-              f"the backwards-hop match keeps its .{ext} (hQ8sVn2LbTdF4wRm)")
+    # The two illegal-hop matches, named by test_illegal_play_steps and its JS
+    # mirror. They skip rather than fail without them -- everything else in them
+    # is synthetic -- so this is the only thing that would notice one going
+    # missing.
+    for stem, what in (("hQ8sVn2LbTdF4wRm", "backwards-hop"),
+                       ("rK7pXm4TqLb9NzWd", "ten-pip-hop")):
+        for ext in ("mat", "xg"):
+            check((root / ext / f"{stem}.{ext}").is_file(),
+                  f"the {what} match keeps its .{ext} ({stem})")
 
 
 def audit_js_references(root: Path) -> None:

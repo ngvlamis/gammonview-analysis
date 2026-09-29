@@ -40,6 +40,11 @@ where the played candidate of an illegal play gets its steps.
 New public API: `fit_alternative_steps` / `fitAlternativeSteps` in `export`, and
 `MAX_STEP_PIPS` (`binary.py`, `constants.js`).
 
+The match this was found on joins the sample corpus as `rK7pXm4TqLb9NzWd`, as
+both a `.mat` and an `.xg` — the two converters reach the set-position ply by
+different routes, as they do for `hQ8sVn2LbTdF4wRm` — and
+`test_illegal_play_steps` now names both.
+
 One existing sample moves: `hQ8sVn2LbTdF4wRm`'s 4-4 bear-off, which the diff
 matched as an 11-pip span and stored as 3, now splits into the four hops its
 notation states. Its `.mat` reference fixture was regenerated to match. The spec
