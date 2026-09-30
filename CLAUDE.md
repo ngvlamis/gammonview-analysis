@@ -342,6 +342,57 @@ in step when a flag changes; the rationale belongs only here.
   batch continues, exiting `1` if any failed. Analyzers are rebuilt per file
   (via `analyze_file`), so a large batch repays net-loading cost each file.
 
+## OGXM v2, and the reference codec as an oracle
+
+We write **OGXM v1** (`min_reader_minor` 3). Upstream froze v1 at 1.6 and now
+writes **v2** only — a different container (varint framing and presence masks
+instead of TLV chunks) reached through `min_reader_major = 2`, which our reader
+refuses cleanly rather than misparsing. `docs/OGXM_FORMAT_SPEC.md` in the
+HedgeHog checkout is the v2 spec; `docs/OGXM_V1_FORMAT_SPEC.md` is the frozen v1
+one.
+
+The thing that makes v2 work tractable is that **HedgeHog's own codec builds as
+a shared library with a C ABI**, so the rules can be asked rather than inferred
+from prose:
+
+```bash
+cd ~/projects/hedgehog-public && make libogxm      # -> build/libogxm.so
+```
+
+`tests/ogxm2_oracle.py` binds it (`check_json`, `json_to_binary`,
+`binary_to_json`, `v1_to_v2`, `is_field_name`) and holds no second copy of the
+format. It is **not a dependency**: the library is a build artifact of a separate
+MIT checkout, found if present and skipped if not, exactly as GammonView treats
+its sibling repo. `LIBOGXM_PATH` overrides the search and is authoritative — set
+to something that does not resolve, it fails rather than falling back. A library
+built before v2 loads and then fails on the first v2 call, so the loader checks
+its symbols and says "rebuild" instead; a stale `.so` is the likely state of any
+checkout used for v1 work.
+
+`tests/test_ogxm2_reference.py` is the ratchet. It runs each golden through the
+reference `v1_to_v2` — the frozen v1 reader, its JSON projection and the v2
+writer in composition (v2 spec 13.8) — against a **pinned** table of outcomes.
+A file that converts is one whose content already satisfies the v2 rules
+whatever its framing; a refusal names the rule to deal with. Never edit a row to
+make a run pass.
+
+Four of the five goldens convert clean. The one refusal, and a second shape
+found on the wider corpus, are the same subject: how an illegal play is recorded
+(`samples/README.md` keeps three distinct shapes). `5nqfGw9bWG3deTaU` — a
+golden, so pinned — appends a synthetic alternative for a play the engine cannot
+enumerate, flagged `played` and `illegal_move` and scored by
+`post_move_analytics`, a different estimator from the ranked plays, so it
+routinely sorts above all of them: that breaks A1 and A4/A5.
+`rK7pXm4TqLb9NzWd` records a ten-pip hop as the position it left (`action_id`
+31), which the reference replay reads as a turn-order break; it has no golden,
+so it is documented but not pinned. v2 states both cases outright — the ply
+carries an `illegal` flag, no alternative is `is_played`, and `equity_loss` is
+written rather than derived — so these are writer *mapping* decisions, not v1
+bugs to fix.
+
+Measured on the goldens, v2 is **3.5–6.4% smaller** than the v1 we write, before
+any of the fields v1 has no room for.
+
 ## Checker play goes through `gvanalysis/checker_eval.py`
 
 Not `analyzer.checker_play` directly. bgsage screens every legal move at 1-ply,
