@@ -31,7 +31,7 @@ sys.path.insert(0, str(_REPO_ROOT))
 from gvformat import convert_xg, parse_ogid  # noqa: E402
 from gvformat.bgf import _build_alternatives as _bgf_build_alternatives  # noqa: E402
 from gvformat.export import _checker_analysis, _flip_board  # noqa: E402
-from gvformat.reader import _apply_moves_p1  # noqa: E402
+from gvformat.reader import _apply_moves_p1, read_gvab  # noqa: E402
 
 _SAMPLES = _REPO_ROOT / "samples" / "xg"
 
@@ -85,10 +85,19 @@ def main() -> int:
         "probs": [0.5, 0.1, 0.01, 0.1, 0.01],
     }]
 
+    # A blot on the same intermediate, which is legal to land on but only by
+    # hitting -- and "24/18" records no hit, so this play went round it too.
+    blot_19 = [0] * 26
+    blot_19[24] = 1
+    blot_19[19] = -1
+
     # --- 1. The BGF alternatives builder ---------------------------------
     alts = _bgf_build_alternatives(options, False, 5, 1, primed_19)
     check([s["pips"] for s in alts[0]["move"]] == [1, 5],
           "bgf: an alternative steps around a made intermediate (1 first, via 23)")
+    alts = _bgf_build_alternatives(options, False, 5, 1, blot_19)
+    check([s["pips"] for s in alts[0]["move"]] == [1, 5],
+          "bgf: and around a blot, because this play did not hit")
     alts = _bgf_build_alternatives(options, False, 5, 1)
     check([s["pips"] for s in alts[0]["move"]] == [5, 1],
           "bgf: with no board the canonical larger-die-first order is kept")
@@ -98,6 +107,9 @@ def main() -> int:
     analysis = _checker_analysis(entry, False, 5, 1, 0, primed_19)
     check([s["pips"] for s in analysis["alternatives"][0]["move"]] == [1, 5],
           "analyze: an alternative steps around a made intermediate")
+    analysis = _checker_analysis(entry, False, 5, 1, 0, blot_19)
+    check([s["pips"] for s in analysis["alternatives"][0]["move"]] == [1, 5],
+          "analyze: and around a blot, because this play did not hit")
     analysis = _checker_analysis(entry, False, 5, 1, 0)
     check([s["pips"] for s in analysis["alternatives"][0]["move"]] == [5, 1],
           "analyze: with no board the canonical larger-die-first order is kept")
@@ -144,6 +156,47 @@ def main() -> int:
     check(total > 0, f"corpus alternatives replayed ({total})")
     check(stolen == 0,
           f"no alternative's steps take checkers off the opponent ({stolen} do)")
+
+    # --- 4. Two alternatives are never the same steps --------------------
+    # The check above cannot see a hop through a *blot*: that hit moves one
+    # opponent checker from the point to the bar, so the count is conserved and
+    # only a made point (a collapsing stack) trips it. What a blot breaks
+    # instead is uniqueness. Both routes from 13 to 3 with a 4-6 are legal, one
+    # via 7 and one via 9; when 7 holds a blot they are different plays, one
+    # hitting and one not, and both were candidates in the same move list. Split
+    # the non-hitting one through the blot and the two entries encode to
+    # identical steps -- the same play twice, carrying two different equities,
+    # and a reader is entitled to reject the file for it.
+    #
+    # Read off the goldens because those are real analyzer output: the corpora
+    # above are converted files, and this is the writing path's own bug.
+    golden = sorted((_REPO_ROOT / "tests" / "golden").glob("*.gvab"))
+    check(len(golden) > 0, f"goldens are present ({len(golden)} files)")
+
+    decisions = dupes = 0
+    for path in golden:
+        doc = read_gvab(path.read_bytes())
+        for game in doc.get("games", []):
+            for ply in game.get("plies", []):
+                an = ply.get("analysis")
+                for block in (an if isinstance(an, list) else [an]):
+                    alts = (block or {}).get("alternatives") or []
+                    if not alts:
+                        continue
+                    decisions += 1
+                    seen: dict[tuple, int] = {}
+                    for i, alt in enumerate(alts):
+                        key = tuple((s.get("from"), s.get("pips")) for s in alt["move"])
+                        if key in seen:
+                            dupes += 1
+                            if dupes <= 3:
+                                print(f"      {path.name}: dice {ply['d1']}-{ply['d2']} "
+                                      f"alternatives {seen[key]} and {i} both encode {list(key)}")
+                        seen.setdefault(key, i)
+
+    check(decisions > 0, f"golden checker decisions read ({decisions})")
+    check(dupes == 0,
+          f"no decision holds one play twice ({dupes} duplicated alternatives)")
 
     print(f"\n{_checks - len(_failures)}/{_checks} checks passed")
     return 1 if _failures else 0

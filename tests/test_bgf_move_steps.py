@@ -84,13 +84,17 @@ def main() -> int:
     check([s["pips"] for s in steps] == [6, 5],
           "the other block sends it the other way (6 first, via 12)")
 
-    # A lone enemy checker is a blot, not a block -- landing there is a hit and
-    # a perfectly legal route, so the canonical larger-die-first order stands.
+    # A lone enemy checker is a blot, not a block, so landing there is a legal
+    # route -- but it is a *hitting* one, and notation always spells a hit out
+    # ("18/12* 12/7"). A bare "18/7" is evidence the play did not go through 12,
+    # so a blot diverts the split just as a made point does. See
+    # tests/test_xg_move_steps.py for why only an unplayed alternative depends
+    # on this.
     blot_12 = [0] * 26
     blot_12[18] = 1
     blot_12[12] = -1
-    check([s["pips"] for s in _notation_to_steps("18/7", False, 5, 6, board=blot_12)] == [6, 5],
-          "a blot does not divert the split")
+    check([s["pips"] for s in _notation_to_steps("18/7", False, 5, 6, board=blot_12)] == [5, 6],
+          "a blot diverts the split, because this play did not hit")
 
     # No board (an unplayed alternative, which has only a notation string):
     # the tie-break still has to produce something deterministic.

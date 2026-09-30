@@ -81,13 +81,25 @@ def main() -> int:
     check([s["pips"] for s in _notation_to_steps("24/18", False, 5, 1)] == [5, 1],
           "with no board the canonical larger-die-first order is kept")
 
-    # A lone enemy checker is a blot, not a block: landing there is a hit and a
-    # perfectly legal route, so the canonical order stands.
+    # A lone enemy checker is a blot, not a block, so landing there is a legal
+    # route -- but it is a *hitting* one, and standard notation always spells a
+    # hit out ("24/19* 19/18"). A bare "24/18" is therefore evidence that this
+    # play did not go through 19, so the blot diverts the split exactly as a
+    # made point does.
+    #
+    # The played move never relies on this: `_compute_move_steps` passes
+    # `hit_points`, which is consulted first and routes through a blot that was
+    # really hit. It is an unplayed alternative, whose notation string is the
+    # only evidence there is, that the old canonical-order rule got wrong -- and
+    # since the hitting route is usually its own entry in the same move list,
+    # the two collapsed to identical steps (34 duplicated alternatives across
+    # the 11-match corpus, which a reader is entitled to reject: the same play
+    # cannot appear twice, and one of the two carried the other's equity).
     blot_19 = [0] * 26
     blot_19[24] = 1
     blot_19[19] = -1
-    check([s["pips"] for s in _notation_to_steps("24/18", False, 5, 1, board=blot_19)] == [5, 1],
-          "a blot does not divert the split")
+    check([s["pips"] for s in _notation_to_steps("24/18", False, 5, 1, board=blot_19)] == [1, 5],
+          "a blot diverts the split, because this play did not hit")
 
     # --- 2. The whole-file invariant -------------------------------------
     # Every ply's steps, replayed onto its own board-before, must land exactly

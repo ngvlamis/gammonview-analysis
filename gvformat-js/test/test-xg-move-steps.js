@@ -60,13 +60,16 @@ assert(JSON.stringify(froms(steps)) === '[24,23]',
 assert(JSON.stringify(pips(_notationToSteps('24/18', false, 5, 1))) === '[5,1]',
        'with no board the canonical larger-die-first order is kept');
 
-// A lone enemy checker is a blot, not a block: landing there is a hit and a
-// perfectly legal route, so the canonical order stands.
+// A lone enemy checker is a blot, not a block, so landing there is a legal
+// route -- but a *hitting* one, and notation always spells a hit out
+// ('24/19* 19/18'). A bare '24/18' is evidence this play did not go through 19,
+// so the blot diverts the split as a made point does. Only an unplayed
+// alternative depends on it; the played move passes hitPoints, which wins.
 const blot19 = new Array(26).fill(0);
 blot19[24] = 1;
 blot19[19] = -1;
-assert(JSON.stringify(pips(_notationToSteps('24/18', false, 5, 1, blot19))) === '[5,1]',
-       'a blot does not divert the split');
+assert(JSON.stringify(pips(_notationToSteps('24/18', false, 5, 1, blot19))) === '[1,5]',
+       'a blot diverts the split, because this play did not hit');
 
 // --- 2. The whole-file invariant -------------------------------------------
 // `parseOgid` hands back the board from the perspective of whoever owes the

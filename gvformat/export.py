@@ -405,9 +405,16 @@ def _split_span_nondouble(
          points is a point where a capture happened this ply, that's the
          true intermediate stop (mirrors ``compute_move_notation``'s own
          hit-based move splitting -- the same ambiguity, the same fix).
-      2. ``board``: otherwise prefer whichever intermediate point isn't
-         blocked by an opponent's made point (>=2 checkers), since landing
-         there would have been illegal.
+      2. ``board``: otherwise prefer an intermediate the mover could have
+         landed on *without hitting* -- empty, or one of their own. A made
+         point (<=-2) is excluded because landing there is illegal; a blot
+         (-1) is excluded because landing there is a hit, and we only reach
+         this branch when no hit was recorded at that point. Routing through
+         a blot anyway invents a capture: harmless to the board, which is
+         stated separately, but it makes the steps describe the *other*
+         candidate play -- the one that really did hit -- so two entries of
+         one move list collapse onto identical steps. That cost 34 duplicated
+         alternatives across the 11-match sample corpus.
 
     With neither signal (or both orders tied on it), the tie is broken by a
     canonical rule (larger die first) -- a real but rare residual ambiguity,
@@ -439,11 +446,11 @@ def _split_span_nondouble(
             if hit_order:
                 order = hit_order
             elif board is not None:
-                legal = [o for o in order if 1 <= o[2] <= 24 and board[o[2]] > -2]
+                legal = [o for o in order if 1 <= o[2] <= 24 and board[o[2]] >= 0]
                 if legal:
                     order = legal
         elif board is not None:
-            legal = [o for o in order if 1 <= o[2] <= 24 and board[o[2]] > -2]
+            legal = [o for o in order if 1 <= o[2] <= 24 and board[o[2]] >= 0]
             if legal:
                 order = legal
         first_d, second_d, mid = order[0]

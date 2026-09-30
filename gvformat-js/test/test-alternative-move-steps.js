@@ -52,10 +52,20 @@ const OPTIONS = [{
   probs: [0.5, 0.1, 0.01, 0.1, 0.01],
 }];
 
+// A blot on the same intermediate, which is legal to land on but only by
+// hitting -- and '24/18' records no hit, so this play went round it too. Split
+// it through the blot and these steps become the sibling candidate's, the one
+// that really did hit, so one move list holds the same play twice.
+const blot19 = new Array(26).fill(0);
+blot19[24] = 1;
+blot19[19] = -1;
+
 // --- 1. The BGF alternatives builder ---------------------------------------
 
 assert(JSON.stringify(pips(buildAlternatives(OPTIONS, false, 5, 1, primed19)[0].move)) === '[1,5]',
        'bgf: an alternative steps around a made intermediate (1 first, via 23)');
+assert(JSON.stringify(pips(buildAlternatives(OPTIONS, false, 5, 1, blot19)[0].move)) === '[1,5]',
+       'bgf: and around a blot, because this play did not hit');
 assert(JSON.stringify(pips(buildAlternatives(OPTIONS, false, 5, 1)[0].move)) === '[5,1]',
        'bgf: with no board the canonical larger-die-first order is kept');
 
@@ -64,6 +74,8 @@ assert(JSON.stringify(pips(buildAlternatives(OPTIONS, false, 5, 1)[0].move)) ===
 const entry = { move_options: OPTIONS };
 assert(JSON.stringify(pips(_checkerAnalysis(entry, false, 5, 1, 0, primed19).alternatives[0].move)) === '[1,5]',
        'analyze: an alternative steps around a made intermediate');
+assert(JSON.stringify(pips(_checkerAnalysis(entry, false, 5, 1, 0, blot19).alternatives[0].move)) === '[1,5]',
+       'analyze: and around a blot, because this play did not hit');
 assert(JSON.stringify(pips(_checkerAnalysis(entry, false, 5, 1, 0).alternatives[0].move)) === '[5,1]',
        'analyze: with no board the canonical larger-die-first order is kept');
 

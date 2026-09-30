@@ -62,13 +62,15 @@ blocked13[13] = -2;          // the mirror case: now 18/13 is the illegal one
 assert(JSON.stringify(pips(_notationToSteps('18/7', false, 5, 6, blocked13))) === '[6,5]',
        'the other block sends it the other way (6 first, via 12)');
 
-// A lone enemy checker is a blot, not a block -- landing there is a hit and a
-// perfectly legal route, so the canonical larger-die-first order stands.
+// A lone enemy checker is a blot, not a block, so landing there is a legal
+// route -- but a *hitting* one, and notation always spells a hit out
+// ('18/12* 12/7'). A bare '18/7' is evidence the play did not go through 12, so
+// a blot diverts the split just as a made point does.
 const blot12 = new Array(26).fill(0);
 blot12[18] = 1;
 blot12[12] = -1;
-assert(JSON.stringify(pips(_notationToSteps('18/7', false, 5, 6, blot12))) === '[6,5]',
-       'a blot does not divert the split');
+assert(JSON.stringify(pips(_notationToSteps('18/7', false, 5, 6, blot12))) === '[5,6]',
+       'a blot diverts the split, because this play did not hit');
 
 // No board (an unplayed alternative, which has only a notation string): the
 // tie-break still has to produce something deterministic.

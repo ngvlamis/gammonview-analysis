@@ -285,16 +285,21 @@ function _splitSpanNondouble(f, t, d1, d2, board, hitPoints) {
     // silently picking different intermediate stops for the identical
     // physical move (see gvformat/export.py's _split_span_nondouble).
     let order = d1 >= d2 ? [[d1, d2, mid1], [d2, d1, mid2]] : [[d2, d1, mid2], [d1, d2, mid1]];
+    // With no hit recorded at either candidate, the intermediate must be one
+    // the mover could reach without hitting: empty or their own. A made point
+    // (<= -2) is illegal to land on; a blot (-1) would be a capture this play
+    // did not make, and routing through it makes these steps describe the
+    // sibling candidate that did hit -- two list entries, one step array.
     if (hitPoints) {
       const hitOrder = order.filter(o => o[2] >= 1 && o[2] <= 24 && hitPoints.has(o[2]));
       if (hitOrder.length) {
         order = hitOrder;
       } else if (board) {
-        const legal = order.filter(o => o[2] >= 1 && o[2] <= 24 && board[o[2]] > -2);
+        const legal = order.filter(o => o[2] >= 1 && o[2] <= 24 && board[o[2]] >= 0);
         if (legal.length) order = legal;
       }
     } else if (board) {
-      const legal = order.filter(o => o[2] >= 1 && o[2] <= 24 && board[o[2]] > -2);
+      const legal = order.filter(o => o[2] >= 1 && o[2] <= 24 && board[o[2]] >= 0);
       if (legal.length) order = legal;
     }
     const [firstD, secondD, mid] = order[0];
