@@ -1287,12 +1287,17 @@ def convert_xg(xg_path: Path) -> dict:
                         # Truncating it would corrupt every board after this
                         # one, so state the resulting position outright -- what
                         # action 31 is for (the spec notes its optional dice are
-                        # exactly this case). The play is not scored; it broke
-                        # the rules. It is still *shown*, read back out of the
-                        # board diff, which is the only way a backwards hop
-                        # displays.
+                        # exactly this case). The play is still *shown*, read
+                        # back out of the board diff, which is the only way a
+                        # backwards hop displays -- and XG's judgement of it
+                        # rides along, exactly as it does on the illegal plays
+                        # that happen to fit a dice ply (see
+                        # ``set_position_ply``). It stays out of PR through
+                        # ``illegal_move``/``decision``, not through being
+                        # dropped.
                         ply: dict = set_position_ply(
-                            is_white, d1, d2, board_after, ogid_before, ogid_after)
+                            is_white, d1, d2, board_after, ogid_before,
+                            ogid_after, analysis)
                     else:
                         ply = {
                             "color": 1 if is_white else 0,

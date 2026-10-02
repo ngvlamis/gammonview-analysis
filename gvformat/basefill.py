@@ -46,8 +46,12 @@ import re
 
 from .met import mwc_anchors
 
-# Checker plays sit at action ids 0-20; 21-23 are the cube.
+# Checker plays sit at action ids 0-20; 21-23 are the cube. Action 31 joins the
+# first group when it carries analysis: that is a restated play, an illegal one
+# no dice ply could encode (see ``export.set_position_ply`` and
+# ``stats._ACTION_SET_POSITION``).
 _MAX_CHECKER_ACTION_ID = 20
+_ACTION_SET_POSITION = 31
 _TAKE_PASS_ACTIONS = frozenset({22, 23})
 
 # Mirrors gvformat.xg._CHECKER_SPREAD_EPS / xg2gva's CHECKER_SPREAD_EPS.
@@ -263,7 +267,14 @@ def complete_base_block(block_obj: dict, ply_by_key: dict, analysis_info: dict |
             _normalize_cube(analysis.get("missed_double"), to_equity)
 
         action_id = ply.get("action_id")
-        if action_id is not None and action_id <= _MAX_CHECKER_ACTION_ID:
+        # A set-position ply with dice is a play that broke the rules, restated
+        # as the board it produced -- that is the only thing a producer writes
+        # one for, so the flag the base format cannot carry is derivable here,
+        # and it is what keeps the play out of the decision count below.
+        if action_id == _ACTION_SET_POSITION and ply.get("d1") is not None:
+            analysis["illegal_move"] = True
+        if action_id is not None and (action_id <= _MAX_CHECKER_ACTION_ID
+                                      or action_id == _ACTION_SET_POSITION):
             analysis["decision"] = _checker_is_decision(analysis)
         elif analysis.get("no_double_equity") is not None:
             analysis["decision"] = _cube_ply_is_decision(ply, analysis)

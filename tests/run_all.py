@@ -63,6 +63,7 @@ ENGINE_BACKED = frozenset({
     "test_ogxm_stats.py",
     "test_read_gvab.py",
     "test_reconstruct_mat.py",
+    "test_restated_play_analysis.py",
     "test_screened_checker.py",
 })
 

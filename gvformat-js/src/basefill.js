@@ -37,8 +37,12 @@
 
 import { mwcAnchors } from './met.js';
 
-// Checker plays sit at action ids 0-20; 21-23 are the cube.
+// Checker plays sit at action ids 0-20; 21-23 are the cube. Action 31 joins the
+// first group when it carries analysis: that is a restated play, an illegal one
+// no dice ply could encode (see `setPositionPly` in export.js and
+// `_ACTION_SET_POSITION` in stats.js).
 const _MAX_CHECKER_ACTION_ID = 20;
+const _ACTION_SET_POSITION = 31;
 const _TAKE_PASS_ACTIONS = new Set([22, 23]);
 
 // Mirrors gvformat.xg._CHECKER_SPREAD_EPS / xg2gva's CHECKER_SPREAD_EPS.
@@ -223,7 +227,15 @@ export function completeBaseBlock(blockObj, plyByKey, analysisInfo) {
       _normalizeCube(analysis.missed_double, toEquity);
     }
 
-    if (ply.action_id != null && ply.action_id <= _MAX_CHECKER_ACTION_ID) {
+    // A set-position ply with dice is a play that broke the rules, restated as
+    // the board it produced -- that is the only thing a producer writes one for,
+    // so the flag the base format cannot carry is derivable here, and it is what
+    // keeps the play out of the decision count below.
+    if (ply.action_id === _ACTION_SET_POSITION && ply.d1 != null) {
+      analysis.illegal_move = true;
+    }
+    if (ply.action_id != null && (ply.action_id <= _MAX_CHECKER_ACTION_ID
+                                  || ply.action_id === _ACTION_SET_POSITION)) {
       analysis.decision = _checkerIsDecision(analysis);
     } else if (analysis.no_double_equity != null) {
       analysis.decision = _cubePlyIsDecision(ply, analysis);

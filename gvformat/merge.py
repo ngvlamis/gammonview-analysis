@@ -14,7 +14,8 @@ The base document's match body (games, plies, OGIDs, orientation, clock) is
 kept **verbatim**; only per-ply ``analysis``/``analyses`` and the top-level
 analysis metadata change. ``our``'s analysis objects are transplanted onto the
 base's plies by decision-ply order (``our`` carries only decision plies; the
-base may also have terminal/set-position plies, which never take analysis).
+base may also have terminal plies, which take no analysis -- see
+``_is_decision``).
 
 Both documents must share orientation (same ``player_white``) — analysis move
 steps live in the absolute frame, so a mismatch would mirror them. Callers
@@ -32,17 +33,25 @@ MAX_ANALYSES = 16
 
 
 def _is_decision(ply: dict) -> bool:
-    """True for a checker/cube action ply (id 0-23), which can carry analysis.
-    Terminal (24-30) and set-position (31) plies cannot."""
+    """True for a ply this alignment pairs up: a checker/cube action (id 0-23),
+    or a *restated play* -- a set-position ply (31) carrying the roll's dice,
+    which is an illegal play no dice ply could encode (see
+    ``export.set_position_ply``). Both documents reach such a ply by the same
+    route, so both list it here and the pairing stays 1:1.
+
+    Terminal plies (24-30) hold no decision at all, and a set-position ply with
+    *no* dice states where a game starts rather than a turn taken."""
     aid = ply.get("action_id")
-    return aid is not None and 0 <= aid <= 23
+    if aid is None:
+        return False
+    return (0 <= aid <= 23) or (aid == 31 and ply.get("d1") is not None)
 
 
 def _decision_analyses(game: dict) -> list[dict | None]:
     """Per-decision analysis objects for one ``our`` game, in ply order — each
     decision ply's ``analysis`` (``None`` when it has nothing to report).
     Terminal/set-position plies are skipped so this aligns 1:1 with the base's
-    decision plies."""
+    decision plies (see ``_is_decision``)."""
     return [ply.get("analysis") for ply in game.get("plies") or [] if _is_decision(ply)]
 
 

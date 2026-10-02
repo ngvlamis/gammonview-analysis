@@ -315,7 +315,7 @@ threshold policy over `equity_loss` that the reader owns (see
 | `ogid_before` | string | OGID before this ply (reconstructed, output only) |
 | `ogid_after` | string | OGID after this ply (reconstructed, output only) |
 | `timestamp_ms` | uint32 | **Optional.** Milliseconds from match start (from clock data) |
-| `analysis` | Analysis | **Optional.** Inline analysis for this ply (the primary analysis) |
+| `analysis` | Analysis | **Optional.** Inline analysis for this ply (the primary analysis). A set-position ply carrying dice is a restated play and takes a *checker* analysis, same as the dice ply it stands in for |
 | `analyses` | Analysis[] | **Optional.** Present only in multi-analysis mode: one entry per analysis with an eval here, each carrying an extra `analysis_index` (uint) into `analyses_info` |
 
 ### Move
@@ -334,6 +334,15 @@ which is exactly what makes the play illegal. Where even that does not fit, the
 play is written as a set-position ply (action_id 31) stating the resulting
 board. Either way the ply replays to the position the source recorded — a
 truncated play would leave every later board in the game wrong.
+
+A restated play still carries its `analysis`, and it is a checker analysis like
+any other: the alternatives name the plays that were available, `luck` is the
+roll's, and `illegal_move` is what keeps the play out of PR and decision
+counting. Only the *steps* were lost, and nothing in the analysis needs them --
+an illegal play's own alternative has no steps either way (see **Move** above).
+So `analysis` must not depend on which rung the play landed on; otherwise the
+same illegal play shows its error in one game and nothing in the next, decided
+by whether its longest hop happened to fit three bits.
 
 Two shapes of hop have no step at all and go straight to the set-position ply.
 One runs *backwards*: `pips` is an unsigned forward distance, so no step can

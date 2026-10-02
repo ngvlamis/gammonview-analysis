@@ -1180,7 +1180,7 @@ export async function convertBgf(fileInput) {
         : plyMoves;
       if (fitted === null) {
         plies.push(setPositionPly(
-          isWhite, d1, d2, canonBoard(board), ogidBefore, ogidAfter));
+          isWhite, d1, d2, canonBoard(board), ogidBefore, ogidAfter, analysis));
         idx++;
         continue;
       }

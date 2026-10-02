@@ -1354,7 +1354,8 @@ def convert_bgf(bgf_path: Path) -> dict:
                       if 0 <= action_id <= 20 else ply_moves)
             if fitted is None:
                 plies.append(set_position_ply(
-                    is_white, d1, d2, _canon_board(board), ogid_before, ogid_after))
+                    is_white, d1, d2, _canon_board(board), ogid_before, ogid_after,
+                    analysis))
                 idx += 1
                 continue
 

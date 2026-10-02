@@ -715,17 +715,29 @@ def fit_alternative_steps(
 
 def set_position_ply(
     mover_is_white: bool, d1: int, d2: int, board_after_p1: list[int],
-    ogid_before: str, ogid_after: str,
+    ogid_before: str, ogid_after: str, analysis: dict | None = None,
 ) -> dict:
     """An illegal play restated as the position it produced (action 31).
 
     The third rung of ``fit_move_steps``. No checker ply can carry the play and
     truncating it would corrupt every board after this one, so state the
     resulting position outright -- what action 31 is for (the spec notes its
-    optional dice are exactly this case). The play itself is lost; it broke the
-    rules, so there is no move to score.
+    optional dice are exactly this case). The play's *steps* are lost; the play
+    is read back out of the board diff.
+
+    ``analysis`` is the ply's checker analysis, carried through unchanged. A
+    restated play is still a play -- the same play the source judged -- and the
+    encoding it needed is no reason to drop what the source said about it.
+    Nothing about the analysis depends on the steps: the alternatives name the
+    plays that were available, and an illegal play's own candidate already
+    carries no steps (``fit_alternative_steps``). It stays out of PR and
+    decision counting the same way it would on a dice ply -- through
+    ``analysis.illegal_move`` and ``decision: false``, not through being
+    thrown away. Until Oct 2026 it *was* thrown away, so the same illegal play
+    showed its error and its alternatives in one game and nothing at all in the
+    next, decided by whether its longest hop happened to fit three bits.
     """
-    return {
+    ply: dict = {
         "color": 1 if mover_is_white else 0,
         "action_id": 31,
         "d1": d1,
@@ -734,6 +746,9 @@ def set_position_ply(
         "ogid_before": ogid_before,
         "ogid_after": ogid_after,
     }
+    if analysis:
+        ply["analysis"] = analysis
+    return ply
 
 
 # ---------------------------------------------------------------------------
@@ -1113,20 +1128,40 @@ def _convert_checker_ply(entry: dict, player_white: str, score_white: int, score
         match_length=match_length, crawford=crawford, move_id=turn.move_id,
     )
 
-    # This path derives steps from a board diff, so it has no notation of its
-    # own -- the .mat converter threads the source's through on the entry (see
-    # mat._decisions_to_moves) precisely so the middle rung is reachable here.
+    # An entry that arrives with the source's own steps needs none of the ladder
+    # below: they came *out* of a ply record, so they fit one, and they are the
+    # play as recorded rather than a reading of it. The OGXM path sets them (see
+    # gvanalysis.ogxm_reconstructor), which matters because a board diff cannot
+    # always be split back into the hops that made it -- a 4-4 bear-off can match
+    # as a single 11-pip span, and re-deriving one would restate a legal play as
+    # a set position and stop the analysis lining up with the document it came
+    # from.
+    #
+    # Otherwise this path derives steps from a board diff, so it has no notation
+    # of its own -- the .mat converter threads the source's through on the entry
+    # (see mat._decisions_to_moves) precisely so the middle rung is reachable
+    # here.
     #
     # The diff is also asked directly whether any checker moved backwards, and
     # not only through the notation: an entry that arrives without one still has
     # to reach the set-position rung rather than lose the hop silently.
-    steps = None if board_diff_has_non_forward_hop(board_before, board_after, is_white) else \
-        fit_move_steps(
-            _compute_move_steps(board_before, board_after, is_white, d1, d2),
-            entry.get("notation") or entry.get("player_move"), is_white, d1, d2,
-        )
+    source_steps = entry.get("move_steps")
+    if source_steps:
+        steps = [dict(st) for st in source_steps]
+    else:
+        steps = None if board_diff_has_non_forward_hop(board_before, board_after, is_white) else \
+            fit_move_steps(
+                _compute_move_steps(board_before, board_after, is_white, d1, d2),
+                entry.get("notation") or entry.get("player_move"), is_white, d1, d2,
+            )
+    analysis = _checker_analysis(
+        entry, is_white, d1, d2, base_ply,
+        board_before if is_white else _flip_board(board_before),
+    )
+
     if steps is None:
-        return set_position_ply(is_white, d1, d2, board_after, ogid_before, ogid_after)
+        return set_position_ply(is_white, d1, d2, board_after, ogid_before,
+                                ogid_after, analysis)
 
     ply = {
         "color": 1 if is_white else 0,
@@ -1136,10 +1171,6 @@ def _convert_checker_ply(entry: dict, player_white: str, score_white: int, score
         "ogid_before": ogid_before,
         "ogid_after": ogid_after,
     }
-    analysis = _checker_analysis(
-        entry, is_white, d1, d2, base_ply,
-        board_before if is_white else _flip_board(board_before),
-    )
     if analysis is not None:
         ply["analysis"] = analysis
     return ply

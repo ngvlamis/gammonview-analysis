@@ -766,7 +766,11 @@ function _gather_evals(games, select) {
       const action_id = _raw !== null && _raw !== undefined ? Number(_raw) : 30;
       const analysis = select(ply);
       if (analysis === null || typeof analysis !== 'object') continue;
-      if (action_id >= 0 && action_id <= 20) {
+      // A set-position ply carrying analysis is an illegal play no dice ply
+      // could hold (`export.js`'s `setPositionPly`), so its analysis is a
+      // checker analysis like any other -- an EVAL entry is keyed by
+      // (game, ply) index and never looks at the ply's action.
+      if ((action_id >= 0 && action_id <= 20) || action_id === ACTION_SET_POSITION) {
         checker_evals.push(_build_checker_eval(game_index, pi, analysis));
         // missed_double and cube_decision are mutually exclusive per ply
         // (mirrors ogxm_json.cpp's if/else): both map to base CUBE entries

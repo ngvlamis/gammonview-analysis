@@ -604,6 +604,13 @@ def _eval_checker_decision(dec: dict, ctx: _EvalCtx) -> _DecResult:
     _require_playable(dec, ctx)
     res = _DecResult()
     die1, die2 = dec["dice"]
+    # The play as the two boards describe it. The source's own notation is better
+    # where there is one (``dec["notation"]``, which the .mat reader sets and the
+    # OGXM path cannot), but this is always available, and an illegal play that
+    # went unnamed below is a play the document cannot show at all.
+    played_notation = (dec.get("notation")
+                       or compute_move_notation(dec["board"], dec["board_played"],
+                                                die1, die2))
     analyzed = False
     illegal_move = False
     checker_err: float | None = None
@@ -843,7 +850,7 @@ def _eval_checker_decision(dec: dict, ctx: _EvalCtx) -> _DecResult:
                             checker_err = max(0.0, best_eq - played_eq)
                             analyzed = True
                             illegal_opt: dict = {
-                                "move": dec.get("notation", ""),
+                                "move": played_notation,
                                 "equity": round(played_eq, 4),
                                 "eval_level": ctx.eval_label(moves[0].eval_level),
                                 "probs": _probs_list(post.probs),
@@ -917,6 +924,11 @@ def _eval_checker_decision(dec: dict, ctx: _EvalCtx) -> _DecResult:
         # boards, which is the thing that cannot be collapsed safely when an
         # illegal play overflows its ply record (export.fit_move_steps).
         "notation": dec.get("notation"),
+        # The steps the source recorded for this play, where it had them (the
+        # OGXM path sets it; see ogxm_reconstructor). The exporter prefers them
+        # to anything it can re-derive from the two boards -- a board diff cannot
+        # always be split back into the hops that made it.
+        "move_steps": dec.get("move_steps"),
         "move_options": alternatives,
         # Boards in P1/White perspective for OGXM export (ogid + structured move steps).
         "board_before": _board_p1(dec["board"], dec["is_p1"]),

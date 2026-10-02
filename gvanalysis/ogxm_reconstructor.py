@@ -85,7 +85,19 @@ def reconstruct_game_decisions(
         aid = ply.get("action_id")
         is_white = bool(ply.get("color"))
 
-        if aid is not None and 0 <= aid <= 20:            # checker move
+        # A set-position ply carrying dice is a *restated play*: an illegal play
+        # no dice ply could encode, written as the board it produced (see
+        # ``gvformat.export.set_position_ply``). It is a turn like any other --
+        # the player was on roll, faced the cube and played something -- so it
+        # reconstructs as a checker decision, with the stated board standing in
+        # for the play. ``game_eval`` then finds no legal move that reaches that
+        # board and takes its illegal-play path, which is exactly right: that is
+        # what the ply records. The dice are what tell it from the set-position
+        # ply that opens an exported position, which states where a game starts
+        # and is no turn at all.
+        is_restated_play = aid == 31 and ply.get("d1") is not None
+
+        if (aid is not None and 0 <= aid <= 20) or is_restated_play:  # checker move
             away_m, away_o = _away(sw, sb, match_length, is_white)
             owner_rel = _cube_owner_rel(cube_owner_abs, is_white)
             board_mover = _mover_frame(board_p1, is_white)
@@ -111,10 +123,16 @@ def reconstruct_game_decisions(
                     "is_crawford": crawford,
                 })
 
+            # A restated play has no steps -- nothing could express them -- so it
+            # states its board instead, and that board is the play.
             moves = ply.get("moves") or []
-            new_board_p1 = _apply_moves_p1(board_p1, moves, is_white)
+            if is_restated_play:
+                new_board_p1 = _absolute_to_p1(
+                    list(ply.get("set_position") or [0] * 26))
+            else:
+                new_board_p1 = _apply_moves_p1(board_p1, moves, is_white)
             board_played = _mover_frame(new_board_p1, is_white)
-            decisions.append({
+            dec: dict = {
                 "kind": "checker",
                 "board": board_mover,
                 "dice": [ply.get("d1"), ply.get("d2")],
@@ -126,8 +144,22 @@ def reconstruct_game_decisions(
                 "away1": away_m,
                 "away2": away_o,
                 "is_crawford": crawford,
-                "no_legal": not moves,
-            })
+                # A restated play is not a dance: there were legal moves, the
+                # player just made none of them. ``no_legal`` would route it to
+                # the forced-move branch and score it as one.
+                "no_legal": not moves and not is_restated_play,
+            }
+            # The ply's own steps, where it has them. They are the authoritative
+            # record of the play -- they came *out* of a ply record, so they fit
+            # one by construction -- and handing them to the exporter is what
+            # stops it re-deriving the play from a board diff that cannot always
+            # be split back into the hops that made it (a 4-4 bear-off matching
+            # as one 11-pip span, say). Without this the exporter restates a
+            # perfectly legal play as a set position, and the result no longer
+            # lines up with the document it was analyzed from.
+            if moves:
+                dec["move_steps"] = [dict(m) for m in moves]
+            decisions.append(dec)
             board_p1 = new_board_p1
             any_move_made = True
 
@@ -158,12 +190,13 @@ def reconstruct_game_decisions(
             if aid == 22:                                 # taker now owns the cube
                 cube_owner_abs = "W" if resp_is_white else "B"
 
-        elif aid == 31:                                   # set position
-            # No decision -- but the board it states is the one every later ply
-            # moves from, so it has to land on the running board. A mid-game
-            # set-position ply is how a converter records a play too illegal to
-            # express as checker steps (see gvformat.xg); skipping the board
-            # here would leave every decision after it on a stale position.
+        elif aid == 31:                                   # set position, no dice
+            # The opening position of an exported saved position: no turn, no
+            # decision. The board it states is still the one every later ply
+            # moves from, so it has to land on the running board -- skipping it
+            # would leave every decision after it on a stale position. (A
+            # set-position ply *with* dice is a restated play and was handled as
+            # a checker decision above, board included.)
             board_p1 = _absolute_to_p1(list(ply.get("set_position") or [0] * 26))
 
         # terminal (24-30): no decision.

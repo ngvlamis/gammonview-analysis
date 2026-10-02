@@ -1110,10 +1110,14 @@ export async function convertXg(fileBytes) {
             // say), or sending one backwards, which no step can express at all.
             // Truncating it would corrupt every board after this one, so state
             // the resulting position outright -- what action 31 is for (the spec
-            // notes its optional dice are exactly this case). The play is not
-            // scored; it broke the rules. It is still *shown*, read back out of
-            // the board diff, which is the only way a backwards hop displays.
-            ply = setPositionPly(isWhite, d1, d2, boardAfter, ogidBefore, ogidAfter);
+            // notes its optional dice are exactly this case). The play is still
+            // *shown*, read back out of the board diff, which is the only way a
+            // backwards hop displays -- and XG's judgement of it rides along,
+            // exactly as it does on the illegal plays that happen to fit a dice
+            // ply (see `setPositionPly`). It stays out of PR through
+            // `illegal_move`/`decision`, not through being dropped.
+            ply = setPositionPly(isWhite, d1, d2, boardAfter, ogidBefore, ogidAfter,
+                                 analysis);
           } else {
             ply = {
               color: isWhite ? 1 : 0,
