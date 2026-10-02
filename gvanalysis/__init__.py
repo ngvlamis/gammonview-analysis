@@ -42,10 +42,11 @@ Importing ``gvanalysis`` itself, and the engine-free tool submodules
 requirement only surfaces — with a clear message — when you actually reach for
 the analyzer.
 
-The ``.mat`` parser/converter is *not* here: it needs no engine, so it lives in
-the codec layer beside the other source-format converters — ``gvformat``'s
-``convert_mat``/``mat_to_ogxm`` (and ``mat_parser`` / ``game_reconstructor``),
-mirroring ``convert_xg`` and ``convert_bgf``.
+No source-format parser is here: none needs an engine, so they all live in the
+codec layer — ``gvformat``'s ``convert_xg``, ``convert_bgf`` and
+``convert_mat``/``mat_to_ogxm`` (with ``mat_parser`` / ``game_reconstructor``).
+``loader.load_ogxm`` only dispatches between them, which is why every entry
+point here takes any of their formats.
 """
 
 _ENGINE_HINT = (
@@ -77,14 +78,15 @@ def analyze_match(input_path, *, preset: str | None = None, quiet: bool = True, 
     ``write_gvab(analyze_file(p))``, and ``read_gvab`` of these bytes is that
     document back.
 
-    One call for the common server path: a match in (``.mat``, ``.gva``/
-    ``.ogxm``, or ``.gvab`` — OGXM is the internal representation, so ``.mat``
-    is converted first), canonical ``.gvab`` bytes out, carrying the match
-    *and* the analysis this call just ran (ready to store and ship to the
-    client). An OGXM input's existing analysis blocks are preserved and ours is
-    appended. Equivalent to ``write_gvab(analyze_file(...))``. Requires the
-    ``[engine]`` extra; without it, raises a ``ModuleNotFoundError`` explaining
-    how to install.
+    One call for the common server path: a match in (``.xg``, ``.bgf``,
+    ``.mat``, ``.gva``/``.ogxm``, or ``.gvab`` — OGXM is the internal
+    representation, so a source format is converted first), canonical ``.gvab``
+    bytes out, carrying the match *and* the analysis this call just ran (ready
+    to store and ship to the client). An input's existing analysis blocks are
+    preserved and ours is appended, so an ``.xg`` comes back with XG's
+    judgement and ours side by side. Equivalent to
+    ``write_gvab(analyze_file(...))``. Requires the ``[engine]`` extra; without
+    it, raises a ``ModuleNotFoundError`` explaining how to install.
 
     Extra keyword arguments go to ``analyze_ogxm``; notably ``jobs=0`` enables
     decision-level parallelism (off by default here, since this is a library

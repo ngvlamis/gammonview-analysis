@@ -16,7 +16,7 @@ BGF step splitters inferring the wrong intermediate point — were both found by
 board shape that no hand-picked match happened to contain. This is why the corpus
 is chosen for coverage rather than trimmed to a minimum.
 
-**Almost everything here is portable.** Nine tests read these files and seven
+**Almost everything here is portable.** Ten tests read these files and eight
 import no engine at all: parsing, byte round-trips and board replay are pure
 stdlib and land identically on any machine. Two reach bgsage:
 `test_illegal_play_steps`, and only in its closing section — to check that an
@@ -34,10 +34,14 @@ whether a corpus change broke a requirement.
 
 | Directory | Files | Read by |
 |---|---|---|
-| `mat/` | 13 `.mat` | `test_ogxm_pipeline`, `test_count_illegal`, `test_illegal_play_steps`, `test_restated_play_analysis`, and every engine test via `tests/fixtures.py` |
-| `xg/` | 13 `.xg` | `test_xg_move_steps`, `test_alternative_move_steps`, `test_xg_eval_levels`, `test_xg_zero_win_eval`, `test_illegal_play_steps`, `test_restated_play_analysis` |
-| `bgf/` | 11 `.bgf` | `test_bgf_move_steps` |
-| `gv/` | 11 `.gvab` + 1 `.gva` | `test_share_link`, `test_chunk_passthrough` |
+| `mat/` | 13 `.mat` | `test_ogxm_pipeline`, `test_count_illegal`, `test_illegal_play_steps`, `test_restated_play_analysis`, `test_loader_formats`, and every engine test via `tests/fixtures.py` |
+| `xg/` | 13 `.xg` | `test_xg_move_steps`, `test_alternative_move_steps`, `test_xg_eval_levels`, `test_xg_zero_win_eval`, `test_illegal_play_steps`, `test_restated_play_analysis`, `test_loader_formats` |
+| `bgf/` | 11 `.bgf` | `test_bgf_move_steps`, `test_loader_formats` |
+| `gv/` | 11 `.gvab` + 1 `.gva` | `test_share_link`, `test_chunk_passthrough`, `test_loader_formats` |
+
+`test_loader_formats` is in every row by design: it reads one match in all four
+source forms to check that `gvanalysis.loader` dispatches each to the converter
+it belongs to.
 
 The counts differ by a column because a match is added in whatever forms it
 arrived in. `hQ8sVn2LbTdF4wRm` and `rK7pXm4TqLb9NzWd` have no `.bgf` (BGBlitz

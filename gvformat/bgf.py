@@ -55,12 +55,25 @@ def _decompress_if_needed(b: bytes) -> bytes:
     return b
 
 
-def read_bgf(path: Path) -> tuple[dict, bytes]:
-    """Return ``(header_dict, smile_bytes)`` from a BGBlitz ``.bgf`` file."""
-    with path.open("rb") as f:
-        header = json.loads(f.readline().decode("utf-8"))
-        tail = f.read()
-    payload = _decompress_if_needed(tail)
+def read_bgf(source: "Path | str | bytes") -> tuple[dict, bytes]:
+    """Return ``(header_dict, smile_bytes)`` from a BGBlitz ``.bgf`` file -- a
+    path, or the bytes themselves.
+
+    Bytes are accepted because a caller does not always hold a file: a server is
+    handed an upload, and ``gvanalysis.loader`` has already decompressed a
+    ``.bgf.gz`` before it knows what it is reading. The JS mirror
+    (``convertBgf``) is bytes-only for the same reason.
+    """
+    raw = (bytes(source) if isinstance(source, (bytes, bytearray, memoryview))
+           else Path(source).read_bytes())
+    # A .bgf is one JSON header line, then the Smile payload (possibly
+    # compressed) -- so the first newline is the split, and a file without one
+    # is not a .bgf at all.
+    nl = raw.find(b"\n")
+    if nl < 0:
+        raise ValueError("Not a BGF file (no JSON header line).")
+    header = json.loads(raw[:nl].decode("utf-8"))
+    payload = _decompress_if_needed(raw[nl + 1:])
     if not payload.startswith(_SMILE_MAGIC):
         raise ValueError("Payload is not Smile (missing b':)\\n' magic).")
     return header, payload
@@ -992,12 +1005,12 @@ def _bgf_played_pairs(from_pts: list, to_pts: list) -> list[tuple[int, int]]:
 # ---------------------------------------------------------------------------
 
 
-def convert_bgf(bgf_path: Path) -> dict:
-    """Convert a BGBlitz ``.bgf`` file to OGXM JSON.
+def convert_bgf(source: "Path | str | bytes") -> dict:
+    """Convert a BGBlitz ``.bgf`` file -- a path, or its bytes -- to OGXM JSON.
 
     Returns a dict conforming to ``OGXM_JSON_SPEC_GAMMONVIEW.md``.
     """
-    header, smile_bytes = read_bgf(bgf_path)
+    header, smile_bytes = read_bgf(source)
     data = decode_smile(smile_bytes)
 
     name_green = str(data.get("nameGreen", ""))

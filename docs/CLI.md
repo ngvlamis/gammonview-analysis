@@ -27,6 +27,7 @@ Analyze a match file and compute per-decision PR.
 
 ```bash
 uv run gvan-match match.mat                          # writes match.gva beside it
+uv run gvan-match match.xg                           # an .xg: XG's analysis kept, ours added
 uv run gvan-match match.mat --preset world_class --gvab   # binary out
 uv run gvan-match match.gvab --preset fast           # analyze a binary, append
 uv run gvan-match match.mat --link                   # print a shareable URL
@@ -34,13 +35,16 @@ uv run gvan-match match.mat --link                   # print a shareable URL
 
 ### Input
 
-Takes `.mat` (Jellyfish/GNUbg), `.gva`/`.ogxm` (OGXM JSON) or `.gvab` (OGXM
-binary), optionally `.gz`. OGXM is the pipeline's internal representation, so a
-`.mat` is converted first.
+Takes `.xg` (eXtreme Gammon), `.bgf` (BGBlitz), `.mat` (Jellyfish/GNUbg),
+`.gva`/`.ogxm` (OGXM JSON) or `.gvab` (OGXM binary), optionally `.gz`. OGXM is
+the pipeline's internal representation, so a source format is converted first.
+The format is read from the file's own first bytes where it says so, and from
+the extension otherwise; a file nothing identifies is an error, not a guess.
 
-**An OGXM input keeps any analysis it already carries; ours is appended as a new
-block.** The format allows up to 16. Re-analyzing a file at a stronger preset
-therefore adds to it rather than replacing it.
+**An input keeps any analysis it already carries; ours is appended as a new
+block.** The format allows up to 16, so an `.xg` comes back with XG's judgement
+and ours side by side. Re-analyzing a file at a stronger preset likewise adds to
+it rather than replacing it.
 
 ### Output
 
@@ -118,15 +122,19 @@ changes wall-clock time and nothing else.
 
 ```bash
 uv run gvan-batch matches/*.mat                   # .gva beside each input
+uv run gvan-batch matches/*.xg                    # .xg/.bgf too
 uv run gvan-batch matches/ --preset world_class   # a directory = its matches
 uv run gvan-batch matches/*.mat --gvab
 uv run gvan-batch a.mat b.gvab --out-dir out/ --force
 ```
 
-A directory argument expands to its top-level `.mat`/`.gva`/`.ogxm`/`.gvab`.
+A directory argument expands to its top-level
+`.xg`/`.bgf`/`.mat`/`.gva`/`.ogxm`/`.gvab`.
 Existing outputs are skipped unless `--force` — so a `.gva` input whose output
-name equals it is skipped by default. A bad file is reported and the batch
-continues, exiting `1` if any failed.
+name equals it is skipped by default, as is the second of two forms of the same
+match (`m.xg` and `m.mat` name one output; `--force` makes the second overwrite
+the first). A bad file is reported and the batch continues, exiting `1` if any
+failed.
 
 The terminal shows only a file-level progress bar and a one-line summary; the
 per-file analysis output is suppressed.
@@ -186,8 +194,11 @@ uv run xg2gva match.xg  [out.gva]
 uv run bgf2gva match.bgf [out.gva]
 ```
 
-A `.mat` needs no CLI: `gvformat.mat_to_ogxm(text)` converts it in one call, and
-`gvan-match` does it for you.
+A `.mat` needs no CLI: `gvformat.mat_to_ogxm(text)` converts it in one call.
+
+These exist for conversion on its own. `gvan-match` and `gvan-batch` take `.xg`,
+`.bgf` and `.mat` directly, so converting first is not a step on the way to
+analysis.
 
 ---
 

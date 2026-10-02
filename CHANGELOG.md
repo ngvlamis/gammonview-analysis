@@ -95,6 +95,42 @@ New test: `test_restated_play_analysis` (engine-backed, ~30s) — both matches
 analyzed from their `.mat`, and one re-analyzed as the converted `.gvab` a server
 is handed, where XG's judgement of the play and ours end up side by side on it.
 
+**`gvan-match` takes an `.xg` or a `.bgf`** *(feature, and a fix underneath it)*
+
+Found while reproducing the above: handing the analyzer the very `.xg` the bug was
+reported on produced a cheerful empty analysis of a zero-game match. `load_ogxm`
+read `.mat`, `.gva`/`.ogxm` and `.gvab`, and *guessed* anything else was `.mat`
+text — and a `.mat` parser finds no games in an XG file, so the one input shape a
+user is most likely to have was the one that failed silently. `gvformat` has
+shipped `convert_xg` and `convert_bgf` all along, neither needs the engine, and
+the loader simply never called them.
+
+So it calls them. `gvan-match`, `gvan-batch`, `analyze_file`, `analyze_mat` and
+`analyze_match` now take `.xg` and `.bgf` directly, with the source's own analysis
+preserved and ours appended — an `.xg` in, XG's judgement and ours side by side
+out, with no conversion step in between. `read_xg` / `read_bgf` and
+`convert_xg` / `convert_bgf` accept **bytes as well as a path**, which is what the
+loader holds (it has already decompressed a `.gz` before it knows the format) and
+what a server is handed; the JS mirrors have always been bytes-only for that
+reason.
+
+And dispatch no longer guesses. It reads the file's own opening bytes first —
+`OGXM`, XG's `RGMH`, a `.bgf`'s one-line JSON header — so a mislabeled or
+extension-less file is read as what it is, and falls back to the extension only
+where the content cannot say. What nothing identifies now raises, naming every
+format that would have worked, rather than being run through the `.mat` parser.
+A `.mat` that yields no games raises too: it has no file signature, so "it
+parsed" proves nothing, and that is the last point at which a text file that is
+not a match can be told apart from one.
+
+`gvan-batch` expands a directory by `loader.INPUT_EXTENSIONS` now, so its list
+cannot fall behind the loader's again.
+
+New test: `test_loader_formats` (no engine, instant) — all five formats loading
+as the converter each one reaches, gzipped and not, mislabeled and
+extension-less, and the four inputs that must raise instead of returning an empty
+match.
+
 ## 1.3.0 — 2026-09-29
 
 **A hop longer than 7 pips is no longer written as a different move** *(fix)*

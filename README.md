@@ -64,17 +64,18 @@ Every command below is written `uv run …` for that checkout; from a plain
 
 ## Quickstart
 
-Server one-liner — analyze a dropped `.mat` and get the analyzed `.gvab` back,
+Server one-liner — analyze a dropped match and get the analyzed `.gvab` back,
 ready to store and ship to the client:
 
 ```python
 from gvanalysis import analyze_match
-data = analyze_match("match.mat", preset="world_class")   # analyzed .gvab bytes
+data = analyze_match("match.xg", preset="world_class")   # analyzed .gvab bytes
 ```
 
 It runs the engine over every decision, and the bytes carry the match *and* the
-analysis. Any input the codec reads works — `.mat`, `.gva`, `.gvab` — and one
-that already carries analysis keeps it, with ours appended.
+analysis. Any input the codec reads works — `.xg`, `.bgf`, `.mat`, `.gva`,
+`.gvab` — and one that already carries analysis keeps it, with ours appended, so
+an `.xg` comes back with XG's judgement and ours side by side.
 
 It returns `.gvab` (binary), always — that is the artifact to store and ship.
 For the JSON, `read_gvab(data)` is the `.gva`; to stop a step earlier and work
@@ -147,14 +148,14 @@ Entry points are defined in `pyproject.toml` and run with `uv run`:
 
 | CLI | What it does |
 |---|---|
-| `gvan-match` | Analyze a match (`.mat`, `.gva`/`.ogxm`, `.gvab`), compute per-move PR → `.gva`/`.gvab` |
+| `gvan-match` | Analyze a match (`.xg`, `.bgf`, `.mat`, `.gva`/`.ogxm`, `.gvab`), compute per-move PR → `.gva`/`.gvab` |
 | `gvan-batch` | The same over many files or a directory, one output each |
 | `gvan-position` | Analyze a single position from an **XGID or OGID** |
 | `xg2gva` | Convert an eXtreme Gammon `.xg` file to `.gva` JSON (no engine) |
 | `bgf2gva` | Convert a BGBlitz `.bgf` file to `.gva` JSON (no engine) |
 
 ```bash
-uv run gvan-match match.mat --preset world_class --gvab   # binary out, not .gva
+uv run gvan-match match.xg --preset world_class --gvab    # an .xg straight in, binary out
 uv run gvan-match match.gvab --preset fast                # re-analyze a binary, append
 uv run gvan-match match.mat --link                        # print a shareable URL
 uv run gvan-batch matches/ --preset fast                  # a dir -> its match files
@@ -162,8 +163,9 @@ uv run gvan-position "XGID=-b----E-C---eE---c-e----B-:0:-1:1:31:0:0:0:0"
 uv run gvan-position "11ccccchhhjjjjj:66666888dddddoo:N0N:13:B:R:0:0:0:0"
 ```
 
-An OGXM input keeps any analysis it already carries — ours is appended as a new
-block rather than replacing it. `--link` encodes the whole match into a
+An input keeps any analysis it already carries — ours is appended as a new
+block rather than replacing it. (`xg2gva`/`bgf2gva` exist for conversion on its
+own; analysis does not need them.) `--link` encodes the whole match into a
 `gammonview.com` URL fragment, so it needs no hosted file; `--browser` opens it.
 
 ### Analysis presets
