@@ -704,7 +704,7 @@ def analyze_file(input_path: "Path | str", **kwargs) -> dict:
     """
     base = load_ogxm(input_path)
     data = analyze_ogxm(base, **kwargs)
-    return append_analysis(base, to_ogxm_json(data))
+    return append_analysis(base, to_ogxm_json(data, keep_orientation=True))
 
 
 def main() -> None:

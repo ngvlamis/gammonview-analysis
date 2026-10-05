@@ -13,6 +13,20 @@ when the repository was opened; they are kept because they record why things
 are the way they are — particularly the breaking changes and the measurements
 behind several design decisions. Dates are the tag dates.
 
+## 1.5.1 — 2026-10-05
+
+**Analyzing a document keeps its White** *(fix)*
+
+`analyze_file` appends its analysis onto the document it was given, and
+`append_analysis` requires both to name the same White. `to_ogxm_json` always
+chose White alphabetically, so a document whose White did not sort first was
+analyzed to the last decision and then refused with `orientation mismatch`.
+Every converter we own orients alphabetically, which hid it; a HedgeHog
+`.ogxm` names White by its own seats, so an unanalyzed one sent to the server
+failed at the end of the run. `to_ogxm_json(..., keep_orientation=True)` takes
+White from the analyzed document, and `analyze_file` passes it.
+`tests/test_analysis_orientation.py`. Python only; no npm release.
+
 ## 1.5.0 — 2026-10-05
 
 **`read_gvab` reads OGXM v2** *(feature)*

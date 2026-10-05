@@ -1380,18 +1380,28 @@ def _convert_game(game: dict, player_white: str, player_black: str, match_length
     return game_obj
 
 
-def to_ogxm_json(result: dict) -> dict:
+def to_ogxm_json(result: dict, *, keep_orientation: bool = False) -> dict:
     """Convert an ``analyze_mat(...)``-shaped result dict into OGXM-JSON.
 
     Pure function: performs no bgsage/engine calls. ``result`` must have the
     GVA shape produced by ``gvan_match.analyze_mat`` (top-level ``summary``
     + ``games`` with each game's ``moves`` list; see ``game_eval.py`` for
     the exact per-entry shapes this function reads).
+
+    White is the alphabetically-first player, unless ``keep_orientation``:
+    then it is ``summary["player1"]``, as given. An analysis of an existing
+    OGXM document passes it, because that analysis is appended onto the
+    document (``merge.append_analysis``) and must share its orientation --
+    and a document from another program (a HedgeHog ``.ogxm``) names White
+    by its own seats, not by the alphabet.
     """
     summary = result["summary"]
-    player_white, player_black, p1_is_white = _canonical_orientation(
-        summary["player1"], summary["player2"],
-    )
+    if keep_orientation:
+        player_white, player_black, p1_is_white = summary["player1"], summary["player2"], True
+    else:
+        player_white, player_black, p1_is_white = _canonical_orientation(
+            summary["player1"], summary["player2"],
+        )
     match_length = summary.get("match_length") or 0
 
     eval_level = _normalize_eval_level(summary.get("eval_level")) or "2ply"
