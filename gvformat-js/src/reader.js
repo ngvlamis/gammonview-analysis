@@ -18,6 +18,7 @@ import {
 import { board_to_ogid } from './ogid.js';
 import { completeBaseBlock } from './basefill.js';
 import { splitPlace } from './place.js';
+import { _readOgxm2 } from './ogxm2.js';
 import {
   _STARTING_BOARD_P1, _TurnState, _ogid, _flipBoard as _flip_board,
   _OGID_STATE_INITIAL_BOTH, _OGID_STATE_ROLLED, _OGID_STATE_CHECKER_DONE,
@@ -874,6 +875,13 @@ function _readGvab(data, options) {
   if (magic !== OGXM_MAGIC) {
     throw new GvabError(`bad magic 0x${magic.toString(16).toUpperCase().padStart(8, '0')} (expected 0x${OGXM_MAGIC.toString(16).toUpperCase().padStart(8, '0')})`);
   }
+  // OGXM v2 is a different container under the same magic -- a 16-byte header,
+  // varint-framed records, plies addressed by one ordinal -- so it is decoded
+  // separately and handed back in the shape this function returns. HedgeHog
+  // writes nothing else since its 2.0 release. Dispatched before the
+  // min_reader check below, which a v2 file fails by design (its min reader
+  // major is 2, precisely so that v1 readers refuse it cleanly).
+  if (_vmaj >= 2) return _readOgxm2(data, options);
   // min_reader_* is the file's own statement of the spec version it needs.
   // Honouring it is the point of the field: a file using a later layout must
   // fail as a clean version mismatch, not be parsed optimistically into
@@ -1063,6 +1071,22 @@ function _readGvab(data, options) {
     blocks.push([analysisInfo, blockObj]);
   }
 
+  _attachBlocks(ogxm, blocks, plyByKey);
+
+  if (unknown.length) ogxm._unknown_chunks = unknown;
+  if (baseBlocks.length) ogxm._base_analyses = baseBlocks;
+
+  return ogxm;
+}
+
+/**
+ * Hang decoded analysis blocks on the plies they describe.
+ *
+ * `blocks` is `[analysisInfo, Map<"gameIndex,plyIndex", analysis>]` per block,
+ * primary first. Shared with `ogxm2.js`, which builds the same pairs from a v2
+ * file, so the two versions cannot disagree about the shape that comes out.
+ */
+function _attachBlocks(ogxm, blocks, plyByKey) {
   if (blocks.length === 1) {
     const [info, blockObj] = blocks[0];
     for (const [key, obj] of blockObj) {
@@ -1088,11 +1112,6 @@ function _readGvab(data, options) {
       }
     }
   }
-
-  if (unknown.length) ogxm._unknown_chunks = unknown;
-  if (baseBlocks.length) ogxm._base_analyses = baseBlocks;
-
-  return ogxm;
 }
 
 function canonicalize(ogxm) {
@@ -1107,4 +1126,9 @@ export {
   // Python's twin is likewise reached directly by gvanalysis.ogxm_reconstructor.
   _applyMovesP1,
   _absoluteToP1,
+  // Shared with ogxm2.js, which reads v2 into this reader's output shape.
+  _deriveOgids,
+  _attachBlocks,
+  _evalFromProbs,
+  _cubeActionLabel,
 };

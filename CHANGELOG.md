@@ -13,6 +13,43 @@ when the repository was opened; they are kept because they record why things
 are the way they are — particularly the breaking changes and the measurements
 behind several design decisions. Dates are the tag dates.
 
+## 1.5.0 — 2026-10-05
+
+**`read_gvab` reads OGXM v2** *(feature)*
+
+HedgeHog writes v2 and nothing else since its 2.0 release, so every `.ogxm`
+downloaded from hedgehog-bg.com failed a v1 reader's version check. v2 keeps
+the magic and changes the container: a 16-byte header, varint-framed records
+with presence masks, plies addressed by one match-wide `ply_ref`, one `DECS`
+section per analysis block. `read_gvab` / `readGvab` dispatch on the major
+version to `gvformat/ogxm2.py` / `gvformat-js/src/ogxm2.js`, which return the
+document a v1 file holding the same match would give, so nothing downstream
+learns there was a second version, and saving writes v1 `.gvab` as before. The
+two ports produce identical documents on every fixture.
+
+What v1 reading did not need:
+
+- **Units.** A v2 block names its currency, and HedgeHog's match analyses are
+  `cubeful_match`: every equity in them, each candidate's included, is an MWC.
+  Each is mapped onto the normalized scale through its own ply's frame
+  (`mwc_frame` / `mwcFrame`, now public in `basefill`, whose unit inference is
+  switched off for these blocks so nothing converts twice). On a real 9-point
+  match the converted errors sum back to HedgeHog's own MWC totals within 6e-5.
+- **Luck.** v2 records it per roll (`ROLL`), and it is read as an `.xg`'s or a
+  `.bgf`'s is, with `luck_eval_level` from the rolls' level. Held against
+  bgsage's own luck pass on the same match: correlation 0.993, mean difference
+  0.016 a roll. Only a block with no rolls is listed in `_base_analyses`.
+- **Refusals.** What the v1 document cannot replay (beavers, raccoons, a cube
+  set by hand, a settlement, a starting score, a variant) is refused with a
+  message for the player rather than shown on the wrong board. A game from a
+  set-up position becomes a leading set-position ply, the way our own exports
+  state one.
+
+Signatures, annotations, the clock and the video are not carried. The fixtures
+(`gvformat-js/test/fixtures/ogxm2/`, shared by both suites) were written by
+HedgeHog's own reference writer, and their expected positions are its reader's
+replay, not ours.
+
 ## 1.4.0 — 2026-10-02
 
 **A restated play keeps its analysis** *(fix)*

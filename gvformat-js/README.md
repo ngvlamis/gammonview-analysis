@@ -1,8 +1,9 @@
 # @gammonview/gvformat
 
 The OGXM/GVA codec in pure JavaScript — read and write `.gvab` backgammon match
-files, convert `.xg` / `.bgf` / `.mat` / OpenGammon sources to `.gva` JSON, and
-encode or parse OGIDs. **No engine, no WebAssembly, no build step.** One runtime
+files (and HedgeHog's OGXM v2 `.ogxm`, read into the same document), convert
+`.xg` / `.bgf` / `.mat` / OpenGammon sources to `.gva` JSON, and encode or parse
+OGIDs. **No engine, no WebAssembly, no build step.** One runtime
 dependency (`pako`, for zlib).
 
 This is the browser half of

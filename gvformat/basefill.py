@@ -122,6 +122,18 @@ def _normalizer(ply: dict):
     pass the frame belongs to the other player -- the ply's own colour is the
     one answering the cube, not the one who offered it.
     """
+    frame = mwc_frame(ply)
+    return None if frame is None else frame[0]
+
+
+def mwc_frame(ply: dict):
+    """The same map as ``_normalizer``, paired with its slope alone for a
+    *difference* of two MWCs (an equity loss, a luck), which converts by the
+    span and never by the midpoint: ``(to_equity, to_delta)``, or None.
+
+    Public for ``ogxm2.py``, whose blocks state their currency outright and so
+    convert every value in them, not only the three cube values.
+    """
     ctx = _parse_ogid_context(ply.get("ogid_before"))
     if ctx is None:
         return None
@@ -145,7 +157,10 @@ def _normalizer(ply: dict):
     def to_equity(mwc: float) -> float:
         return round((2 * (mwc - mid) / span) * 10000) / 10000
 
-    return to_equity
+    def to_delta(mwc: float) -> float:
+        return round((2 * mwc / span) * 10000) / 10000
+
+    return to_equity, to_delta
 
 
 def _cube_values(sub: dict | None) -> tuple[float, float, float] | None:
@@ -242,16 +257,21 @@ def _cube_ply_is_decision(ply: dict, analysis: dict) -> bool:
 # Entry point
 # ---------------------------------------------------------------------------
 
-def complete_base_block(block_obj: dict, ply_by_key: dict, analysis_info: dict | None) -> None:
+def complete_base_block(block_obj: dict, ply_by_key: dict, analysis_info: dict | None,
+                        *, convert_units: bool = True) -> None:
     """Complete one analysis block in place, given the plies it describes.
 
     Args:
         block_obj: ``(game_index, ply_index) -> analysis``.
         ply_by_key: the same keys -> the ply itself.
         analysis_info: the block's own header, also completed.
+        convert_units: False when the caller has already put the block on the
+            normalized scale -- an OGXM v2 block names its currency, so
+            ``ogxm2.py`` converts from that rather than from this module's
+            inference, and converting twice would be wrong.
     """
     ply_depths: set = set()
-    mwc = _values_are_mwc(block_obj)
+    mwc = convert_units and _values_are_mwc(block_obj)
 
     for key, analysis in block_obj.items():
         ply = ply_by_key.get(key)
