@@ -1,6 +1,6 @@
 # The cheap half of the suite, on every push and pull request.
 #
-# `tests/run_all.py --fast` skips the thirteen names in that file's ENGINE_BACKED
+# `tests/run_all.py --fast` skips the names in that file's ENGINE_BACKED
 # set -- the tests that need the `[engine]` extra and minutes of CPU. Those run
 # in engine.yml on a slower cadence. Splitting them is what keeps this workflow
 # a few seconds per row, so the matrix below can afford to be wide.
