@@ -1,0 +1,42 @@
+{
+  "context": {
+    "length": 400,
+    "sha256": "09711029ccc773eba0eb2971f75d8bd7d90cc407bd24e550fccd548c467748db"
+  },
+  "extras": {
+    "length": 304,
+    "sha256": "44cd778024982cddb3456b5f43ba59d6ee344657f822dfebe2a796814ca8408c"
+  },
+  "foreign": {
+    "length": 272,
+    "sha256": "f5b77cdd73063f0cf3c124ebe4562495a5e3f2b26f85c532edea75a11db9e592"
+  },
+  "hypergammon": {
+    "length": 136,
+    "sha256": "1f62802a117d16a96f0361c43b39847fca4c8e60a7957630c06fea36ab8b92e5"
+  },
+  "longgammon": {
+    "length": 136,
+    "sha256": "28a1df88e3ed39be95154a8dad962a143767ee904558a6f7678c65dc7b894a07"
+  },
+  "midmatch": {
+    "length": 502,
+    "sha256": "3c47aa493f7ec544ec10a493e9ace148978a8050b7cd651a6aa727b92760c94c"
+  },
+  "nackgammon": {
+    "length": 136,
+    "sha256": "beac4f66fb1ab0f845718b3ad08559504dc9b4cd7b7080a419990728760f6e04"
+  },
+  "pre-turned-cube": {
+    "length": 634,
+    "sha256": "20f13e6a067957756f68d41a546114ec849e98b889c95b24803ae47aaeb5b116"
+  },
+  "unholdable": {
+    "length": 1534,
+    "sha256": "2ad533ba68726d0d44b2fbca9032e3bf1393ed55bf5e3a3e452192b86671cb53"
+  },
+  "unknown-action": {
+    "length": 163,
+    "sha256": "7a378902057c7c33659b5cb904ca3a80508a1c32fe7d222da0ff522e717f5660"
+  }
+}

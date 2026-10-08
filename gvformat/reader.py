@@ -108,9 +108,9 @@ class GvabError(ValueError):
     """Raised when the input is not a well-formed ``.gvab`` stream."""
 
 
-# Terminal action ids (game/match end, resign, forfeit, null) -- plies that
-# carry no move and leave the turn state untouched.
-_TERMINAL_ACTIONS = frozenset({24, 25, 26, 27, 28, 29, 30})
+# Terminal action ids (game/match end, resign, forfeit, null, settle) -- plies
+# that carry no move and leave the turn state untouched.
+_TERMINAL_ACTIONS = frozenset({24, 25, 26, 27, 28, 29, 30, 34})
 
 
 # ---------------------------------------------------------------------------
@@ -621,16 +621,18 @@ def _apply_moves_p1(board_p1: list[int], moves: list[dict], mover_is_white: bool
     return mb if mover_is_white else _flip_board(mb)
 
 
-def _game_start_scores(games: list[dict], match_length: int = 0) -> list[tuple[int, int]]:
+def _game_start_scores(games: list[dict], match_length: int = 0,
+                       score_start=None) -> list[tuple[int, int]]:
     """Per-game (white_start, black_start) match scores, reconstructed by
-    accumulating each game's points_won to its winner (match assumed to open
-    0-0 -- the binary stores only final scores and per-game points/winner).
+    accumulating each game's points_won to its winner. The match opens at
+    ``score_start`` (the document's top-level key, ``[white, black]``) or 0-0:
+    the binary stores only final scores and per-game points/winner.
 
     Each game's contribution is capped at what its winner still needed, so a
     file written before that was a writer rule (an uncapped 4-point gammon at
     6-1 of a 7-pointer) still scores 7-1 rather than 10-1."""
     out = []
-    w = b = 0
+    w, b = (int(score_start[0] or 0), int(score_start[1] or 0)) if score_start else (0, 0)
     for g in games:
         out.append((w, b))
         winner = g.get("winner")
@@ -644,28 +646,37 @@ def _game_start_scores(games: list[dict], match_length: int = 0) -> list[tuple[i
 def _derive_ogids(ogxm: dict) -> None:
     """Fill ogid_before/ogid_after on every ply of ``ogxm`` in place."""
     from .export import (
-        _TurnState, _ogid, _STARTING_BOARD_P1,
+        _TurnState, _ogid, variant_checkers, variant_opening_p1,
         _OGID_STATE_INITIAL_BOTH, _OGID_STATE_ROLLED, _OGID_STATE_CHECKER_DONE,
         _OGID_STATE_DOUBLE_OFFERED, _OGID_STATE_AFTER_TAKE, _OGID_STATE_GAME_OVER,
         _OGID_ACTION_NONE, _OGID_ACTION_DOUBLE, _OGID_ACTION_TAKE, _OGID_ACTION_PASS,
-        _OGID_CUBE_WHITE, _OGID_CUBE_BLACK,
+        _OGID_CUBE_WHITE, _OGID_CUBE_BLACK, _OGID_CUBE_CENTERED,
     )
 
     match_length = int(ogxm.get("match_length", 0) or 0)
     games = ogxm.get("games") or []
-    start_scores = _game_start_scores(games, match_length)
+    start_scores = _game_start_scores(games, match_length, ogxm.get("score_start"))
+    variant = int(ogxm.get("variant") or 0)
+    opening = variant_opening_p1(variant)
+    if opening is None:
+        return                      # a variant this code cannot replay: no positions to state
+    nrof = variant_checkers(variant)
 
     for g, (sw, sb) in zip(games, start_scores):
         crawford = bool(g.get("is_crawford", False))
         turn = _TurnState()
-        board = list(_STARTING_BOARD_P1)
+        # A game opens with its own cube (spec 5.3): the initial value doubled
+        # once per automatic double, held by the owner after them.
+        turn.start_cube(g.get("initial_cube_value") or 1,
+                        g.get("initial_cube_owner", 2), g.get("auto_doubles") or 0)
+        board = list(opening)
 
         def ogid(brd, *, on_roll, game_state, cube_action, dice=None):
             return _ogid(brd, cube_value=turn.cube_value, cube_owner=turn.cube_owner,
                          cube_action=cube_action, dice=dice, on_roll=on_roll,
                          game_state=game_state, score_white=sw, score_black=sb,
                          match_length=match_length, crawford=crawford,
-                         move_id=turn.move_id)
+                         move_id=turn.move_id, nrof_checkers=nrof)
 
         for ply in g.get("plies") or []:
             aid = ply.get("action_id")
@@ -709,6 +720,44 @@ def _derive_ogids(ogxm: dict) -> None:
                     turn.cur_state = _OGID_STATE_GAME_OVER
                     turn.cube_action = _OGID_ACTION_PASS
                 ply["ogid_after"] = ogid(board, on_roll=opp, game_state=turn.cur_state,
+                                         cube_action=turn.cube_action)
+
+            elif aid in (32, 33):  # beaver / raccoon: answers the double, doubling again
+                # A beaver answers the offer; a raccoon answers the beaver, whose
+                # position (the cube taken, doubled again) is the one it leaves.
+                if aid == 32:
+                    ply["ogid_before"] = ogid(board, on_roll=on_roll,
+                                              game_state=_OGID_STATE_DOUBLE_OFFERED,
+                                              cube_action=_OGID_ACTION_DOUBLE)
+                else:
+                    ply["ogid_before"] = ogid(board, on_roll=on_roll, game_state=turn.cur_state,
+                                              cube_action=turn.cube_action)
+                turn.awaiting_response = False
+                turn.cube_log2 += 2 if aid == 32 else 1
+                turn.cube_owner = _OGID_CUBE_WHITE if color == 1 else _OGID_CUBE_BLACK
+                turn.cur_state = _OGID_STATE_AFTER_TAKE
+                turn.cube_action = _OGID_ACTION_TAKE
+                ply["ogid_after"] = ogid(board, on_roll=opp, game_state=turn.cur_state,
+                                         cube_action=turn.cube_action)
+
+            elif aid == 37:  # pass: a turn whose roll was not recorded
+                ply["ogid_before"] = ogid(board, on_roll=on_roll, game_state=turn.cur_state,
+                                          cube_action=turn.cube_action)
+                turn.move_id += 1
+                turn.is_first_ply = False
+                turn.cur_state = _OGID_STATE_CHECKER_DONE
+                turn.cube_action = _OGID_ACTION_NONE
+                ply["ogid_after"] = ogid(board, on_roll=opp, game_state=_OGID_STATE_CHECKER_DONE,
+                                         cube_action=_OGID_ACTION_NONE)
+
+            elif aid == 36:  # cube set: an edit stating the cube the game goes on from
+                ply["ogid_before"] = ogid(board, on_roll=on_roll, game_state=turn.cur_state,
+                                          cube_action=turn.cube_action)
+                turn.cube_log2 = max(0, int(ply.get("cube_value") or 1).bit_length() - 1)
+                owner = ply.get("cube_owner", 2)
+                turn.cube_owner = (_OGID_CUBE_WHITE if owner == 0
+                                   else _OGID_CUBE_BLACK if owner == 1 else _OGID_CUBE_CENTERED)
+                ply["ogid_after"] = ogid(board, on_roll=on_roll, game_state=turn.cur_state,
                                          cube_action=turn.cube_action)
 
             elif aid == ACTION_SET_POSITION:  # 31
@@ -978,6 +1027,9 @@ def _read_gvab(data: bytes, *, verify_crc: bool, derive_ogids: bool) -> dict:
     ogxm["games"] = games
     if unknown:
         ogxm["_unknown_chunks"] = unknown
+        # The clock and the video are document keys too (`clock`, `video`).
+        from .ogxm2_passthrough import decode_v1_chunks
+        decode_v1_chunks(ogxm)
     if base_blocks:
         ogxm["_base_analyses"] = base_blocks
 

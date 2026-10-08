@@ -105,7 +105,8 @@ def main() -> int:
     check(len(pt["games"]) == 2 and len(pt["blocks"]) == 2 and len(pt["msig"]) == 2
           and len(pt["unknown"]) == 1 and pt["unknown"][0]["type"] == "ZZZZ",
           "0. games, blocks, signatures and the unknown section are all recorded")
-    check(len(pt["anno"]) == 6, "0. all six foreign annotations are recorded")
+    check(len(pt["anno"]) == 0 and len(pt["anno_raw"]) == 6 and "clck" in pt and "vido" in pt,
+          "0. the six foreign annotations are in the document, kept by fingerprint; so are the clock and video")
     check(list(pt["blocks"]) == [i["analysis_id"] for i in doc["analyses_info"]],
           "0. a foreign block keeps its own analysis_id in the document")
     ours = read_gvab(write_gvab(read_gvab(
@@ -206,8 +207,8 @@ def main() -> int:
     # -- 4. A move edit --------------------------------------------------------
     print("--- 4. editing a move drops everything addressed by ply ---")
     out = C.CASES["move_edit"](FOREIGN)
-    check(not {"SIGN", "MSIG", "CLCK", "VIDO"} & set(kinds(out)),
-          "4. SIGN, MSIG, CLCK and VIDO are gone")
+    check(not {"SIGN", "MSIG"} & set(kinds(out)) and {"CLCK", "VIDO"} <= set(kinds(out)),
+          "4. SIGN and MSIG are gone (they cover the moves); the clock and the video travel with the plies")
     check(kinds(out).count("ZZZZ") == 1, "4. the unknown section stays")
     check(payloads(out, "GAME")[0] == payloads(FOREIGN, "GAME")[0]
           and payloads(out, "GAME")[1] != payloads(FOREIGN, "GAME")[1],
@@ -215,8 +216,8 @@ def main() -> int:
     j = reference_accepts("4. move edit", out)
     if j is not None:
         scopes = sorted(a["scope"] for a in j["annotations"] if not a.get("key", "").startswith("x-gammonview-"))
-        check(scopes == ["game", "match"],
-              f"4. ply, decision and alternative annotations are dropped; match and game kept ({scopes})")
+        check(scopes == sorted(a["scope"] for a in foreign_json["annotations"]),
+              f"4. every annotation is kept, at every scope ({scopes})")
         check(j["games"][1]["plies"][-1] != foreign_json["games"][1]["plies"][-1]
               and len(j["games"][1]["plies"]) == len(foreign_json["games"][1]["plies"]) - 1,
               "4. the edit is in the file")
@@ -287,7 +288,7 @@ def main() -> int:
               "7. the non-canonical clock is re-encoded canonically, the video's marks kept")
     again = read_gvab(out)
     check(write_gvab(again) == out, "7. and the v2 file is stable")
-    without = {k: v for k, v in v1doc.items() if k != "_unknown_chunks"}
+    without = {k: v for k, v in v1doc.items() if k not in ("_unknown_chunks", "clock", "video")}
     check(set(kinds(write_gvab(without))) & {"SIGN", "CLCK", "VIDO"} == set(),
           "7. a document without the chunks writes none")
 

@@ -92,7 +92,7 @@ def main() -> int:
     check(doc["games"][0]["winner"] == 0 and doc["games"][1]["winner"] == 1
           and doc["games"][1]["points_won"] == 4, "match: game winners and points")
     info = doc["analysis_info"]
-    check(info["model_id"] == "hedgehog/xerxes", "match: the model is named, not its UUID")
+    check(info["model_id"] == "16fcd41c-9f64-4fcc-bca2-c89e6de07721" and info["model_name"] == "xerxes", "match: the model id and name as stated")
     check(info["ply"] == 2 and info["eval_level"] == "2ply", "match: block depth")
 
     rolled = [p for p in plies(doc) if p["action_id"] <= 20]
@@ -177,9 +177,13 @@ def main() -> int:
           "resign: the other side wins")
     check(not ogid_mismatches(doc, expected("resign")), "resign: replays to the reference")
 
-    # Refused, in words for a player -------------------------------------------
-    check(raises_gvab(lambda: read_gvab(data("cube-on-two")), "cube already turned"),
-          "a game opening with the cube turned is refused, not shown wrongly")
+    # A game that opens with the cube turned: read, not refused ----------------
+    doc = read_gvab(data("cube-on-two"))
+    g = doc["games"][0]
+    check(g.get("initial_cube_value") == 2 and "initial_cube_owner" not in g,
+          "cube-on-two: the cube the game opens with is on the game")
+    check(not ogid_mismatches(doc, expected("cube-on-two")),
+          "cube-on-two: every position carries that cube, as the reference states it")
 
     # Untrusted bytes: whatever is wrong with them, the failure is a GvabError --
     rng = random.Random(12345)

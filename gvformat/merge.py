@@ -32,33 +32,51 @@ import copy
 MAX_ANALYSES = 16
 
 
-def _is_decision(ply: dict) -> bool:
-    """True for a ply this alignment pairs up: a checker/cube action (id 0-23),
-    or a *restated play* -- a set-position ply (31) carrying the roll's dice,
-    which is an illegal play no dice ply could encode (see
-    ``export.set_position_ply``). Both documents reach such a ply by the same
-    route, so both list it here and the pairing stays 1:1.
+def _decision_plies(game: dict) -> list[dict]:
+    """The plies of one game that can carry an analysis, in order: a checker or
+    cube action (id 0-23), a *restated play* -- a set-position ply (31) carrying
+    the roll's dice, which is an illegal play no dice ply could encode (see
+    ``export.set_position_ply``) -- and the ply that answers a double with a
+    beaver (32) or a raccoon (33), which is where the engine's response lands.
+    Both documents reach such a ply by the same route, so both list it here and
+    the pairing stays 1:1: ``our`` has a take where the base has a beaver.
 
-    Terminal plies (24-30) hold no decision at all, and a set-position ply with
-    *no* dice states where a game starts rather than a turn taken."""
-    aid = ply.get("action_id")
-    if aid is None:
-        return False
-    return (0 <= aid <= 23) or (aid == 31 and ply.get("d1") is not None)
+    A beaver is answered at most once: the raccoon that follows it answers the
+    beaver, not a double, and the engine has no decision for it. Terminal plies
+    (24-30) hold no decision at all, and a set-position ply with *no* dice states
+    where a game starts rather than a turn taken."""
+    out = []
+    pending = False                  # a double that has not been answered
+    for ply in game.get("plies") or []:
+        aid = ply.get("action_id")
+        if aid is None:
+            continue
+        if aid == 21:
+            pending = True
+            out.append(ply)
+        elif aid in (22, 23):
+            pending = False
+            out.append(ply)
+        elif aid in (32, 33):
+            if pending:
+                out.append(ply)
+            pending = False
+        elif 0 <= aid <= 20 or (aid == 31 and ply.get("d1") is not None):
+            out.append(ply)
+    return out
 
 
 def _decision_analyses(game: dict) -> list[dict | None]:
     """Per-decision analysis objects for one ``our`` game, in ply order — each
     decision ply's ``analysis`` (``None`` when it has nothing to report).
     Terminal/set-position plies are skipped so this aligns 1:1 with the base's
-    decision plies (see ``_is_decision``)."""
-    return [ply.get("analysis") for ply in game.get("plies") or [] if _is_decision(ply)]
+    decision plies (see ``_decision_plies``)."""
+    return [ply.get("analysis") for ply in _decision_plies(game)]
 
 
 def _base_decision_plies(game: dict) -> list[dict]:
-    """The base plies that can carry analysis (checker/cube actions, id 0-23),
-    in order. Terminal (24-30) and set-position (31) plies are excluded."""
-    return [ply for ply in game.get("plies") or [] if _is_decision(ply)]
+    """The base plies that can carry analysis, in order."""
+    return _decision_plies(game)
 
 
 def _aligned(base_game: dict, our_game: dict) -> list[tuple[dict, dict | None]]:

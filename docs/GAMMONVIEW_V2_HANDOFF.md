@@ -1,6 +1,6 @@
 # Handoff to GammonView: `.gvab` becomes OGXM v2
 
-*Draft, started 2026-10-08, on `feat/ogxm-v2` (commits `c70ea12`, `7e9c6e4`).
+*Draft, started 2026-10-08, on `feat/ogxm-v2`.
 Ships as gammonview / `@gammonview/gvformat` **1.6.0**, not yet tagged.*
 
 This is what the GammonView repo needs to know and do when it takes 1.6.0. The
@@ -57,6 +57,15 @@ So both sides should move to 1.6.0 **in the same deploy**:
 - **Existing v1 files remain readable** with no migration. A stored file becomes
   v2 the next time GammonView rewrites it (save, metadata edit, re-analysis).
   There is no need to batch-convert.
+- **A `.bgf`-derived v1 file upgrades with our MWCs, not BGBlitz's.** v1 stores
+  only normalized equity, rounded to 4 places, so the per-score map back to
+  BGBlitz's MWC (`mwc_frame`) is gone. Rewriting such a file as v2 converts its
+  equities through our table and records `met_id` `kazaross-xg2`, where a
+  `.bgf` converted directly records `bgblitz` and BGBlitz's own MWCs at 1e-6.
+  The result is consistent and correctly labelled, and normalized equities, errors
+  and PR read back unchanged, so nothing the viewer shows moves. To get BGBlitz's
+  MWCs, re-convert from the original `.bgf` if it is still held; nothing can
+  recover them from the v1 file.
 - **File hashes change on rewrite.** `match_originals` dedupes by
   `UNIQUE(match_id, sha256)`, so the same match saved again as v2 becomes a new
   original row. That is benign but visible.
@@ -95,6 +104,49 @@ These differences are all in the profile's §4. The ones a viewer could notice:
   everywhere except the most lopsided scores, where the worst case is ±6e-4
   (2-away/25-away).
 
+## The document gained every v2 field
+
+1.6 reads everything v2 defines into the document, under v2's own names, and
+writes it back. All of it is optional: a key is absent when the file has no
+value, so documents from our own converters look exactly as before, apart from
+`complete` and `engine_build` on our analysis blocks. What the site will see
+when it opens another producer's file:
+
+- **Match context:** `stage`, `round`, `table`, `city`, `country`,
+  `event_url`, `platform`, `match_ref`, `rated`, `completed_at` (ms),
+  `date_precision`, `player_seat`, `score_start`, `variant`, and
+  `white_profile` / `black_profile` with `rating`, `rating_system`, `country`,
+  `user_id`, `kind`.
+- **Clock, video and annotations:** `clock` with `clock_ms` per ply, `video`
+  with `video_ms` per marked ply, and `annotations` (comments, key/value notes,
+  arrows and highlights) on the match, games, plies, decisions and
+  alternatives.
+- **Analysis detail:** rollout settings in `level` records, `rollout_se`,
+  `is_optional`, `take_point`, `cubeless_equity` and more per decision.
+
+**Four changes the display code must handle:**
+
+1. **`event_year` is separate.** v2 files used to read as
+   `event: "Nordic Open 2025"`; now `event: "Nordic Open"` plus
+   `event_year: 2025`. Show both.
+2. **`model_id` is the producer's identifier.** A HedgeHog block's `model_id` is
+   now its UUID (1.5 showed `hedgehog/xerxes`), with the name in `model_name`.
+   Show `model_name ?? model_id`.
+3. **`site` vs `platform`/`city`.** `site` is still filled for display (from our
+   own annotation, else `city`, else `platform`), so nothing breaks; a richer
+   display can show `city`/`country` and `platform` separately.
+4. **Matches that used to fail to load now load:** a match joined part-way
+   (`score_start`), a cube already turned at the start, automatic doubles, and
+   nackgammon / hypergammon / longgammon. A variant cannot be analyzed (the
+   server should expect a refusal), and its board view must not assume 15
+   checkers each in the backgammon start.
+
+Editing any of these through the document is supported: the writer validates
+each value, and one v2 cannot hold (too long, wrong characters, a `user_id`
+without a `platform`) goes to an `x-gammonview-…` annotation instead of being
+lost. A document that breaks a rule outright raises — for example an annotation
+whose key is a v2 field name, or a clock whose readings run backwards.
+
 ## Converter changes a viewer may notice
 
 - **A `.bgf`'s analysis now carries `mwc_frame`** on each analysed ply and
@@ -116,19 +168,18 @@ These differences are all in the profile's §4. The ones a viewer could notice:
 
 ## Rewriting someone else's v2 file
 
-In 1.6 appending analysis to a file another producer wrote keeps its clock,
-video, signatures, annotations, unknown fields and sections (spec I7); an
-unedited part is written back byte for byte, so a signature stays valid exactly
-when it was. Editing the match drops the signatures that cover it, and editing a
-move also drops the clock, video and ply-addressed annotations. The document
-carries a private `_ogxm2_passthrough` key for this (also in `.gva`); leave it
-alone. `docs/OGXM_V2_PROFILE.md` §5 has the rules.
+Appending analysis to a file another producer wrote keeps everything in it (spec
+I7). An unedited part is written back byte for byte, so a signature stays valid
+exactly when it was; an edit drops only the signatures covering what changed.
+Clock readings, video marks and annotations move with their ply, so a move edit
+keeps them. What the document cannot model (signatures, unknown sections) rides
+in a private `_ogxm2_passthrough` key, also in `.gva`; leave it alone.
+`docs/OGXM_V2_PROFILE.md` §5 has the rules.
 
 ## Not in 1.6 (known gaps)
 
-- **`.gva` is still our own JSON.** Switching it to v2's JSON projection is the
-  planned second step. GammonView's `.gva` handling will need its own handoff
-  then.
+- **`.gva` is our document's JSON**, not v2's JSON projection (which the spec
+  says is not an interchange format). `.gvab` is the file to exchange.
 
 ## Checklist for the GammonView session
 
@@ -140,4 +191,7 @@ alone. `docs/OGXM_V2_PROFILE.md` §5 has the rules.
    where a shape difference would surface.
 5. Check the analysis table and the cube panel on a match with no recorded
    probabilities (the absent `eval` case).
-6. Deploy the client and the server together.
+6. Handle the four display changes above: `event_year`, `model_name ??
+   model_id`, `site`/`platform`/`city`, and the newly loadable matches (in
+   particular a variant's board).
+7. Deploy the client and the server together.

@@ -1,0 +1,38 @@
+{
+  "annotation_added": {
+    "length": 25246,
+    "sha256": "e2766408725de1da6c4b4ee5b2daa501a546b0e16df3967d8ffb60ee75421cfc"
+  },
+  "annotation_removed": {
+    "length": 25129,
+    "sha256": "3b0053c53201d4eecd5f4e96495695494ad7e659a67ce44820a1e043b1800196"
+  },
+  "block_removed": {
+    "length": 23842,
+    "sha256": "3270ba306af9fb65bdd381f810107a16febfa4056c8cfbb294893239cb9fc722"
+  },
+  "clock_edited": {
+    "length": 25060,
+    "sha256": "a03d9911ad5fadce5ecebf5c55e9345735343df96a84c7cd4fd39a3c7cd7d631"
+  },
+  "comment_edited": {
+    "length": 25153,
+    "sha256": "edff01ba0bdb833aa135e8fb47580c5d0a6c0fff8389e9d65dfac9aac9f94d73"
+  },
+  "ply_inserted_after_clock": {
+    "length": 24888,
+    "sha256": "2d65d131f486079792602852cea680a7320291d658d7b2faca4bde204dc23589"
+  },
+  "ply_inserted_in_clock": {
+    "length": 24830,
+    "sha256": "53e6ad315ee2916dac16fb3ae8958cf767316ce9e2ccfd5f82971ffdb48fb485"
+  },
+  "ply_removed": {
+    "length": 25636,
+    "sha256": "d4c5fc16ff573f4b762bd4f7105eda1d3b7c5e0c50823724bfe9b11d8a57915f"
+  },
+  "unchanged": {
+    "length": 25145,
+    "sha256": "d283661cbc7b656c9b963d5da4f75fa05e92cf365e99e2dcf2947705efc847c2"
+  }
+}

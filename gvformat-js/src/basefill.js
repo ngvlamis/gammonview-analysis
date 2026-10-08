@@ -43,7 +43,7 @@ import { mwcAnchors } from './met.js';
 // `_ACTION_SET_POSITION` in stats.js).
 const _MAX_CHECKER_ACTION_ID = 20;
 const _ACTION_SET_POSITION = 31;
-const _TAKE_PASS_ACTIONS = new Set([22, 23]);
+const _TAKE_PASS_ACTIONS = new Set([22, 23, 32, 33]);
 
 // Mirrors gvformat.xg._CHECKER_SPREAD_EPS / xg2gva's CHECKER_SPREAD_EPS.
 const CHECKER_SPREAD_EPS = 1e-4;

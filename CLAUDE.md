@@ -462,25 +462,40 @@ compare against libogxm's *v1* writer and projection, and skip — saying so —
 against a 2.x library, which writes and projects v2 only. They need a pre-v2
 build to run.
 
-**Another producer's v2 file is rewritten without losing what we don't model**
-(spec I7). `read_ogxm2` attaches `_ogxm2_passthrough` — the source's own `MTCH`,
-`GAME`, `ANAL`/`DECS`/`SIGN`, `CLCK`, `VIDO`, `MSIG`, foreign `ANNO` records and
-unknown sections, base64 so it survives `.gva` — and the writer emits a part's
-original bytes when the document still says what they say. That is decided by
-fingerprint, not by a flag: each part is stamped with the SHA-256 of *our
-writer's canonical encoding of it*, and a part that still hashes the same is
-unedited. This is the signature argument: `SIGN`/`MSIG` digest the bytes as
-stored, so re-encoding an unedited part could break a signature on bytes alone,
-while an edit changes the canonical bytes and the stale original is never used.
-Three cases: blocks added or removed keep everything (an unedited rewrite is the
-source, byte for byte); a metadata edit re-encodes `MTCH` (keeping every field we
-don't model and its unknown tail) and drops `SIGN`/`MSIG`; a move edit also drops
-`CLCK`, `VIDO` and every ply-addressed annotation. Files we wrote get no record
-(the writer already reproduces them), and `sha256.js` exists because
-`crypto.subtle` is async and `write_gvab` is not. A v1 file's `SIGN`/`CLCK`/`VIDO`
-chunks are written as the reference's `v1_to_v2` writes them. `docs/OGXM_V2_PROFILE.md`
-§5 has the rules. `.gva` (JSON) is still our document's JSON; making it v2's JSON
-projection is the planned second step.
+**Every field and section v2 defines is a document key** (since 1.6), under
+v2's own name — the match context and player profiles, a game's starting cube,
+every block, level and decision field, and `CLCK`/`VIDO`/`ANNO` as `clock` +
+`clock_ms`, `video` + `video_ms`, and `annotations` lists on the match, game,
+ply, decision and alternative. Two names differ: v2's `site` (a host name) is
+`platform`, because our `site` is the free-text place; and `event_year` is its
+own key, no longer joined onto `event`. `model_id`/`model_name` are exactly what
+the file states (a display shows `model_name ?? model_id`). Absent is an
+omitted key, so a document without them is unchanged. A value v2 cannot hold
+goes to an `x-gammonview-<field>` annotation at its scope and comes back on
+read — the same rule as the original three — and a document that breaks a rule
+outright (a v2 field name as an annotation key, an invalid clock) is refused.
+Nothing valid is refused on read any more: a mid-match start, a pre-turned
+cube, auto-doubles and the variants all load; `gvanalysis` refuses only the
+variants, since the engine plays backgammon.
+
+**Another producer's v2 file is rewritten without losing anything** (spec I7).
+What the document now models is re-encoded from it; what it cannot (signatures,
+unknown sections, presence-bit tails a later spec adds, unknown decision kinds
+and annotation scopes) travels in `_ogxm2_passthrough`, base64 so it survives
+`.gva`. The writer emits a part's original bytes when the document still says
+what they say. That is decided by fingerprint, not by a flag: each part is
+stamped with the SHA-256 of *our writer's canonical encoding of it*, and a part
+that still hashes the same is unedited. This is the signature argument:
+`SIGN`/`MSIG` digest the bytes as stored, so re-encoding an unedited part could
+break a signature on bytes alone, while an edit changes the canonical bytes and
+the stale original is never used. So an unedited rewrite is the source byte for
+byte, and an edit drops exactly the signatures covering what changed — clock,
+video and annotations move with their ply. Files we wrote get no record (the
+writer already reproduces them), and `sha256.js` exists because `crypto.subtle`
+is async and `write_gvab` is not. A v1 file's `SIGN`/`CLCK`/`VIDO` chunks are
+written as the reference's `v1_to_v2` writes them. `docs/OGXM_V2_PROFILE.md` §5
+has the rules. `.gva` is our document's JSON, not v2's JSON projection — the
+spec's Appendix A says that projection is not an interchange format.
 
 ## Checker play goes through `gvanalysis/checker_eval.py`
 

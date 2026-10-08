@@ -60,13 +60,15 @@
 import {
   GvabError, _deriveOgids, _attachBlocks, _evalFromProbs, _cubeActionLabel,
 } from './reader.js';
-import { _crc32, _b64decode } from './binary.js';
+import { _crc32, _b64decode, _b64encode } from './binary.js';
 import {
   completeBaseBlock, framePerspectiveIsWhite, mwcFrame, trivialCube, _checkerIsDecision,
   _cubePlyIsDecision,
 } from './basefill.js';
 import { DICE_TABLE } from './constants.js';
-import { attach } from './ogxm2_passthrough.js';
+import {
+  attach, decodeClock, clockDoc, decodeVideo, videoDoc, videoMarkDoc,
+} from './ogxm2_passthrough.js';
 
 // ---------------------------------------------------------------------------
 // Constants (spec section numbers in brackets)
@@ -83,23 +85,23 @@ const KNOWN_SECTIONS = new Set([
   'MTCH', 'GAME', 'ANAL', 'DECS', 'SIGN', 'CLCK', 'VIDO', 'ANNO', 'MSIG', 'CSUM',
 ]);
 
-// [9.14] action ids beyond v1's 0-31 that change the board, the cube or the
-// score, so a document without them would replay wrongly.
+// [9.14] action ids beyond v1's 0-31.
 const ACTION_DOUBLE = 21;
 const ACTION_TAKE = 22;
 const ACTION_DROP = 23;
 const ACTION_RESIGN_GAME = 27;
 const ACTION_RESIGN_MATCH = 28;
 const ACTION_SET_POSITION = 31;
+const ACTION_BEAVER = 32;
+const ACTION_RACCOON = 33;
+const ACTION_SETTLE = 34;
+const ACTION_RESERVED = 35;
+const ACTION_CUBE_SET = 36;
+const ACTION_PASS = 37;
 const ACTION_ESCAPE = 63;
-const UNSUPPORTED_ACTIONS = {
-  32: 'a beaver',
-  33: 'a raccoon',
-  34: 'a settlement',
-  35: 'a reserved move code',
-  36: 'a cube value set by hand',
-  37: 'a turn with no recorded roll',
-};
+// The last action id this reader assigns a meaning to; above it a ply is kept
+// whole (`extras_raw`), since only the producer knows what it says (P1, P2).
+const LAST_KNOWN_ACTION = ACTION_PASS;
 
 const KIND_CHECKER = 0;
 const KIND_CUBE = 1;
@@ -108,6 +110,23 @@ const KIND_ROLL = 3;
 
 const CURRENCY_CUBEFUL_MONEY = 1;
 const CURRENCY_CUBEFUL_MATCH = 2;                // [9.10]
+
+// The plies a cube record can sit on besides a dice action [7.4], and what each
+// is called in a document's `played_action`.
+const CUBE_ACTIONS = [ACTION_DOUBLE, ACTION_TAKE, ACTION_DROP, ACTION_BEAVER, ACTION_RACCOON];
+const PLAYED_ACTION = {
+  [ACTION_DOUBLE]: 'double', [ACTION_TAKE]: 'take', [ACTION_DROP]: 'pass',
+  [ACTION_BEAVER]: 'beaver', [ACTION_RACCOON]: 'raccoon',
+};
+
+// A level marker the pass in `finishLevels` reads and removes.
+const _LV = '\0level';
+const _LV_LUCK = '\0luck';
+// Decision keys that are v2 fields copied as they are, by kind.
+const CHECKER_KEYS = ['alternatives_total', 'rollouts_done', 'deep_searched', 'position_tags',
+  'producer_ref', 'source_band'];
+const CUBE_KEYS = ['take_point', 'window_searched', 'is_optional', 'is_free_cube', 'producer_ref'];
+const RESIGN_KEYS = ['correct_value', 'producer_ref'];
 
 // What v2 has no field for, carried in ANNO under the `x-` namespace the spec
 // reserves for producers outside it (N6). See ogxm2_writer.js for what each
@@ -119,9 +138,54 @@ const GV_KEY_ILLEGAL_PLY = 'x-gammonview-illegal-ply';
 const GV_KEY_SITE = 'x-gammonview-site';
 const GV_KEY_EVENT = 'x-gammonview-event';
 const GV_KEY_SCORE = 'x-gammonview-score';
+// Annotations of the document that v2's ANNO cannot address or hold (a decision
+// the DECS stream does not carry, a value past a cap): a JSON list, base64,
+// chunked (profile section 4).
+const GV_KEY_ANNOTATIONS = 'x-gammonview-annotations';
+// A video URL v2 cannot store (8.3: it is dropped there).
+const GV_KEY_VIDEO_URL = 'x-gammonview-video.url';
+const GV_PREFIX = 'x-gammonview-';
+
+// Every name v2 gives a field (spec 8.4.2): an ANNO key may not be one. It is
+// the reference codec's list, taken from its schema.
+const V2_FIELD_NAMES = new Set((
+  'action action_ext algorithm alt_index alternatives alternatives_total analysis analysis_id '
+  + 'at author auto_doubles best_equity black_name black_profile board budget_ms checker_ply city '
+  + 'color complete completed_at correct_value country coverage covers crawford_before_start '
+  + 'cube_efficiency cube_limit cube_limit_mode cube_limit_resolved cube_owner cube_ply cube_rule '
+  + 'cube_value cubeful_take_value cubeless_equity currency date_precision deep_searched dials dice '
+  + 'digest double_pass_equity double_take_equity drawings duration_ms engine_build equity '
+  + 'equity_loss event event_url event_year exact_bearoff illegal initial_board initial_cube_owner '
+  + 'initial_cube_value is_free_cube is_last_game is_optional is_played jacoby_mode jacoby_resolved '
+  + 'key key_id kind lang level luck match_digest match_length match_policy match_ref met_id '
+  + 'model_digest model_id model_name move_ply no_double_equity no_rollout player_seat ply_ref '
+  + 'points_won position_tags preset probs producer producer_ref public_key race_order rated '
+  + 'rating rating_system ref resign_error resign_value result rollout rollout_budget_on '
+  + 'rollout_se rollouts_done round rules scope score_final score_start seat seed settle_value '
+  + 'shape signature signed_at site source source_band sources stage started_at steps table '
+  + 'tables take_point take_resign_error termination to top_deep top_deep_accept top_deep_keep '
+  + 'top_deep_threshold trials truncation_depth user_id value variance_reduction variant verdict '
+  + 'white_name white_profile window_searched winner').split(' '));
+
+// Match fields a value v2 cannot hold travels under `x-gammonview-<field>` at
+// match scope (`x-gammonview-<side>_profile.<field>` for a player). Each maps to
+// how its text spells it: `s` as is, `i` an integer, `f` a number.
+const GV_MATCH_FIELDS = {
+  stage: 's', round: 'i', table: 's', city: 's', country: 's', event_url: 's',
+  platform: 's', match_ref: 's', event_year: 'i', date_precision: 'i',
+  player_seat: 'i', rules_other: 'i',
+};
+const GV_PROFILE_FIELDS = { user_id: 's', rating: 'f', rating_system: 's', country: 's', kind: 'i' };
+// The same for a game, at game scope.
+const GV_GAME_FIELDS = {
+  initial_cube_value: 'i', initial_cube_owner: 'i', auto_doubles: 'i', termination: 'i',
+};
 
 const SCOPE_MATCH = 0;
+const SCOPE_GAME = 1;
 const SCOPE_PLY = 2;
+const SCOPE_DECISION = 3;
+const SCOPE_ALTERNATIVE = 4;
 const MARKER_ACTIONS = [24, 25, 26, 30];
 
 // [9.13] verdict -> the v1 label set (no_double / double / take / pass).
@@ -133,6 +197,15 @@ const VERDICT_NAMES = {
 };
 
 const PRODUCER_OGX = 0;                          // [9.9] HedgeHog's own engine
+
+// [6.3] `dials`: bit -> name, in bit order. `DIAL_FLAGS` hold no payload,
+// `top_deep_threshold` is an equity loss, the rest are varints.
+const DIAL_FIELDS = [
+  [0, 'jacoby_resolved'], [1, 'jacoby_mode'], [2, 'cube_limit_resolved'], [3, 'cube_limit_mode'],
+  [4, 'exact_bearoff'], [5, 'race_order'], [6, 'top_deep'], [7, 'top_deep_threshold'],
+  [8, 'rollout_budget_on'], [9, 'cube_rule'], [10, 'top_deep_keep'], [11, 'top_deep_accept'],
+];
+const DIAL_FLAGS = ['jacoby_resolved', 'exact_bearoff', 'race_order', 'top_deep', 'rollout_budget_on'];
 
 // ---------------------------------------------------------------------------
 // Byte cursor
@@ -158,6 +231,7 @@ class Cursor {
   u16() { this.need(2); const v = this.view.getUint16(this.pos, true); this.pos += 2; return v; }
   i32() { this.need(4); const v = this.view.getInt32(this.pos, true); this.pos += 4; return v; }
   u32() { this.need(4); const v = this.view.getUint32(this.pos, true); this.pos += 4; return v; }
+  u64() { this.need(8); const v = this.view.getBigUint64(this.pos, true); this.pos += 8; return v; }
   skip(n) { this.need(n); this.pos += n; }
 
   bytes(n) {
@@ -260,7 +334,7 @@ function _rollout(cur) {
   if (has(1)) r.truncation_depth = body.varint();
   if (has(2)) r.move_ply = body.varint();
   if (has(3)) r.variance_reduction = body.varint();
-  if (has(4)) body.skip(8);                      // seed: provenance only
+  if (has(4)) r.seed = String(body.u64());       // a decimal string, as the reference's JSON has it [J6]
   if (has(5)) r.budget_ms = body.varint();
   if (has(6)) r.match_policy = body.varint();
   return r;
@@ -297,9 +371,112 @@ function _levelLabel(level) {
   return level.checker_ply !== undefined ? `${level.checker_ply}ply` : null;
 }
 
+const _DEPTH_PRESET = /^\d+ply$/;
+
+/**
+ * The level a tier has when its labels (`eval_level`, `ply`) are all that says
+ * so: the tier above, with each label that is set laid over it. Shared by the
+ * reader, which keeps a `level` object only where the true level is something
+ * else, and the writer, which derives the level from the labels when the
+ * document keeps none.
+ *
+ * A preset that is only a depth (`2ply`) follows a depth the labels change: a
+ * tier at `ply` 3 under a `2ply` block is `3ply`, not a 3-ply search called
+ * `2ply`. `follow = false` leaves it, which is how a luck record states its
+ * depth (`luckLabels`).
+ */
+export function tierLevel(parent, { preset = null, checker_ply: checkerPly = null,
+  cube_ply: cubePly = null, follow = true } = {}) {
+  const out = { ...parent };
+  if (preset) out.preset = preset;
+  if (checkerPly) out.checker_ply = checkerPly;
+  if (cubePly) out.cube_ply = cubePly;
+  if (follow && !preset && _DEPTH_PRESET.test(out.preset || '')) {
+    const depth = checkerPly || cubePly;
+    if (depth) out.preset = `${depth}ply`;
+  }
+  return out;
+}
+
+/** The level most of a block's decisions were judged at -- what v2 means by a
+ *  block's level [6.4], and what lets most of them state none of their own. */
+export function commonLabel(objs) {
+  const counts = new Map();
+  for (const a of objs) {
+    if (a === null || typeof a !== 'object') continue;
+    const alts = a.alternatives || [];
+    const labels = [alts.length ? alts[0].eval_level : null, a.eval_level];
+    for (const sub of [a.cube_decision, a.missed_double]) {
+      if (sub !== null && typeof sub === 'object') labels.push(sub.eval_level);
+    }
+    for (const lbl of labels) if (lbl) counts.set(lbl, (counts.get(lbl) || 0) + 1);
+  }
+  let best = null;
+  let bestN = 0;
+  for (const [lbl, n] of counts) {
+    if (n > bestN) { best = lbl; bestN = n; }
+  }
+  return best;
+}
+
+/** The block level a block's labels give: the label most decisions share, and
+ *  the base depth. A block whose level is more than that keeps it as `level`. */
+export function blockLevelOf(info, objs) {
+  return tierLevel({}, { preset: commonLabel(objs) || info.eval_level,
+    checker_ply: info.ply ? Math.trunc(Number(info.ply)) : null });
+}
+
+/** What `luck_eval_level` says of a luck record's level. */
+export function luckLabels(label) {
+  const m = /^(\d+)ply$/.exec(label || '');
+  return m ? { checker_ply: parseInt(m[1], 10) } : { preset: label };
+}
+
+function _luckLevelOf(blockLevel, label) {
+  return tierLevel(blockLevel, { ...luckLabels(label), follow: false });
+}
+
+/** A JSON-safe value copied. */
+function _clone(v) {
+  return JSON.parse(JSON.stringify(v));
+}
+
+/** A value as comparable text, object keys in order. */
+function _stable(v) {
+  if (Array.isArray(v)) return `[${v.map(_stable).join(',')}]`;
+  if (v !== null && typeof v === 'object') {
+    return `{${Object.keys(v).sort().map((k) => `${JSON.stringify(k)}:${_stable(v[k])}`).join(',')}}`;
+  }
+  return JSON.stringify(v);
+}
+
+/** A level without a preset that is only a depth: `2ply` says nothing the depth
+ *  next to it does not. */
+function _normLevel(level) {
+  const out = { ...level };
+  if (out.preset && _DEPTH_PRESET.test(out.preset)) delete out.preset;
+  return out;
+}
+
+export function sameLevel(a, b) {
+  return _stable(_normLevel(a)) === _stable(_normLevel(b));
+}
+
 // ---------------------------------------------------------------------------
 // Sections
 // ---------------------------------------------------------------------------
+
+/** [4.1] A `player` record. */
+function _decodeProfile(cur) {
+  const { body, has } = cur.record();
+  const pr = {};
+  if (has(0)) pr.user_id = body.str();
+  if (has(1)) pr.rating = body.varint() / 100;
+  if (has(2)) pr.rating_system = body.str();
+  if (has(3)) pr.country = body.str();
+  if (has(4)) pr.kind = body.varint();
+  return pr;
+}
 
 /** [4] */
 function _decodeMtch(payload) {
@@ -315,21 +492,24 @@ function _decodeMtch(payload) {
   if (has(6)) m.result = body.varint();
   if (has(7)) m.source = body.varint();
   if (has(8)) m.started_at = body.varint64();
-  if (has(9)) body.varint64();                   // completed_at
-  if (has(10)) body.varint();                    // player_seat
+  if (has(9)) m.completed_at = Number(body.varint64());
+  if (has(10)) m.player_seat = body.varint();
   if (has(11)) m.crawford_before_start = true;
   if (has(12)) m.event = body.str();
   if (has(13)) m.event_year = body.varint();
-  if (has(14)) body.varint();                    // date_precision
-  if (has(15)) body.str();                       // stage
-  if (has(16)) body.varint();                    // round
-  if (has(17)) body.str();                       // table
+  if (has(14)) m.date_precision = body.varint();
+  if (has(15)) m.stage = body.str();
+  if (has(16)) m.round = body.varint();
+  if (has(17)) m.table = body.str();
   if (has(18)) m.city = body.str();
   if (has(19)) m.country = body.str();
-  if (has(20)) body.str();                       // event_url
+  if (has(20)) m.event_url = body.str();
   if (has(21)) m.site = body.str();
-  // Bits 22-25 (match_ref, the two player profiles, rated) are the last fields
-  // and nothing here reads them, so the record's own length steps over them.
+  if (has(22)) m.match_ref = body.str();
+  if (has(23)) m.white_profile = _decodeProfile(body);
+  if (has(24)) m.black_profile = _decodeProfile(body);
+  if (has(25)) m.rated = true;
+  // Any later bits are the unknown run; the record length steps over them.
   return m;
 }
 
@@ -347,18 +527,24 @@ function _decodePly(cur) {
     }
   }
   if (hasExtras) {
+    const first = cur.pos;
     const { body, has } = cur.record();
     const x = {};
-    if (has(0)) x.dice = [body.u8(), body.u8()];
-    if (has(1)) x.resign_value = body.varint();
-    if (has(2)) x.cube_value = body.varint();
-    if (has(3)) x.illegal = true;
-    if (has(4)) x.settle_value = body.equity();
-    if (has(5)) x.steps = _countedSteps(body);
-    if (has(6)) x.board = body.board();
-    if (has(7)) x.action_ext = body.varint();
-    if (has(8)) x.cube_owner = body.varint();
+    // An action id nothing here assigns (38-62) carries a payload only its
+    // producer can read, so none of the fields below is its; an escape (63)
+    // has to be read as far as its real id.
+    const known = ply.action <= LAST_KNOWN_ACTION || ply.action === ACTION_ESCAPE;
+    if (known && has(0)) x.dice = [body.u8(), body.u8()];
+    if (known && has(1)) x.resign_value = body.varint();
+    if (known && has(2)) x.cube_value = body.varint();
+    if (known && has(3)) x.illegal = true;
+    if (known && has(4)) x.settle_value = body.equity();
+    if (known && has(5)) x.steps = _countedSteps(body);
+    if (known && has(6)) x.board = body.board();
+    if (known && has(7)) x.action_ext = body.varint();
+    if (known && has(8)) x.cube_owner = body.varint();
     ply.extras = x;
+    ply.extras_raw = cur.data.slice(first, cur.pos);     // the record, length prefix and all
     if (ply.action === ACTION_ESCAPE) {
       if (x.action_ext === undefined) throw new GvabError('OGXM v2 escaped action without its id');
       ply.action = x.action_ext;
@@ -385,6 +571,19 @@ function _decodeGame(payload) {
   return g;
 }
 
+/** [6.3] A `dials` record: flags as `true`, the threshold a number. */
+function _decodeDials(cur) {
+  const { body, has } = cur.record();
+  const d = {};
+  for (const [bit, name] of DIAL_FIELDS) {
+    if (!has(bit)) continue;
+    if (DIAL_FLAGS.includes(name)) d[name] = true;
+    else if (name === 'top_deep_threshold') d[name] = body.loss();
+    else d[name] = body.varint();
+  }
+  return d;
+}
+
 /** [6] */
 function _decodeAnal(payload) {
   const cur = new Cursor(payload, 0, payload.length);
@@ -396,22 +595,27 @@ function _decodeAnal(payload) {
   if (has(3)) a.complete = true;
   if (has(4)) {
     const n = body.varint();
-    for (let i = 0; i < n; i++) body.varint();   // coverage: attempted, not stored
+    const refs = [];
+    for (let i = 0; i < n; i++) refs.push(body.varint() + (refs.length ? refs[refs.length - 1] + 1 : 0));
+    a.coverage = refs;
   }
   if (has(5)) a.model_id = body.str();
   if (has(6)) a.model_name = body.str();
-  if (has(7)) body.skip(32);                     // model_digest
-  if (has(8)) body.str();                        // engine_build
+  if (has(7)) a.model_digest = Array.from(body.bytes(32), (v) => v.toString(16).padStart(2, '0')).join('');
+  if (has(8)) a.engine_build = body.str();
   if (has(9)) a.currency = body.varint();
-  // The rest (cube efficiency, MET, tables, dials, start/end times, duration,
-  // sources) is provenance, except the times, read below.
-  if (has(10)) body.u16();
+  if (has(10)) a.cube_efficiency = body.prob();
   if (has(11)) a.met_id = body.str();
-  if (has(12)) body.str();
-  if (has(13)) body.record();                    // dials
+  if (has(12)) a.tables = body.str();
+  if (has(13)) a.dials = _decodeDials(body);
   if (has(14)) a.started_at = body.varint64();
-  if (has(15)) body.varint64();
+  if (has(15)) a.completed_at = Number(body.varint64());
   if (has(16)) a.duration_ms = body.varint();
+  if (has(17)) {
+    const n = body.varint();
+    a.sources = [];
+    for (let i = 0; i < n; i++) a.sources.push(_uuidStr(body.bytes(16)));
+  }
   return a;
 }
 
@@ -425,6 +629,8 @@ function _decodeAlternative(cur) {
   if (has(0)) alt.probs = body.probs();
   if (has(1)) alt.level = _level(body);
   if (has(2)) alt.is_played = true;
+  if (has(3)) alt.rollout_se = body.equity();
+  if (has(4)) alt.cubeless_equity = body.equity();
   return alt;
 }
 
@@ -441,10 +647,15 @@ function _decodeDecs(payload) {
         d.alternatives = [];
         for (let i = 0; i < n; i++) d.alternatives.push(_decodeAlternative(body));
       }
-      if (has(1)) body.varint();                 // alternatives_total
+      if (has(1)) d.alternatives_total = body.varint();
       if (has(2)) d.best_equity = body.equity();
       if (has(3)) d.equity_loss = body.loss();
       if (has(4)) d.level = _level(body);
+      if (has(5)) d.rollouts_done = body.varint();
+      if (has(6)) d.deep_searched = body.varint();
+      if (has(7)) d.position_tags = body.varint();
+      if (has(8)) d.producer_ref = body.varint();
+      if (has(9)) d.source_band = body.varint();
     } else if (d.kind === KIND_CUBE) {
       d.verdict = body.varint();
       if (has(0)) d.no_double_equity = body.equity();
@@ -452,22 +663,26 @@ function _decodeDecs(payload) {
       if (has(2)) d.double_pass_equity = body.equity();
       if (has(3)) d.probs = body.probs();
       if (has(4)) d.equity_loss = body.loss();
-      if (has(5)) body.u16();                    // take_point
-      // bit 6, window_searched, is a flag: no bytes
+      if (has(5)) d.take_point = body.prob();
+      if (has(6)) d.window_searched = true;
       if (has(7)) d.level = _level(body);
-      // bits 8-9 are flags; 10 is the one field before currency
-      if (has(10)) body.equity();
+      if (has(8)) d.is_optional = true;
+      if (has(9)) d.is_free_cube = true;
+      if (has(10)) d.cubeful_take_value = body.equity();
       if (has(11)) d.currency = body.varint();
+      if (has(12)) d.producer_ref = body.varint();
     } else if (d.kind === KIND_RESIGN) {
-      if (has(0)) body.varint();                 // correct_value
+      if (has(0)) d.correct_value = body.varint();
       if (has(1)) d.resign_error = body.equity();
       if (has(2)) d.take_resign_error = body.equity();
       if (has(3)) d.probs = body.probs();
       if (has(4)) d.equity_loss = body.loss();
       if (has(5)) d.level = _level(body);
+      if (has(6)) d.producer_ref = body.varint();
     } else if (d.kind === KIND_ROLL) {
       d.luck = body.equity();
       if (has(0)) d.level = _level(body);
+      if (has(1)) d.producer_ref = body.varint();
     } else {
       continue;                                  // a kind this reader does not know
     }
@@ -485,8 +700,17 @@ export function uuidOf(anal) {
   return _uuidStr(body.bytes(16));
 }
 
-/** [8.4] ANNO records, in file order. Drawings are stepped over. Each carries
- *  its own bytes as `raw`, for `ogxm2_passthrough`. */
+/** [8.4.3] A drawing. A shape or colour nothing here knows is kept as is. */
+function _decodeDrawing(cur) {
+  const { body, has } = cur.record();
+  const d = { shape: body.varint(), at: body.u8() };
+  if (has(0)) d.to = body.u8();
+  if (has(1)) d.color = body.varint();
+  return d;
+}
+
+/** [8.4] ANNO records, in file order. Each carries its own bytes as `raw`, for
+ *  `ogxm2_passthrough`. */
 function _decodeAnno(payload) {
   const cur = new Cursor(payload, 0, payload.length);
   const out = [];
@@ -499,16 +723,77 @@ function _decodeAnno(payload) {
     if (has(1)) r.kind = body.varint();
     if (has(2)) r.alt_index = body.varint();
     if (has(3)) r.lang = body.str();
-    if (has(4)) body.str();                      // author
-    if (has(5)) body.varint64();                 // at
+    if (has(4)) r.author = body.str();
+    if (has(5)) r.at = Number(body.varint64());
     if (has(6)) {
-      const n = body.varint();
-      for (let i = 0; i < n; i++) body.record(); // a drawing
+      r.drawings = [];
+      for (let n = body.varint(); n > 0; n--) r.drawings.push(_decodeDrawing(body));
     }
     if (has(7)) r.analysis = _uuidStr(body.bytes(16));
     out.push(r);
   }
   return out;
+}
+
+/** An annotation as the document holds it: `value`, then whichever of `key`,
+ *  `lang`, `author`, `at` and `drawings` it states. An empty string is no
+ *  string, and no drawings are none. */
+function annoDoc(r) {
+  const out = { value: r.value };
+  for (const k of ['key', 'lang', 'author']) if (r[k]) out[k] = r[k];
+  if (r.at !== undefined && r.at !== null) out.at = r.at;
+  if (r.drawings && r.drawings.length) out.drawings = r.drawings.map((d) => ({ ...d }));
+  return out;
+}
+
+/** Whether `readOgxm2` consumes this annotation into document keys it has (and
+ *  so regenerates it on write), rather than into `annotations`. */
+function annoIsOurs(r) {
+  const base = (r.key || '').split('~')[0];
+  const name = base.startsWith(GV_PREFIX) ? base.slice(GV_PREFIX.length) : null;
+  if (r.scope === SCOPE_MATCH) {
+    const dot = (name || '').indexOf('.');
+    const side = dot < 0 ? name : name.slice(0, dot);
+    const field = dot < 0 ? '' : name.slice(dot + 1);
+    return base === GV_KEY_SITE || base === GV_KEY_EVENT || base === GV_KEY_SCORE
+      || base === GV_KEY_ANNOTATIONS || base === GV_KEY_VIDEO_URL
+      || base.startsWith(GV_KEY_ANALYSIS) || (name !== null && name in GV_MATCH_FIELDS)
+      || ((side === 'white_profile' || side === 'black_profile') && field in GV_PROFILE_FIELDS);
+  }
+  if (r.scope === SCOPE_GAME) return name !== null && name in GV_GAME_FIELDS;
+  if (r.scope === SCOPE_PLY) return base === GV_KEY_ILLEGAL_PLY || base.startsWith(GV_KEY_DECISIONS);
+  return false;
+}
+
+/** The decision kind an analysis object of this ply is, by its action: a dice
+ *  play is a checker decision, a cube action a cube decision, a resignation a
+ *  resign decision; nothing else is analysed. */
+function naturalKind(ply) {
+  const action = ply.action_id;
+  if (_playsDice(ply)) return KIND_CHECKER;
+  if (CUBE_ACTIONS.includes(action)) return KIND_CUBE;
+  if (action === ACTION_RESIGN_GAME || action === ACTION_RESIGN_MATCH) return KIND_RESIGN;
+  return null;
+}
+
+/** `[dict, explicit]`: the part of an analysis object that stands for the
+ *  decision `kind` of `ply`, or null where the object holds no such decision. The
+ *  object itself is the ply's natural decision; a cube decision on a dice play
+ *  is its `missed_double` (else `cube_decision`); a roll is the object too, and
+ *  then `explicit` says its records must name `kind`. */
+function decisionHolder(ply, obj, kind) {
+  const nat = naturalKind(ply);
+  if (kind === KIND_ROLL) return nat === KIND_CHECKER && 'luck' in obj ? [obj, true] : null;
+  if (kind === nat) {
+    if (kind === KIND_CHECKER && !('alternatives' in obj)) return null;
+    return [obj, false];
+  }
+  if (kind === KIND_CUBE && nat === KIND_CHECKER) {
+    for (const name of ['missed_double', 'cube_decision']) {
+      if (obj[name] !== null && typeof obj[name] === 'object') return [obj[name], false];
+    }
+  }
+  return null;
 }
 
 /** Our `x-gammonview` values at `scope`, as a Map of `"ref\0key"` ->
@@ -561,6 +846,122 @@ function _unquote(s) {
   return new TextDecoder('utf-8').decode(new Uint8Array(bytes));
 }
 
+/** Where each alternative of the DECS record sits in the exact list an
+ *  annotation of ours stands in for it: the same alternative, by content (two
+ *  that are identical are interchangeable). */
+function _altMap(mainAlts, exactAlts) {
+  const used = new Set();
+  const exact = exactAlts.map((a) => JSON.stringify(a));
+  return mainAlts.map((m) => {
+    const want = JSON.stringify(m);
+    for (let i = 0; i < exact.length; i++) {
+      if (!used.has(i) && exact[i] === want) {
+        used.add(i);
+        return i;
+      }
+    }
+    return null;
+  });
+}
+
+/** `[dict, extra]` an annotation addressed to `kind` (and, where given,
+ *  alternative `alt` of the record) belongs on, or null: `extra` is what the
+ *  document's record must state besides the annotation itself. */
+function _holderOf(ply, obj, kind, alt, amap) {
+  if (obj === undefined || obj === null || typeof obj !== 'object') return null;
+  const got = decisionHolder(ply, obj, kind);
+  if (got === null) return null;
+  const [holder, explicit] = got;
+  const extra = explicit ? { kind } : {};
+  if (alt === null) return [holder, extra];
+  if (kind !== KIND_CHECKER) return null;
+  if (amap !== null) alt = alt < amap.length ? amap[alt] : null;
+  const alts = holder.alternatives;
+  if (alt === null || !Array.isArray(alts) || alt >= alts.length) return null;
+  return [alts[alt], {}];
+}
+
+/** Hang every annotation that is not one of ours on what it addresses -- the
+ *  match, a game, a ply, a decision's analysis object or one of its
+ *  alternatives -- and mark it `placed`. One that addresses nothing the document
+ *  holds (an unknown scope or decision kind, a decision whose block could not be
+ *  read) is left for the passthrough record. `fallback` is the list of
+ *  annotations ours carried for what ANNO could not address
+ *  (`x-gammonview-annotations`); they follow the native ones. */
+function _placeAnnotations(ogxm, plyAt, decoded, annos, altMaps, fallback) {
+  const objs = new Map(decoded.map(([info, obj]) => [info.analysis_id, obj]));
+  const hang = (holder, rec) => {
+    if (holder.annotations === undefined) holder.annotations = [];
+    holder.annotations.push(rec);
+  };
+  const games = ogxm.games;
+  for (const r of annos) {
+    if (annoIsOurs(r)) continue;
+    const { scope, ref } = r;
+    const rec = annoDoc(r);
+    let target = null;
+    if (scope === SCOPE_MATCH) target = ogxm;
+    else if (scope === SCOPE_GAME && ref < games.length) target = games[ref];
+    else if (scope === SCOPE_PLY && ref < plyAt.length) target = plyAt[ref].ply;
+    else if ((scope === SCOPE_DECISION || scope === SCOPE_ALTERNATIVE) && ref < plyAt.length
+             && objs.has(r.analysis) && r.kind !== undefined
+             && (scope === SCOPE_DECISION || r.alt_index !== undefined)) {
+      const { key, ply } = plyAt[ref];
+      const got = _holderOf(ply, objs.get(r.analysis).get(key), r.kind,
+        scope === SCOPE_ALTERNATIVE ? r.alt_index : null,
+        altMaps.has(`${r.analysis}\0${ref}`) ? altMaps.get(`${r.analysis}\0${ref}`) : null);
+      if (got !== null) {
+        [target] = got;
+        Object.assign(rec, got[1]);
+      }
+    }
+    if (target !== null) {
+      hang(target, rec);
+      r.placed = true;
+    }
+  }
+
+  for (const e of fallback) {
+    let target;
+    const rec = { ...e.v };
+    const bad = () => new GvabError('an annotation of ours addresses nothing in the match');
+    if (e.s === SCOPE_MATCH) target = ogxm;
+    else if (e.s === SCOPE_GAME) target = games[e.g];
+    else if (e.s === SCOPE_PLY) target = (games[e.g] || {}).plies && games[e.g].plies[e.p];
+    else {
+      const ply = (games[e.g] || {}).plies && games[e.g].plies[e.p];
+      const objMap = objs.get(e.a);
+      if (!ply || !objMap) throw bad();
+      const got = _holderOf(ply, objMap.get(`${e.g},${e.p}`), e.k,
+        e.s === SCOPE_ALTERNATIVE ? e.i : null, null);
+      if (got === null) throw bad();
+      [target] = got;
+      Object.assign(rec, got[1]);
+    }
+    if (!target) throw bad();
+    hang(target, rec);
+  }
+}
+
+/** The CLCK section as `clock` and each ply's `clock_ms`; an invalid section is
+ *  dropped (8.2) and kept only by the passthrough. */
+function _docClock(payload, plyAt, ogxm) {
+  const got = decodeClock(payload, plyAt.length);
+  if (got === null) return;
+  ogxm.clock = clockDoc(got.header, got.precision);
+  got.ts.forEach((t, i) => { plyAt[i].ply.clock_ms = t; });
+}
+
+/** The VIDO section as `video` and its marks on the plies they mark. */
+function _docVideo(payload, v2games, ogxm, plyOffset) {
+  const got = decodeVideo(payload, v2games.map((g) => g.plies.length));
+  if (got === null) return;
+  ogxm.video = videoDoc(got.header);
+  for (const [gi, pi, hand, videoMs, wall, behind] of got.marks) {
+    Object.assign(ogxm.games[gi].plies[pi + plyOffset[gi]], videoMarkDoc(hand, videoMs, wall, behind));
+  }
+}
+
 /** [8.5] Verify a CRC32 CSUM; a SHA-256 one is skipped, as 8.5 allows. */
 function _verifyCsum(data, payload, sectionStart) {
   const cur = new Cursor(payload, 0, payload.length);
@@ -580,12 +981,6 @@ function _verifyCsum(data, payload, sectionStart) {
 // The match, in v1's shape
 // ---------------------------------------------------------------------------
 
-/** Refuse what the v1 shape cannot replay, in words a player can act on. */
-function _unsupported(what) {
-  return new GvabError(
-    `This match uses ${what}, which GammonView cannot show yet.`);
-}
-
 function _diceActionId(d1, d2) {
   const a = Math.min(d1, d2);
   const b = Math.max(d1, d2);
@@ -599,19 +994,27 @@ function _color(seat) {
 
 function _v1Ply(p) {
   const x = p.extras || {};
-  if (UNSUPPORTED_ACTIONS[p.action]) throw _unsupported(UNSUPPORTED_ACTIONS[p.action]);
-  if (p.action > ACTION_SET_POSITION) throw _unsupported(`a move type (${p.action}) this reader does not know`);
-  if (x.cube_value !== undefined || x.settle_value !== undefined
-      || x.cube_owner !== undefined || (x.steps && x.steps.length)) {
-    throw _unsupported('a move type this reader does not know');
+  const action = p.action;
+  if (action === ACTION_RESERVED) throw new GvabError('OGXM v2 uses the reserved action 35');
+  const assigned = action <= LAST_KNOWN_ACTION;
+  // Each extras field belongs to the actions that name it [5.1].
+  const allowed = {
+    [ACTION_SET_POSITION]: ['dice', 'illegal', 'board'],
+    [ACTION_SETTLE]: ['settle_value'],
+    [ACTION_CUBE_SET]: ['cube_value', 'cube_owner'],
+    [ACTION_RESIGN_GAME]: ['resign_value'],
+    [ACTION_RESIGN_MATCH]: ['resign_value'],
+  }[action] || [];
+  if (assigned && Object.keys(x).some((k) => !allowed.includes(k) && k !== 'action_ext')) {
+    throw new GvabError(`OGXM v2 action ${action} carries extras that do not belong to it`);
   }
-  const ply = { color: _color(p.seat), action_id: p.action };
-  if (p.action <= 20) {
-    const [d1, d2] = DICE_TABLE[p.action];
+  const ply = { color: _color(p.seat), action_id: action };
+  if (action <= 20) {
+    const [d1, d2] = DICE_TABLE[action];
     ply.d1 = d1;
     ply.d2 = d2;
     ply.moves = p.steps;
-  } else if (p.action === ACTION_SET_POSITION) {
+  } else if (action === ACTION_SET_POSITION) {
     if (!x.board) throw new GvabError('OGXM v2 set-position ply without its board');
     if (x.dice) {
       ply.d1 = x.dice[0];
@@ -621,6 +1024,15 @@ function _v1Ply(p) {
       ply.color = 1 - ply.color;
     }
     ply.set_position = x.board;
+  } else if (action === ACTION_SETTLE) {
+    if (x.settle_value === undefined) throw new GvabError('OGXM v2 settle ply without its value');
+    ply.settle_value = x.settle_value;
+  } else if (action === ACTION_CUBE_SET) {
+    if (x.cube_value === undefined) throw new GvabError('OGXM v2 cube-set ply without its value');
+    ply.cube_value = x.cube_value;
+    if (x.cube_owner !== undefined) ply.cube_owner = x.cube_owner;
+  } else if (action > LAST_KNOWN_ACTION && p.extras_raw) {
+    ply.extras_raw = _b64encode(p.extras_raw);
   }
   return ply;
 }
@@ -649,14 +1061,26 @@ function _crawfordGames(mtch, starts) {
   return out;
 }
 
-function _v1Match(mtch, v2games) {
-  if (mtch.variant !== 0) throw _unsupported('a backgammon variant');
-  if (mtch.score_start && (mtch.score_start[0] || mtch.score_start[1])) {
-    throw _unsupported('a match that starts part-way through');
+/** The factor a resignation is worth, as the writer derives it when the
+ *  document states none: `points_won` over the cube, or 1. */
+export function derivedResignValue(pointsWon, cube) {
+  if (cube > 0 && pointsWon % cube === 0 && pointsWon / cube >= 1 && pointsWon / cube <= 3) {
+    return pointsWon / cube;
   }
-  const rules = mtch.rules || 0;
-  if (rules & 0x10) throw _unsupported('automatic doubles');
+  return 1;
+}
 
+/** The cube's value after a ply [M6]. A double changes nothing until it is
+ *  answered; a drop ends the game. */
+function _cubeAfter(cube, action, ply) {
+  if (action === ACTION_TAKE) return cube * 2;
+  if (action === ACTION_BEAVER) return cube * 4;
+  if (action === ACTION_RACCOON) return cube * 2;
+  if (action === ACTION_CUBE_SET) return Number(ply.cube_value || cube);
+  return cube;
+}
+
+function _v1Match(mtch, v2games) {
   const { starts, final } = _scoreWalk(mtch, v2games);
   const crawford = _crawfordGames(mtch, starts);
   const [whiteScore, blackScore] = mtch.score_final || final;
@@ -666,14 +1090,22 @@ function _v1Match(mtch, v2games) {
     result = length > 0 && whiteScore >= length ? 1
       : length > 0 && blackScore >= length ? 2 : 0;
   }
+  const rules = mtch.rules || 0;
 
   const games = v2games.map((g, gi) => {
-    if ((g.initial_cube_value !== undefined && g.initial_cube_value !== 1)
-        || (g.initial_cube_owner !== undefined && g.initial_cube_owner !== 2)) {
-      throw _unsupported('a game that starts with the cube already turned');
-    }
-    if (g.auto_doubles) throw _unsupported('automatic doubles');
     const plies = g.plies.map(_v1Ply);
+    // A resignation's factor is derived from the points and the cube; one that
+    // is not what the writer would derive is kept on its ply.
+    let cube = (g.initial_cube_value || 1) * 2 ** (g.auto_doubles || 0);
+    plies.forEach((ply, pi) => {
+      if (ply.action_id === ACTION_RESIGN_GAME || ply.action_id === ACTION_RESIGN_MATCH) {
+        const stated = (g.plies[pi].extras || {}).resign_value;
+        if (stated !== undefined && stated !== derivedResignValue(g.points_won || 0, cube)) {
+          ply.resign_value = stated;
+        }
+      }
+      cube = _cubeAfter(cube, ply.action_id, ply);
+    });
     // A marker has no actor (its seat is always 0); our documents stamp it with
     // the game's winner, as every converter here does.
     if (g.winner === 0 || g.winner === 1) {
@@ -705,19 +1137,14 @@ function _v1Match(mtch, v2games) {
       plies,
     };
     if (g.initial_board) game.initial_board = g.initial_board;
+    for (const key of Object.keys(GV_GAME_FIELDS)) {
+      if (g[key] !== undefined) game[key] = g[key];
+    }
     return game;
   });
   const plyOffset = v2games.map((g) => (g.initial_board ? 1 : 0));
 
-  let event = mtch.event || null;
-  if (event && mtch.event_year) event = `${event} ${mtch.event_year}`;
-  const rulesFlags = {
-    crawford: Boolean(rules & 0x01),
-    jacoby: Boolean(rules & 0x02),
-    beaver: Boolean(rules & 0x04),
-    raccoon: Boolean(rules & 0x08),
-  };
-  return [{
+  const top = {
     match_length: mtch.match_length,
     player_white: mtch.white_name || '',
     player_black: mtch.black_name || '',
@@ -726,30 +1153,83 @@ function _v1Match(mtch, v2games) {
     result,
     source: mtch.source || 0,
     timestamp: mtch.started_at !== undefined ? Number(mtch.started_at / 1000n) : 0,
-    ...rulesFlags,
+    crawford: Boolean(rules & 0x01),
+    jacoby: Boolean(rules & 0x02),
+    beaver: Boolean(rules & 0x04),
+    raccoon: Boolean(rules & 0x08),
     cube_limit: mtch.cube_limit || 0,
-    event,
-    // Our `site` is where the match was played (XG's "location"); v2 has that
-    // as `city`, and its own `site` is the host name of the platform, which is
-    // the nearest thing when no city was recorded.
-    site: mtch.city || mtch.site || null,
-    games,
-  }, plyOffset];
+    event: mtch.event || null,
+    // Our `site` is where the match was played: v2's `city`, else the platform
+    // it was played on (`_readOgxm2` settles it, an annotation of ours winning
+    // over both).
+    site: null,
+  };
+  if (mtch.variant) top.variant = mtch.variant;
+  if (rules & 0x10) top.auto_doubles = true;
+  if (rules & ~0x1F) top.rules_other = rules & ~0x1F;
+  if (mtch.score_start) top.score_start = mtch.score_start.slice();
+  for (const key of ['completed_at', 'player_seat', 'crawford_before_start', 'event_year',
+    'date_precision', 'stage', 'round', 'table', 'city', 'country', 'event_url',
+    'match_ref', 'white_profile', 'black_profile', 'rated']) {
+    if (mtch[key] !== undefined) top[key] = mtch[key];
+  }
+  if (mtch.site !== undefined) top.platform = mtch.site;   // v2's `site` is the platform's host name
+  top.games = games;
+  return [top, plyOffset];
+}
+
+/** How a value v2 cannot hold is spelled in an annotation of ours. */
+export function numberText(x) {
+  return String(Number(x));
+}
+
+function _gvText(kind, value) {
+  if (kind === 's') return String(value);
+  if (kind === 'i') return String(Math.trunc(Number(value)));
+  return numberText(value);
+}
+
+function _gvParse(kind, text, what) {
+  if (kind === 's') return text;
+  const ok = kind === 'i' ? /^\s*[+-]?\d+\s*$/.test(text)
+    : /^\s*[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?\s*$/.test(text);
+  if (!ok) throw new GvabError(`annotation ${what} is malformed`);
+  return kind === 'i' ? parseInt(text, 10) : parseFloat(text);
+}
+
+/** The block fields an `x-gammonview-analysis` annotation carries because v2
+ *  could not hold them: `<field>=<value>`, `dials.<name>=<value>`, and a list as
+ *  its elements, each quoted, joined by commas. */
+function _blockItems(items) {
+  const out = {};
+  for (const [name, kind] of Object.entries(GV_BLOCK_FIELDS)) {
+    if (!items.has(name)) continue;
+    out[name] = kind === 'l' ? items.get(name).split(',').map(_unquote)
+      : _gvParse(kind, _unquote(items.get(name)), name);
+  }
+  const dials = {};
+  for (const [name, kind] of Object.entries(GV_DIAL_FIELDS)) {
+    if (!items.has(`dials.${name}`)) continue;
+    const text = _unquote(items.get(`dials.${name}`));
+    dials[name] = kind === 'b' ? text === '1' : _gvParse(kind, text, name);
+  }
+  if (Object.keys(dials).length) out.dials = dials;
+  return out;
+}
+
+/** Put back, from `x-gammonview-<prefix><field>` annotations at `ref`, the
+ *  values the writer could not store in v2's own fields. */
+function _restoreFields(target, gv, ref, fields, prefix = '') {
+  for (const [name, kind] of Object.entries(fields)) {
+    const key = GV_PREFIX + prefix + name;
+    const text = _gvGet(gv, ref, key);
+    if (text !== undefined) target[name] = _gvParse(kind, text, key);
+  }
 }
 
 // ---------------------------------------------------------------------------
 // Analysis, in v1's shape
 // ---------------------------------------------------------------------------
-
-/** The engine's name as `model_id`, which the viewer shows. v2 HedgeHog files
- *  carry a UUID there and the model's name beside it; the name is the one a
- *  person can read, and `hedgehog/` keeps it apart from an engine of ours. */
-function _modelId(anal) {
-  if (anal.model_name) {
-    return anal.producer === PRODUCER_OGX ? `hedgehog/${anal.model_name}` : anal.model_name;
-  }
-  return anal.model_id || '';
-}
 
 const _r4 = (v) => Math.round(v * 10000) / 10000;
 const _identity = { toEquity: _r4, toDelta: _r4 };
@@ -791,6 +1271,9 @@ function _checker(d, blockLevel, frame, ours = false) {
         const label = _label(levels[i], ours);
         if (label !== null) out.eval_level = label;
       }
+      if (a.rollout_se !== undefined) out.rollout_se = frame.toDelta(a.rollout_se);
+      if (a.cubeless_equity !== undefined) out.cubeless_equity = frame.toEquity(a.cubeless_equity);
+      out[_LV] = levels[i];                      // the true level, for `finishLevels`
       return out;
     }),
   };
@@ -799,6 +1282,8 @@ function _checker(d, blockLevel, frame, ours = false) {
   if (level.checker_ply !== undefined && level.checker_ply !== blockLevel.checker_ply) {
     analysis.ply = level.checker_ply;
   }
+  for (const k of CHECKER_KEYS) if (d[k] !== undefined) analysis[k] = d[k];
+  analysis[_LV] = [KIND_CHECKER, level];
   return analysis;
 }
 
@@ -810,10 +1295,20 @@ function _cubeTriple(d, frame) {
   };
 }
 
+/** The cube record's own fields beyond the triple, on `target`. */
+function _cubeExtras(d, frame, target, level) {
+  for (const k of CUBE_KEYS) if (d[k] !== undefined) target[k] = d[k];
+  if (d.cubeful_take_value !== undefined) {
+    target.cubeful_take_value = frame.toEquity(d.cubeful_take_value);
+  }
+  if (d.currency !== undefined) target.currency = d.currency;
+  target[_LV] = [KIND_CUBE, level];
+}
+
 /** The cube decision at a dice ply: `missed_double` + `cube_decision`, or the
  *  live `cube_decision` alone -- the two shapes of `_buildMissedDouble` /
  *  `_buildCubeDecision` in reader.js. */
-function _liveCube(d, frame, analysis, label = null) {
+function _liveCube(d, frame, analysis, label = null, level = null) {
   const triple = _cubeTriple(d, frame);
   const evalObj = d.probs ? _evalFromProbs(...d.probs) : null;
   const shouldDouble = d.verdict === 1;
@@ -832,10 +1327,12 @@ function _liveCube(d, frame, analysis, label = null) {
     };
     if (evalObj) missed.eval = { ...evalObj };
     if (label !== null) missed.eval_level = label;
+    _cubeExtras(d, frame, missed, level);
     analysis.missed_double = missed;
   } else {
     live.decision = false;
   }
+  _cubeExtras(d, frame, live, level);
   analysis.cube_decision = live;
 }
 
@@ -844,7 +1341,7 @@ function _cubePly(d, action, blockLevel, frame, ours = false) {
   const level = _resolve(blockLevel, d.level);
   const analysis = {
     correct_action: VERDICT_NAMES[d.verdict] || 'no_double',
-    played_action: action === ACTION_DOUBLE ? 'double' : action === ACTION_TAKE ? 'take' : 'pass',
+    played_action: PLAYED_ACTION[action] || 'pass',
     ..._cubeTriple(d, frame),
     equity_loss: Math.max(0, frame.toDelta(d.equity_loss || 0)),
     decision: false,
@@ -854,10 +1351,11 @@ function _cubePly(d, action, blockLevel, frame, ours = false) {
   if (level.cube_ply !== undefined && level.cube_ply !== blockLevel.cube_ply) {
     analysis.ply = level.cube_ply;
   }
+  _cubeExtras(d, frame, analysis, level);
   return analysis;
 }
 
-function _resign(d, frame) {
+function _resign(d, frame, level) {
   const analysis = {
     resign_error: frame.toDelta(d.resign_error || 0),
     take_resign_error: frame.toDelta(d.take_resign_error || 0),
@@ -865,6 +1363,8 @@ function _resign(d, frame) {
     decision: false,
   };
   if (d.probs) analysis.eval = _evalFromProbs(...d.probs);
+  for (const k of RESIGN_KEYS) if (d[k] !== undefined) analysis[k] = d[k];
+  analysis[_LV] = [KIND_RESIGN, level];
   return analysis;
 }
 
@@ -886,7 +1386,7 @@ export function defaultFlags(ply, analysis, illegalPlay) {
   if (illegalPlay && 'alternatives' in analysis) analysis.illegal_move = true;
   if (_playsDice(ply)) {
     analysis.decision = 'alternatives' in analysis && _checkerIsDecision(analysis);
-  } else if (action === ACTION_DOUBLE || action === ACTION_TAKE || action === ACTION_DROP) {
+  } else if (CUBE_ACTIONS.includes(action)) {
     analysis.decision = _cubePlyIsDecision(ply, analysis);
   } else if (action === ACTION_RESIGN_GAME || action === ACTION_RESIGN_MATCH) {
     analysis.decision = true;
@@ -996,21 +1496,25 @@ export function _v1Block(anal, decisions, plyAt, matchLength, ours = null) {
       const prior = blockObj.get(key) || {};
       blockObj.set(key, { ..._checker(d, blockLevel, frame, mine), ...prior });
     } else if (d.kind === KIND_CUBE && dice) {
-      const label = mine ? _label(_resolve(blockLevel, d.level), true) : null;
+      const lv = _resolve(blockLevel, d.level);
+      const label = mine ? _label(lv, true) : null;
       if (!blockObj.has(key)) blockObj.set(key, {});
-      _liveCube(d, frame, blockObj.get(key), label === undefined ? null : label);
-    } else if (d.kind === KIND_CUBE
-               && (action === ACTION_DOUBLE || action === ACTION_TAKE || action === ACTION_DROP)) {
+      _liveCube(d, frame, blockObj.get(key), label === undefined ? null : label, lv);
+    } else if (d.kind === KIND_CUBE && CUBE_ACTIONS.includes(action)) {
       blockObj.set(key, _cubePly(d, action, blockLevel, frame, mine));
     } else if (d.kind === KIND_ROLL && dice) {
       // From the roller's side, in the block's currency [7.6] -- a difference
       // of two MWCs, so it converts by the frame's slope alone.
       if (!blockObj.has(key)) blockObj.set(key, { decision: false });
-      blockObj.get(key).luck = frame.toDelta(d.luck);
-      luckLevels.add(_label(_resolve(blockLevel, d.level), mine));
+      const obj = blockObj.get(key);
+      obj.luck = frame.toDelta(d.luck);
+      if (d.producer_ref !== undefined) obj.luck_producer_ref = d.producer_ref;
+      const lv = _resolve(blockLevel, d.level);
+      obj[_LV_LUCK] = lv;
+      luckLevels.add(_label(lv, mine));
     } else if (d.kind === KIND_RESIGN
                && (action === ACTION_RESIGN_GAME || action === ACTION_RESIGN_MATCH)) {
-      blockObj.set(key, _resign(d, frame));
+      blockObj.set(key, _resign(d, frame, _resolve(blockLevel, d.level)));
     }
   }
 
@@ -1043,7 +1547,7 @@ export function _v1Block(anal, decisions, plyAt, matchLength, ours = null) {
   } else if (blockLevel.rollout) {
     info.eval_level = 'rollout';
   }
-  info.model_id = _modelId(anal);
+  if (anal.model_id !== undefined) info.model_id = anal.model_id;
   if (anal.met_id) info.met_id = anal.met_id;
   info.timestamp = anal.started_at !== undefined ? Number(anal.started_at / 1000n) : 0;
   if (anal.duration_ms) info.duration_ms = anal.duration_ms;
@@ -1054,7 +1558,125 @@ export function _v1Block(anal, decisions, plyAt, matchLength, ours = null) {
   // Every block states its identifier, not only ours: a signature, and an
   // annotation addressed to a decision, name the block by it.
   info.analysis_id = anal.analysis_id;
+  Object.assign(info, _blockFields(anal, ours, plyAt, matchLength));
+  if (mine && ours.fields && ours.fields.model_id !== undefined) {
+    info.model_id = ours.fields.model_id;        // a value v2 could not hold
+  }
+  info[_LV] = blockLevel;                        // for `finishLevels`, once the block is complete
   return [info, blockObj, luckLevels.size > 0];
+}
+
+// The block fields that are v2's own, in the order a document lists them.
+const BLOCK_KEYS = ['producer', 'complete', 'coverage', 'model_name', 'model_digest',
+  'engine_build', 'currency', 'cube_efficiency', 'tables', 'dials', 'completed_at', 'sources'];
+// How each is spelled in an `x-gammonview-analysis` item when v2 cannot hold it:
+// `s` as is, `i` an integer, `f` a number, `l` a list of strings.
+const GV_BLOCK_FIELDS = {
+  producer: 'i', model_id: 's', model_name: 's', model_digest: 's',
+  engine_build: 's', tables: 's', completed_at: 'i', sources: 'l',
+};
+const GV_DIAL_FIELDS = Object.fromEntries(DIAL_FIELDS.map(([, name]) => [
+  name, DIAL_FLAGS.includes(name) ? 'b' : name === 'top_deep_threshold' ? 'f' : 'i']));
+
+/** The currency a block is written in unless its document says another: a
+ *  match's equities are match winning chances, a money game's cubeful money. */
+export function defaultCurrency(matchLength) {
+  return matchLength > 0 ? CURRENCY_CUBEFUL_MATCH : CURRENCY_CUBEFUL_MONEY;
+}
+
+/** The keys v2's block record adds to `analysis_info`: the file's, with an
+ *  annotation of ours standing in for a value v2 could not hold. */
+function _blockFields(anal, ours, plyAt, matchLength) {
+  const have = {};
+  for (const k of BLOCK_KEYS) if (anal[k] !== undefined) have[k] = anal[k];
+  if (have.coverage !== undefined) {
+    for (const ref of have.coverage) {
+      if (ref >= plyAt.length) {
+        throw new GvabError(`OGXM v2 coverage names ply ${ref}, past the end of the match`);
+      }
+    }
+    have.coverage = have.coverage.map((ref) => plyAt[ref].key.split(',').map(Number));
+  }
+  if (have.currency === defaultCurrency(matchLength)) delete have.currency;   // the default is not a key
+  if (ours !== null && ours.fields) {
+    for (const [k, v] of Object.entries(ours.fields)) {
+      if (k === 'dials') have.dials = { ...(have.dials || {}), ...v };
+      else if (BLOCK_KEYS.includes(k)) have[k] = v;
+    }
+  }
+  const out = {};
+  for (const k of BLOCK_KEYS) if (have[k] !== undefined) out[k] = have[k];
+  return out;
+}
+
+/**
+ * Settle which tiers keep a `level` object, and remove the markers.
+ *
+ * A document states a level by its labels (`eval_level`, `ply`), which is all
+ * its own analyses need. A tier whose true level is something else -- a rollout,
+ * a preset the producer named, a depth its labels do not reproduce -- keeps the
+ * true level as `level`, resolved against the tier above, so the key appears
+ * exactly where the labels would give a different level. A preset that only
+ * restates the depth is no difference (`sameLevel`): producers name a plain
+ * 3-ply search `3ply`, and a document would otherwise carry that on every
+ * decision.
+ *
+ * Runs once the block is complete -- `basefill` settles `ply` and `eval_level`
+ * on a foreign block, and the labels are what the writer will derive from.
+ */
+export function finishLevels(info, blockObj) {
+  const bt = info[_LV];
+  delete info[_LV];
+  const objs = [...blockObj.values()];
+  const bd = blockLevelOf(info, objs);
+  let parent;
+  if (sameLevel(bd, bt)) {
+    parent = bd;
+  } else {
+    info.level = _clone(bt);
+    parent = bt;
+  }
+  const luckLabel = info.luck_eval_level || '1ply';
+
+  // The level the writer will have for this tier.
+  const settle = (truth, derived, target, key = 'level') => {
+    if (sameLevel(truth, derived)) return derived;
+    target[key] = _clone(truth);
+    return truth;
+  };
+
+  for (const obj of objs) {
+    const marker = obj[_LV];
+    const luck = obj[_LV_LUCK];
+    delete obj[_LV];
+    delete obj[_LV_LUCK];
+    if (marker !== undefined) {
+      const [kind, level] = marker;
+      if (kind === KIND_CHECKER) {
+        const alts = obj.alternatives || [];
+        const derived = tierLevel(parent, {
+          preset: alts.length ? alts[0].eval_level : null, checker_ply: obj.ply });
+        const eff = settle(level, derived, obj);
+        for (const alt of alts) {
+          const lv = alt[_LV];
+          delete alt[_LV];
+          if (lv !== undefined) settle(lv, tierLevel(eff, { preset: alt.eval_level }), alt);
+        }
+      } else if (kind === KIND_CUBE) {
+        settle(level, tierLevel(parent, { preset: obj.eval_level, cube_ply: obj.ply }), obj);
+      } else {
+        settle(level, parent, obj);
+      }
+    }
+    for (const sub of [obj.cube_decision, obj.missed_double]) {
+      if (sub !== null && typeof sub === 'object' && sub[_LV] !== undefined) {
+        const [, level] = sub[_LV];
+        delete sub[_LV];
+        settle(level, tierLevel(parent, { preset: sub.eval_level }), sub);
+      }
+    }
+    if (luck !== undefined) settle(luck, _luckLevelOf(parent, luckLabel), obj, 'luck_level');
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1116,6 +1738,8 @@ export function _readOgxm2(data, options) {
   const games = [];
   const blocks = [];                             // {anal, decisions}
   let annos = [];
+  let clck = null;
+  let vido = null;
   for (const s of sections) {
     if (s.type === 'MTCH') mtch = _decodeMtch(s.payload);
     else if (s.type === 'GAME') games.push(_decodeGame(s.payload));
@@ -1124,6 +1748,8 @@ export function _readOgxm2(data, options) {
       if (!blocks.length) throw new GvabError('OGXM v2 DECS with no ANAL before it');
       blocks[blocks.length - 1].decisions = _decodeDecs(s.payload);
     } else if (s.type === 'ANNO') annos = _decodeAnno(s.payload);
+    else if (s.type === 'CLCK') clck = s.payload;
+    else if (s.type === 'VIDO') vido = s.payload;
   }
   if (mtch === null) {
     // An Analysis-shape file: evaluations of a match it does not contain.
@@ -1132,11 +1758,22 @@ export function _readOgxm2(data, options) {
 
   const [ogxm, plyOffset] = _v1Match(mtch, games);
   const gvMatch = _gvValues(annos, SCOPE_MATCH);
+  const gvGame = _gvValues(annos, SCOPE_GAME);
   const gvPly = _gvValues(annos, SCOPE_PLY);
-  const site = _gvGet(gvMatch, 0, GV_KEY_SITE);
-  if (site !== undefined) ogxm.site = site;
   const event = _gvGet(gvMatch, 0, GV_KEY_EVENT);
   if (event !== undefined) ogxm.event = event;
+  _restoreFields(ogxm, gvMatch, 0, GV_MATCH_FIELDS);
+  for (const side of ['white', 'black']) {
+    const name = `${side}_profile`;
+    const restored = {};
+    _restoreFields(restored, gvMatch, 0, GV_PROFILE_FIELDS, `${name}.`);
+    if (Object.keys(restored).length) ogxm[name] = { ...(ogxm[name] || {}), ...restored };
+  }
+  ogxm.games.forEach((game, gi) => _restoreFields(game, gvGame, gi, GV_GAME_FIELDS));
+  // `site` is where the match was played: our annotation, else v2's `city`,
+  // else the platform's host name.
+  const site = _gvGet(gvMatch, 0, GV_KEY_SITE);
+  ogxm.site = site !== undefined ? site : (ogxm.city || ogxm.platform || null);
   const score = _gvGet(gvMatch, 0, GV_KEY_SCORE);
   if (score !== undefined) {
     const parts = score.split(',');
@@ -1181,11 +1818,19 @@ export function _readOgxm2(data, options) {
     Object.assign(ply, restored);
   }
 
+  if (clck !== null) _docClock(clck, plyAt, ogxm);
+  if (vido !== null) {
+    _docVideo(vido, games, ogxm, plyOffset);
+    const url = _gvGet(gvMatch, 0, GV_KEY_VIDEO_URL);
+    if (ogxm.video !== undefined && url !== undefined) ogxm.video.url = url;
+  }
+
   if (deriveOgids) _deriveOgids(ogxm);
 
   const decoded = [];
   const baseBlocks = [];
   const oursIds = new Set();
+  const altMaps = new Map();
   for (const { anal, decisions } of blocks) {
     const aid = anal.analysis_id;
     let ours = null;
@@ -1209,6 +1854,13 @@ export function _readOgxm2(data, options) {
           throw new GvabError(`annotation on ply ${ref} holds another ply's decision`);
         }
         extra.set(ref, recs);
+        // An annotation addresses the record DECS holds, whose alternatives may
+        // be fewer, or ordered otherwise, than the exact ones ours keeps.
+        const exact = recs.find((d) => d.kind === KIND_CHECKER);
+        const main = decisions.find((d) => d.ply_ref === ref && d.kind === KIND_CHECKER);
+        if (exact !== undefined && main !== undefined) {
+          altMaps.set(`${aid}\0${ref}`, _altMap(main.alternatives || [], exact.alternatives || []));
+        }
       }
       ours = {
         extra, illegal: illegalRefs,
@@ -1217,14 +1869,29 @@ export function _readOgxm2(data, options) {
       if (items.has('level')) ours.level = _unquote(items.get('level')) || null;
       if (items.has('luck')) ours.luck = _unquote(items.get('luck'));
       ours.frames = _parseFrames(items.get('frame') || '');
+      ours.fields = _blockItems(items);
     }
     const [info, blockObj, hasLuck] = _v1Block(anal, decisions, plyAt, ogxm.match_length, ours);
     if (blockObj.size && ours === null) {
       if (deriveOgids) completeBaseBlock(blockObj, plyByKey, info, { convertUnits: false });
       if (!hasLuck) baseBlocks.push(decoded.length);
     }
+    finishLevels(info, blockObj);
     decoded.push([info, blockObj]);
   }
+  let fallback = [];
+  const carried = _gvGet(gvMatch, 0, GV_KEY_ANNOTATIONS);
+  if (carried !== undefined) {
+    if (carried.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(carried)) {
+      throw new GvabError('the annotations of ours are malformed');
+    }
+    try {
+      fallback = JSON.parse(_utf8.decode(_b64decode(carried)));
+    } catch {
+      throw new GvabError('the annotations of ours are malformed');
+    }
+  }
+  _placeAnnotations(ogxm, plyAt, decoded, annos, altMaps, fallback);
   _attachBlocks(ogxm, decoded, plyByKey);
   if (baseBlocks.length) ogxm._base_analyses = baseBlocks;
   // What the file holds that this document cannot: kept for the writer.
@@ -1233,10 +1900,17 @@ export function _readOgxm2(data, options) {
 }
 
 export {
+  CHECKER_KEYS, _resolve, CUBE_ACTIONS, GV_BLOCK_FIELDS, GV_DIAL_FIELDS, BLOCK_KEYS, DIAL_FIELDS, DIAL_FLAGS, _stable,
   KIND_CHECKER, KIND_CUBE, KIND_RESIGN, KIND_ROLL,
   CURRENCY_CUBEFUL_MONEY, CURRENCY_CUBEFUL_MATCH,
   GV_FORMAT, GV_KEY_ANALYSIS, GV_KEY_DECISIONS, GV_KEY_ILLEGAL_PLY,
-  GV_KEY_SITE, GV_KEY_EVENT, GV_KEY_SCORE,
+  GV_KEY_SITE, GV_KEY_EVENT, GV_KEY_SCORE, GV_KEY_ANNOTATIONS, GV_KEY_VIDEO_URL, V2_FIELD_NAMES,
+  SCOPE_DECISION, SCOPE_ALTERNATIVE, naturalKind, decisionHolder, annoDoc, annoIsOurs,
+  GV_PREFIX, GV_MATCH_FIELDS, GV_PROFILE_FIELDS,
+  GV_GAME_FIELDS, ACTION_DOUBLE, ACTION_TAKE, ACTION_DROP, ACTION_RESIGN_GAME,
+  ACTION_RESIGN_MATCH, ACTION_SET_POSITION, ACTION_BEAVER, ACTION_RACCOON, ACTION_SETTLE,
+  ACTION_RESERVED, ACTION_CUBE_SET, ACTION_PASS, ACTION_ESCAPE, LAST_KNOWN_ACTION,
+  SCOPE_GAME, _gvText, _decodeAnno, _decodeMtch,
   _decodeAnal, _decodeDecs, _scoreWalk, _walkSections, Cursor, KNOWN_SECTIONS,
   SCOPE_MATCH, SCOPE_PLY,
 };

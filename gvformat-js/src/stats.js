@@ -43,7 +43,7 @@ const _MAX_CHECKER_ACTION_ID = 20;
 // whether the play's longest hop happened to fit three bits.
 const _ACTION_SET_POSITION = 31;
 
-const _CUBE_ACTION_IDS = new Set([21, 22, 23]);
+const _CUBE_ACTION_IDS = new Set([21, 22, 23, 32]);
 
 const _COLOR_NAME = { 1: "white", 0: "black" };
 

@@ -1,0 +1,42 @@
+{
+  "match-currencies": {
+    "length": 4158,
+    "settled_sha256": "99548449686d743422dae17c1718cf845922ca6cb78996eecd2d301a4c1919f2",
+    "sha256": "c7bc246b4250aa0c6c6e50d69c54c4df0b659ea4a74a4d0f05177d83351d9817"
+  },
+  "money-block-in-a-match": {
+    "length": 4152,
+    "settled_sha256": "42444b29f61634c15c57d16a9284b2736b2110d921e73fec65f472cac7857f0c",
+    "sha256": "541656316d0e9b4936ca1b690bf1384b4ec98ea5de184764986a85c4e5f00e1d"
+  },
+  "money-in-a-match-currency": {
+    "length": 5118,
+    "settled_sha256": "30a34a2de485a8402df1058588a71f940be2de87a8ba8596249f57162de182fb",
+    "sha256": "88122b7c4e3a0321f6f10019204c8c39a8ec87d63dcb50aff40bbec1b0aae6ba"
+  },
+  "partial": {
+    "length": 5191,
+    "settled_sha256": "6cade5770acfcf0476e56c50cfa20d7beb51681f061f3ff09a624f2202b7a260",
+    "sha256": "827113951545f51863b9001446f4e5346f54a86581352ffe792a09e5c772314e"
+  },
+  "resigned": {
+    "length": 595,
+    "settled_sha256": "6da5f4dabf2a32f1b9dcd815964b745c8e8f4a25e814bf752d9d38c75bbaa657",
+    "sha256": "8a3c53c8e1a75b1a12d9be41bd7cc0e49196668844c1dc76f2dab7cb612dc6ce"
+  },
+  "rich-money": {
+    "length": 6141,
+    "settled_sha256": "f85c6add67fccc55bda58cceb1376ef5e84c8617d6ace32bda22fe70dd56538e",
+    "sha256": "268e55b3d56e67fc867c3be912103c149cfbdffa01748c89d7bd1e3bf46b06bd"
+  },
+  "two-blocks": {
+    "length": 11026,
+    "settled_sha256": "e63ca61d1e0eb3185e9404f88c68e86d97dd6646042ba73ea29edc1eeac4e991",
+    "sha256": "c94b29b08e6b0e57fa2efae8eeea0211d738e2332303917613217b1369e42929"
+  },
+  "unholdable": {
+    "length": 25579,
+    "settled_sha256": "d0de892df149954b19554d385c42491198dbc4b86368667ad9366828671797c5",
+    "sha256": "70d65f86207dfebe3f72581f0d65f84a5d409af546724acbd823eb0b17d67392"
+  }
+}

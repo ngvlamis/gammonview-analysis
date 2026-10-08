@@ -109,6 +109,30 @@ def model_id() -> str:
         return MODEL_NAME
 
 
+def engine_build() -> str | None:
+    """bgsage's version, as v2's ``engine_build``: the build that produced the
+    numbers. Deterministic for a given install, like ``model_id``; ``None`` where
+    the distribution metadata is missing (a source tree on ``sys.path``)."""
+    try:
+        return _metadata.version("bgsage")
+    except Exception:
+        return None
+
+
+#: The rollout behind each of bgsage's truncated levels, as v2's ``level.rollout``
+#: states one. bgsage builds these in ``BgBotAnalyzer.__init__`` and keeps them
+#: private, so they are copied here; ``tests/test_ogxm2_blocks_analysis.py``
+#: checks them against the analyzers it builds, which is what catches a bgsage that
+#: changes one. The seed is the constructor's default (we pass none), and the
+#: variance reduction and match policy are not stated because bgsage does not
+#: expose them. ``move_ply`` is the depth of the move search inside a trial.
+ROLLOUT_LEVELS = {
+    "truncated1": {"trials": 72, "truncation_depth": 5, "move_ply": 1, "seed": "42"},
+    "truncated2": {"trials": 360, "truncation_depth": 7, "move_ply": 2, "seed": "42"},
+    "truncated3": {"trials": 360, "truncation_depth": 7, "move_ply": 3, "seed": "42"},
+}
+
+
 #: Historical name; `match.py` owned the bar before `position.py` needed one.
 _ProgressBar = ProgressBar
 
@@ -607,6 +631,11 @@ def analyze_ogxm(
     return {
         "summary": {
             "engine": model_id(),
+            "engine_build": engine_build(),
+            # Every decision of the match was looked at: v2's `complete`, as
+            # against an incremental run that covered some of them.
+            "complete": True,
+            "rollout_levels": ROLLOUT_LEVELS,
             "player1": p1,
             "player2": p2,
             "match_length": ml if ml > 0 else None,

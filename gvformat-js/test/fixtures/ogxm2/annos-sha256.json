@@ -1,0 +1,38 @@
+{
+  "annotated": {
+    "length": 5711,
+    "sha256": "9ec1761d12f433b624d7b738b503bcf91115e553e339dcdf5fbc70bf06615282"
+  },
+  "annotated-decisions-fallback": {
+    "length": 5647,
+    "sha256": "b7765a44006b52f336c673277a097d448263260798c10b428b95c5eeb247f995"
+  },
+  "annotated-fallback": {
+    "length": 13400,
+    "sha256": "556a3a4825aa5ad837735577653de9c214189c0d75c4c47d56662424a83fb984"
+  },
+  "clock-canonical": {
+    "length": 537,
+    "sha256": "c99c188f5144dd6cf93721065c31f49cd6b7441fcf28e289573d53c148029bbc"
+  },
+  "clock-empty": {
+    "length": 549,
+    "sha256": "bdc3e6d3247a46f8bad814e3ebcbe352ac117715fb424aec7ea3cf096fffdc48"
+  },
+  "clock-gap": {
+    "length": 595,
+    "sha256": "607b2ca97e7490e1efccc7cadbf81dee2be19681e1fca99ee9a995dac0190ce6"
+  },
+  "clock-video": {
+    "length": 658,
+    "sha256": "9d65b64db629bf74b8e1695f066db3f0dddd3ec6dc3416d131617f704afe6309"
+  },
+  "video-dropped-mark": {
+    "length": 658,
+    "sha256": "9d65b64db629bf74b8e1695f066db3f0dddd3ec6dc3416d131617f704afe6309"
+  },
+  "video-url-unholdable": {
+    "length": 582,
+    "sha256": "748cdf74be931405b3bd3d92cd7157d6fbfd40c581bfe7a0f85a8fce28cf4031"
+  }
+}

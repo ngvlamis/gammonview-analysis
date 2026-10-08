@@ -76,6 +76,49 @@ _STARTING_BOARD_P1 = [
     5, 0, 0, 0, -3, 0, -5, 0, 0, 0, 0, 2, 0,
 ]
 
+#: The opening positions of v2's variants (spec 5.2), in the absolute frame a
+#: ``set_position`` ply carries: ``{point: checkers}`` for White (positive) and
+#: Black (stored negated). Variant 0 is ``_STARTING_BOARD_P1`` in the other frame.
+_VARIANT_OPENING = {
+    0: ({1: 2, 12: 5, 17: 3, 19: 5}, {24: 2, 13: 5, 8: 3, 6: 5}),
+    1: ({1: 2, 2: 2, 12: 4, 17: 3, 19: 4}, {24: 2, 23: 2, 13: 4, 8: 3, 6: 4}),
+    2: ({1: 1, 2: 1, 3: 1}, {24: 1, 23: 1, 22: 1}),
+    3: ({1: 15}, {24: 15}),
+}
+
+
+def variant_opening_abs(variant: int) -> list[int] | None:
+    """The opening board of a v2 variant in the absolute frame, or None for a
+    variant this code does not know (it cannot be replayed)."""
+    if variant not in _VARIANT_OPENING:
+        return None
+    white, black = _VARIANT_OPENING[variant]
+    board = [0] * 26
+    for pt, n in white.items():
+        board[pt] = n
+    for pt, n in black.items():
+        board[pt] = -n
+    return board
+
+
+def variant_opening_p1(variant: int) -> list[int] | None:
+    """``variant_opening_abs`` in the P1/White frame (the running board's)."""
+    a = variant_opening_abs(variant)
+    if a is None:
+        return None
+    p1 = [0] * 26
+    p1[0] = -a[25]
+    p1[25] = a[0]
+    for i in range(1, 25):
+        p1[i] = a[25 - i]
+    return p1
+
+
+def variant_checkers(variant: int) -> int:
+    """Checkers a side starts with: 3 in hypergammon, 15 in the rest."""
+    return 3 if variant == 2 else 15
+
+
 #: Ascending dice-pair ordering used both by game_eval.py's luck loop and by
 #: the OGXM Action ID Table (0=Dice 11 ... 20=Dice 66).
 _DICE_PAIRS: list[tuple[int, int]] = [
@@ -795,6 +838,17 @@ class _TurnState:
     def cube_value(self) -> int:
         return 1 << self.cube_log2
 
+    def start_cube(self, value: int = 1, owner: int = 2, auto_doubles: int = 0) -> None:
+        """The cube a game opens with (spec 5.3): ``value`` doubled once per
+        automatic double, held by seat ``owner`` (0 White, 1 Black, else
+        centred)."""
+        value = int(value or 1)
+        if value < 1 or value & (value - 1):
+            value = 1                   # not a cube value (v2 cannot hold one): no cube at all
+        self.cube_log2 = value.bit_length() - 1 + max(0, int(auto_doubles or 0))
+        self.cube_owner = (_OGID_CUBE_WHITE if owner == 0
+                           else _OGID_CUBE_BLACK if owner == 1 else _OGID_CUBE_CENTERED)
+
 
 # ---------------------------------------------------------------------------
 # OGID helpers
@@ -804,7 +858,7 @@ def _ogid(
     board_p1: list[int], *, cube_value: int, cube_owner: str, cube_action: str,
     dice: tuple[int, int] | None, on_roll: str, game_state: str,
     score_white: int, score_black: int, match_length: int, crawford: bool,
-    move_id: int = 0,
+    move_id: int = 0, nrof_checkers: int = 15,
 ) -> str:
     return board_to_ogid(
         board_p1,
@@ -820,6 +874,7 @@ def _ogid(
         match_length=match_length,
         crawford=crawford,
         move_id=move_id,
+        nrof_checkers=nrof_checkers,
     )
 
 
@@ -1498,6 +1553,49 @@ def to_ogxm_json(result: dict, *, keep_orientation: bool = False) -> dict:
             # the bare fallback keeps an older caller's output valid.
             "model_id": summary.get("engine") or "bgsage",
             "timestamp": ts,
+            # What ran it, and that it ran the whole match (v2's `engine_build`
+            # and `complete`); supplied for the same reason as `model_id`.
+            **({"engine_build": summary["engine_build"]} if summary.get("engine_build") else {}),
+            **({"complete": True} if summary.get("complete") else {}),
         }
     ogxm["games"] = games_out
+    if has_analysis and summary.get("rollout_levels"):
+        attach_rollout_levels(ogxm, summary["rollout_levels"])
     return ogxm
+
+
+def attach_rollout_levels(ogxm: dict, levels: dict) -> None:
+    """Give the decisions judged by a rollout their rollout's settings, in place.
+
+    ``levels`` maps a level label to the settings of the rollout it names
+    (``trials``, ``truncation_depth``, ``move_ply``, ``seed``): whoever ran the
+    analysis knows them, this package cannot. Only the alternatives and cube
+    records at such a label get a ``level`` -- the labels (``eval_level``,
+    ``ply``) already say everything else, and a level the labels reproduce is
+    not stated (``docs/OGXM_V2_PROFILE.md``). The level is the full one the
+    labels would give that record, with its rollout: that is the form a reader
+    gives back, so the document survives a write and a read unchanged."""
+    info = ogxm.get("analysis_info") or {}
+    base = int(info.get("ply") or 0)
+
+    def rolled(label: str, **depths) -> dict:
+        lv: dict = {"preset": label}
+        for key, v in (("checker_ply", base), *depths.items()):
+            if v:
+                lv[key] = v
+        lv["rollout"] = dict(levels[label])
+        return lv
+
+    for game in ogxm.get("games") or []:
+        for ply in game.get("plies") or []:
+            a = ply.get("analysis")
+            if not isinstance(a, dict):
+                continue
+            for alt in a.get("alternatives") or []:
+                if alt.get("eval_level") in levels:
+                    alt["level"] = rolled(alt["eval_level"], checker_ply=a.get("ply") or base)
+            for sub in (a.get("cube_decision"), a.get("missed_double")):
+                if isinstance(sub, dict) and sub.get("eval_level") in levels:
+                    sub["level"] = rolled(sub["eval_level"])
+            if "alternatives" not in a and a.get("eval_level") in levels:
+                a["level"] = rolled(a["eval_level"], cube_ply=a.get("ply"))

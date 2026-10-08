@@ -36,8 +36,9 @@ console.log(ogxm.match_length, ogxm.games.length);
 
 // write_gvab writes OGXM v2 (write_gvab_v1 is the old v1 writer, kept for
 // tests and comparison). Rewriting is idempotent: one pass canonicalizes, and
-// it is byte-stable from then on. Another producer's v2 file keeps what the document
-// cannot hold (clock, video, signatures, annotations, unknown fields) until edited.
+// it is byte-stable from then on. Every v2 field and section (match context, player
+// profiles, clock, video, annotations, rollout settings) is a document key; another
+// producer's signatures and unknown sections are carried, and kept while unedited.
 const canonical = write_gvab(read_gvab(bytes));
 write_gvab(read_gvab(canonical));   // === canonical
 
@@ -76,7 +77,7 @@ naturally from either side of the Python/JS boundary.
 |---|---|
 | `src/` | The library. Browser-safe: no `node:*` imports, no `import.meta`. |
 | `cli/` | Node front ends for the converters — executed, never imported. |
-| `test/` | 27 standalone test scripts, chained by `npm test`. |
+| `test/` | 30 standalone test scripts, chained by `npm test`. |
 
 The `src/` / `cli/` split is load-bearing rather than cosmetic: `import.meta` is
 a syntax error once a toolchain rewrites the module to CommonJS, and `node:*`
@@ -85,7 +86,7 @@ consumers' builds. `test/test-robustness.js` fails if either pattern reappears.
 See [`cli/README.md`](cli/README.md).
 
 ```bash
-npm test        # all 27, no network and no fixtures outside the repo
+npm test        # all 30, no network and no fixtures outside the repo
 ```
 
 Each script is standalone and runnable on its own (`node test/test-ogid.js`);

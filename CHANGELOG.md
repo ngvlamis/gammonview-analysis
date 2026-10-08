@@ -53,16 +53,73 @@ content (1e-6 precision, the values v1 clamped or dropped).
 
 **Another producer's v2 file keeps its content when rewritten** *(spec I7)*
 
-Reading a v2 file now records the source's own `CLCK`, `VIDO`, `SIGN`, `MSIG`,
-foreign `ANNO` records, unknown sections and fields in `_ogxm2_passthrough`, and
+Reading a v2 file records the source's own bytes in `_ogxm2_passthrough`, and
 `write_gvab` writes each part back verbatim until the document edits it
 (decided by a SHA-256 fingerprint of our canonical encoding of the part, so an
 unedited signature keeps verifying). Appending our analysis to a HedgeHog file
-leaves every one of its sections byte-identical; editing the match drops the
-signatures that cover it, and editing a move also drops the clock, video and
-ply-addressed annotations. A v1 file's `SIGN`, `CLCK` and `VIDO` chunks are now
-written as v2, as the reference's `v1_to_v2` does. Every block now reports its
-`analysis_id`. `@gammonview/gvformat` mirrors it, with a synchronous SHA-256.
+leaves every one of its sections byte-identical; editing the match or a move
+drops the signatures that cover it, and nothing else. A v1 file's `SIGN`,
+`CLCK` and `VIDO` chunks are written as v2, as the reference's `v1_to_v2` does.
+`@gammonview/gvformat` mirrors it, with a synchronous SHA-256.
+
+**Every v2 field and section is a document key** *(breaking: document shape)*
+
+The document now holds everything v2 defines, under v2's own names, so
+GammonView can show and edit it rather than only carry it. Only signatures,
+unknown sections and fields a later spec adds stay opaque. A key is absent when
+the file has no value, so existing documents are unchanged.
+
+- **Match:** `stage`, `round`, `table`, `city`, `country`, `event_url`,
+  `match_ref`, `rated`, `completed_at` (ms), `date_precision`, `player_seat`,
+  `crawford_before_start`, `auto_doubles`, `variant`, `score_start`, and
+  `white_profile` / `black_profile` (`user_id`, `rating`, `rating_system`,
+  `country`, `kind`). v2's `site` (the platform's host name) is **`platform`**;
+  our `site` stays the free-text place and reads as `city`, else `platform`,
+  when nothing else states it.
+- **`event_year` is its own key** and is no longer appended to `event`. A display
+  that showed "Nordic Open 2025" joins the two.
+- **Games:** `termination`, `initial_cube_value`, `initial_cube_owner`,
+  `auto_doubles`. **Plies:** beaver, raccoon, settle, cube set and pass, with
+  their values; an action id the spec has not assigned is kept whole.
+- **Analysis blocks:** `producer`, `complete`, `coverage`, `model_name`,
+  `model_digest`, `engine_build`, `currency`, `cube_efficiency`, `tables`,
+  `dials`, `completed_at`, `sources`, and a `level` record (rollout trials,
+  truncation, seed, ...) wherever the labels do not already say it — on a
+  block, a decision or an alternative. **`model_id` and `model_name` are now
+  each exactly what the file states**: a HedgeHog block's `model_id` is its UUID,
+  where 1.5 showed `hedgehog/<name>`, so a display should show
+  `model_name ?? model_id`.
+- **Decisions:** `alternatives_total`, `rollouts_done`, `deep_searched`,
+  `position_tags`, `producer_ref`, `source_band`; per alternative `rollout_se`
+  and `cubeless_equity`; per cube `take_point`, `window_searched`,
+  `is_optional`, `is_free_cube`, `cubeful_take_value`, `currency`; per
+  resignation `correct_value`.
+- **Clock, video, annotations:** `clock` (settings) with `clock_ms` on each
+  ply; `video` with `video_ms` (and the wall-clock marks) on each marked ply;
+  `annotations` (prose or key/value, author, language, time, arrows and
+  highlights) on the match, a game, a ply, a decision and an alternative.
+  These now move with their ply, so **a move edit keeps them**.
+
+A value v2 cannot hold (too long, wrong characters, a user id without a
+platform) is written to an `x-gammonview-…` annotation and restored on read,
+never dropped; a document that breaks a rule outright (an annotation keyed with
+a v2 field name, an invalid clock) is refused. `docs/OGXM_V2_PROFILE.md` maps
+each field.
+
+**Files we used to refuse now read** *(fix)*: a match that starts part-way
+through (`score_start`), a game that starts with the cube turned, automatic
+doubles, and the variants (nackgammon, hypergammon, longgammon). Positions are
+derived from each, and `gvanalysis` analyzes the first three; a variant is
+refused there, since the engine plays backgammon only.
+
+**Beavers and raccoons are analyzed** *(fix)*: the cube is 4× (to the
+beaverer) or 8× (to the doubler) from then on, where the analysis used to
+ignore the beaver and carry on at the wrong cube. The beaver is judged as a take, as the engine has no beaver
+verdict.
+
+**Our analysis records `engine_build` and `complete`**, and a rolled-out
+decision states its rollout settings. The goldens differ by those two block
+keys and nothing else.
 
 **A `.bgf`'s MWCs are BGBlitz's own** *(fix)*
 

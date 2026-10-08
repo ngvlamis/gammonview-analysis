@@ -108,6 +108,11 @@ def _zero(ev) -> bool:
     return isinstance(ev, dict) and not any(ev.get(k) for k in _PROBS)
 
 
+_V2_BLOCK_KEYS = ("producer", "complete", "coverage", "model_name", "model_digest",
+                  "engine_build", "currency", "cube_efficiency", "tables", "dials", "completed_at",
+                  "sources", "level")
+
+
 def _rule(path: list, key: str, v1, v2, ctx: dict) -> str | None:
     """The rule that explains ``v1 -> v2`` at ``path + [key]``, or None."""
     if key == "analysis_id" and v1 is None:
@@ -137,6 +142,8 @@ def _rule(path: list, key: str, v1, v2, ctx: dict) -> str | None:
         return "met-id"                            # the table a block's equities come from, v2's ANAL
     if key == "mwc_frame" and v1 is None and isinstance(v2, list):
         return "mwc-frame"                         # a source's own MWC frame, in the block annotation
+    if key in _V2_BLOCK_KEYS and v1 is None and v2 is not None:
+        return "block-provenance"                  # what v2's block record states and v1's has no field for
     return None
 
 
@@ -329,6 +336,109 @@ def _bgf_frame_checks() -> None:
                   f"5. {name}: the last game is worth {points} (got {last['points_won']})")
 
 
+def _field_rules() -> None:
+    """The read-back rules the match, player and game fields add (profile
+    section 4). ``test_ogxm2_fields.py`` holds the rest of what those fields do."""
+    print("\n--- 6. the rules of the match, player and game fields ---")
+    import ogxm2_fields_cases as C
+
+    ex = C.extras()
+    resign = next(p for p in ex["games"][1]["plies"] if p["action_id"] == R.ACTION_RESIGN_GAME)
+    resign["resign_value"] = 1
+    next(p for p in ex["games"][0]["plies"] if p["action_id"] == R.ACTION_SETTLE)["settle_value"] = 4.0000004
+    back = read_gvab(write_gvab(ex))
+    check("resign_value" not in next(p for p in back["games"][1]["plies"]
+                                     if p["action_id"] == R.ACTION_RESIGN_GAME),
+          "6. resign-derived: a resign_value the points and the cube give is not kept")
+    check(next(p for p in back["games"][0]["plies"]
+               if p["action_id"] == R.ACTION_SETTLE)["settle_value"] == 4.0,
+          "6. settle-millionths: a settlement is held to a millionth of a point")
+    ctx = C.context()
+    del ctx["site"]
+    check(read_gvab(write_gvab(ctx))["site"] == "Oslo",
+          "6. site-follows-place: no site, a city: the city is the site")
+    plain = C.midmatch()
+    padded = copy.deepcopy(plain)
+    padded.update(variant=0, rated=False, crawford_before_start=False, auto_doubles=False,
+                  rules_other=0, stage="")
+    for g in padded["games"]:
+        g.update(initial_cube_value=1, initial_cube_owner=2, auto_doubles=0)
+    check(write_gvab(padded) == write_gvab(plain) and "stage" not in read_gvab(write_gvab(padded)),
+          "6. default-omitted: v2's defaults are not written, and read back absent")
+
+
+def _block_rules() -> None:
+    """The read-back rules the analysis fields add (profile section 4).
+    ``test_ogxm2_blocks.py`` holds the rest of what those fields do."""
+    print("\n--- 7. the rules of the analysis fields ---")
+    import ogxm2_blocks_cases as C
+
+    def settle(doc):
+        return read_gvab(write_gvab(doc))
+
+    d = C.golden(C.MONEY)
+    d["analysis_info"]["currency"] = 1
+    check("currency" not in settle(d)["analysis_info"],
+          "7. block-currency: a block's currency equal to the match's default is not a key")
+    check("currency" not in settle(C.money_in_a_match_currency())["analysis_info"],
+          "7. -- and match winning chances in a money game are written, and read back, as cubeful money")
+    mc = settle(C.match_currencies())
+    subs = [p["analysis"]["cube_decision"] for _g, _p, p in C.plies(mc)
+            if isinstance((p.get("analysis") or {}).get("cube_decision"), dict)]
+    check("currency" not in subs[1] and subs[0]["currency"] == 1,
+          "7. cube-currency: a cube decision's currency equal to its block's is not written")
+
+    d = C.partial()
+    d["analysis_info"]["coverage"] = [[0, 5], [0, 2], [0, 2], [7, 7]]
+    cov = settle(d)["analysis_info"]["coverage"]
+    check(cov == sorted(cov) and [0, 2] in cov and [0, 5] in cov and [7, 7] not in cov
+          and len(cov) == len(set(map(tuple, cov))) and [0, 0] in cov,
+          "7. coverage: ascending and without repeats, plies that exist, and every ply the block holds a decision for")
+    d["analysis_info"]["coverage"] = [[7, 7]]
+    check("coverage" not in settle(d)["analysis_info"],
+          "7. -- a list naming no ply is no key")
+
+    d = C.rich_money()
+    a = d["games"][0]["plies"][0]["analysis"]
+    a["alternatives"][3]["level"] = {"preset": "1ply"}
+    back = settle(d)["games"][0]["plies"][0]["analysis"]["alternatives"][3]["level"]
+    check(back["preset"] == "1ply" and back["checker_ply"] == 2 and back["cube_ply"] == 2
+          and "rollout" not in back,
+          "7. level-resolved: a level reads back resolved against the tier above; its rollout cleared, the rest inherited")
+    d = C.golden(C.MONEY)
+    d["analysis_info"]["ply"] = 2
+    gi, pi, p = C.checker_plies(d)[0]
+    p["analysis"]["level"] = {"preset": "2ply", "checker_ply": 2}
+    check("level" not in settle(d)["games"][gi]["plies"][pi]["analysis"],
+          "7. level-depth: a level the labels give but for a preset that only names the depth is not kept")
+    d = C.rich_money()
+    d["games"][0]["plies"][0]["analysis"]["level"]["rollout"]["seed"] = 42
+    check(settle(d)["games"][0]["plies"][0]["analysis"]["level"]["rollout"]["seed"] == "42",
+          "7. seed-string: a rollout's seed reads back as a decimal string, given as one or as a number")
+    d = C.rich_money()
+    d["analysis_info"]["dials"].update(nonsense=3, exact_bearoff=False)
+    back = settle(d)["analysis_info"]["dials"]
+    check("nonsense" not in back and "exact_bearoff" not in back,
+          "7. dials-known: dials v2 does not define, and a false flag, are not kept")
+    d = C.rich_money()
+    d["analysis_info"].update(model_name="Zed")
+    d["analysis_info"].pop("model_id")
+    back = settle(d)["analysis_info"]
+    check(back["model_name"] == "Zed" and "model_id" not in back,
+          "7. model-name: a model_name alone reads back with no model_id")
+    d = C.rich_money()
+    d["analysis_info"].update(cube_efficiency=0.61234, tables="")
+    sub = next(p["analysis"]["cube_decision"] for _g, _p, p in C.plies(d)
+               if p.get("analysis", {}).get("cube_decision", {}).get("is_free_cube"))
+    sub["take_point"] = 0.31254
+    back = settle(d)
+    bsub = next(p["analysis"]["cube_decision"] for _g, _p, p in C.plies(back)
+                if p.get("analysis", {}).get("cube_decision", {}).get("is_free_cube"))
+    check(back["analysis_info"]["cube_efficiency"] == 0.6123 and bsub["take_point"] == 0.3125
+          and "tables" not in back["analysis_info"],
+          "7. probability-places: a cube efficiency and a take point are held to a ten-thousandth; an empty string is no key")
+
+
 def main() -> int:
     try:
         lib = oracle.version()
@@ -423,6 +533,8 @@ def main() -> int:
           "4. a stated score the games do not add up to is kept")
 
     _bgf_frame_checks()
+    _field_rules()
+    _block_rules()
 
     print(f"\n{_checks - len(_failures)}/{_checks} checks passed.")
     if _failures:

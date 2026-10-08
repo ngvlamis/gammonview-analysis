@@ -12,8 +12,8 @@
 // The base document's match body (games, plies, OGIDs, orientation, clock) is
 // kept **verbatim**; only per-ply `analysis`/`analyses` and the top-level
 // analysis metadata change. `our`'s analysis objects are transplanted onto the
-// base's plies by decision-ply order (a decision ply is action_id 0-23;
-// terminal and set-position plies never carry analysis).
+// base's plies by decision-ply order (a decision ply is action_id 0-23, or a beaver
+// answering a double; terminal and set-position plies never carry analysis).
 //
 // Both documents must share orientation (same `player_white`) — analysis move
 // steps live in the absolute frame, so a mismatch would mirror them. This is
@@ -32,23 +32,43 @@
 
 import { MAX_ANALYSES } from './constants.js';
 
-/** True for a ply this alignment pairs up: a checker/cube action (id 0-23), or a
- *  *restated play* -- a set-position ply (31) carrying the roll's dice, which is
- *  an illegal play no dice ply could encode (see `setPositionPly` in export.js).
+/** The plies of one game that can carry an analysis, in order: a checker or cube
+ *  action (id 0-23), a *restated play* -- a set-position ply (31) carrying the
+ *  roll's dice, which is an illegal play no dice ply could encode (see
+ *  `setPositionPly` in export.js) -- and the ply that answers a double with a
+ *  beaver (32) or a raccoon (33), which is where the engine's response lands.
  *  Both documents reach such a ply by the same route, so both list it here and
- *  the pairing stays 1:1.
+ *  the pairing stays 1:1: `our` has a take where the base has a beaver.
  *
- *  Terminal plies (24-30) hold no decision at all, and a set-position ply with
- *  *no* dice states where a game starts rather than a turn taken. */
-function _isDecision(ply) {
-  const aid = ply.action_id;
-  if (aid === null || aid === undefined) return false;
-  return (aid >= 0 && aid <= 23) || (aid === 31 && ply.d1 !== null && ply.d1 !== undefined);
+ *  A beaver is answered at most once: the raccoon that follows it answers the
+ *  beaver, not a double, and the engine has no decision for it. Terminal plies
+ *  (24-30) hold no decision at all, and a set-position ply with *no* dice states
+ *  where a game starts rather than a turn taken. */
+function _decisionPlies(game) {
+  const out = [];
+  let pending = false;                   // a double that has not been answered
+  for (const ply of game.plies || []) {
+    const aid = ply.action_id;
+    if (aid === null || aid === undefined) continue;
+    if (aid === 21) {
+      pending = true;
+      out.push(ply);
+    } else if (aid === 22 || aid === 23) {
+      pending = false;
+      out.push(ply);
+    } else if (aid === 32 || aid === 33) {
+      if (pending) out.push(ply);
+      pending = false;
+    } else if ((aid >= 0 && aid <= 20) || (aid === 31 && ply.d1 !== null && ply.d1 !== undefined)) {
+      out.push(ply);
+    }
+  }
+  return out;
 }
 
 /** The base plies that can carry analysis, in order. */
 function _baseDecisionPlies(game) {
-  return (game.plies || []).filter(_isDecision);
+  return _decisionPlies(game);
 }
 
 /** Per-decision analysis objects for one `our` game, in ply order — each
@@ -56,11 +76,7 @@ function _baseDecisionPlies(game) {
  *  Terminal/set-position plies are skipped so this aligns 1:1 with the base's
  *  decision plies. */
 function _decisionAnalyses(game, select) {
-  const out = [];
-  for (const ply of game.plies || []) {
-    if (_isDecision(ply)) out.push(select(ply));
-  }
-  return out;
+  return _decisionPlies(game).map(select);
 }
 
 /** Pair each base decision ply with the corresponding `our` analysis. */

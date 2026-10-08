@@ -19,12 +19,13 @@ import { board_to_ogid } from './ogid.js';
 import { completeBaseBlock } from './basefill.js';
 import { splitPlace } from './place.js';
 import { _readOgxm2 } from './ogxm2.js';
+import { decodeV1Chunks } from './ogxm2_passthrough.js';
 import {
-  _STARTING_BOARD_P1, _TurnState, _ogid, _flipBoard as _flip_board,
+  variantCheckers, variantOpeningP1, _TurnState, _ogid, _flipBoard as _flip_board,
   _OGID_STATE_INITIAL_BOTH, _OGID_STATE_ROLLED, _OGID_STATE_CHECKER_DONE,
   _OGID_STATE_DOUBLE_OFFERED, _OGID_STATE_AFTER_TAKE, _OGID_STATE_GAME_OVER,
   _OGID_ACTION_NONE, _OGID_ACTION_DOUBLE, _OGID_ACTION_TAKE, _OGID_ACTION_PASS,
-  _OGID_CUBE_WHITE, _OGID_CUBE_BLACK,
+  _OGID_CUBE_WHITE, _OGID_CUBE_BLACK, _OGID_CUBE_CENTERED,
 } from './export.js';
 
 // ---------------------------------------------------------------------------
@@ -35,9 +36,9 @@ const _EVAL_ENTRY_SIZE = 20;
 const _ALT_ENTRY_SIZE = 17;
 const _CUBE_ENTRY_SIZE = 28;
 
-// Terminal action ids (game/match end, resign, forfeit, null) — plies that
-// carry no move and leave the turn state untouched.
-const _TERMINAL_ACTIONS = new Set([24, 25, 26, 27, 28, 29, 30]);
+// Terminal action ids (game/match end, resign, forfeit, null, settle) — plies
+// that carry no move and leave the turn state untouched.
+const _TERMINAL_ACTIONS = new Set([24, 25, 26, 27, 28, 29, 30, 34]);
 
 // ---------------------------------------------------------------------------
 // Custom error
@@ -680,15 +681,17 @@ function _applyMovesP1(boardP1, moves, moverIsWhite) {
 
 /**
  * Per-game [whiteStart, blackStart] match scores, accumulating each game's
- * points_won to its winner.
+ * points_won to its winner. The match opens at `scoreStart` (the document's
+ * top-level `score_start`, [white, black]) or 0-0.
  *
  * Each game's contribution is capped at what its winner still needed: the
  * stored points_won is the game's full value (a 4-point gammon is 4 even when
  * it only had to bank 1), so summing it raw runs the score past matchLength.
  */
-function _gameStartScores(games, matchLength = 0) {
+function _gameStartScores(games, matchLength = 0, scoreStart = null) {
   const out = [];
-  let w = 0, b = 0;
+  let w = scoreStart ? Number(scoreStart[0] || 0) : 0;
+  let b = scoreStart ? Number(scoreStart[1] || 0) : 0;
   for (const g of games) {
     out.push([w, b]);
     const winner = g.winner;
@@ -701,14 +704,22 @@ function _gameStartScores(games, matchLength = 0) {
 function _deriveOgids(ogxm) {
   const matchLength = Number(ogxm.match_length || 0);
   const games = ogxm.games || [];
-  const startScores = _gameStartScores(games, matchLength);
+  const startScores = _gameStartScores(games, matchLength, ogxm.score_start);
+  const variant = Number(ogxm.variant || 0);
+  const opening = variantOpeningP1(variant);
+  if (opening === null) return;                  // a variant this code cannot replay: no positions to state
+  const nrofCheckers = variantCheckers(variant);
 
   for (let gi = 0; gi < games.length; gi++) {
     const g = games[gi];
     const [sw, sb] = startScores[gi];
     const crawford = Boolean(g.is_crawford);
     const turn = new _TurnState();
-    let board = _STARTING_BOARD_P1.slice();
+    // A game opens with its own cube (spec 5.3): the initial value doubled once
+    // per automatic double, held by the owner after them.
+    turn.startCube(g.initial_cube_value || 1,
+      g.initial_cube_owner === undefined ? 2 : g.initial_cube_owner, g.auto_doubles || 0);
+    let board = opening.slice();
 
     function ogid(brd, { on_roll, game_state, cube_action, dice }) {
       return board_to_ogid(brd, {
@@ -724,6 +735,7 @@ function _deriveOgids(ogxm) {
         matchLength,
         crawford,
         moveId: turn.moveId,
+        nrofCheckers,
       });
     }
 
@@ -786,6 +798,66 @@ function _deriveOgids(ogxm) {
         }
         ply.ogid_after = ogid(board, {
           on_roll: opp,
+          game_state: turn.curState,
+          cube_action: turn.cubeAction,
+        });
+      } else if (aid === 32 || aid === 33) {
+        // A beaver answers the offer; a raccoon answers the beaver, whose
+        // position (the cube taken, doubled again) is the one it leaves.
+        if (aid === 32) {
+          ply.ogid_before = ogid(board, {
+            on_roll: onRoll,
+            game_state: _OGID_STATE_DOUBLE_OFFERED,
+            cube_action: _OGID_ACTION_DOUBLE,
+          });
+        } else {
+          ply.ogid_before = ogid(board, {
+            on_roll: onRoll,
+            game_state: turn.curState,
+            cube_action: turn.cubeAction,
+          });
+        }
+        turn.awaitingResponse = false;
+        turn.cubeLog2 += aid === 32 ? 2 : 1;
+        turn.cubeOwner = color === 1 ? _OGID_CUBE_WHITE : _OGID_CUBE_BLACK;
+        turn.curState = _OGID_STATE_AFTER_TAKE;
+        turn.cubeAction = _OGID_ACTION_TAKE;
+        ply.ogid_after = ogid(board, {
+          on_roll: opp,
+          game_state: turn.curState,
+          cube_action: turn.cubeAction,
+        });
+      } else if (aid === 37) {
+        // A pass: a turn whose roll was not recorded.
+        ply.ogid_before = ogid(board, {
+          on_roll: onRoll,
+          game_state: turn.curState,
+          cube_action: turn.cubeAction,
+        });
+        turn.moveId += 1;
+        turn.isFirstPly = false;
+        turn.curState = _OGID_STATE_CHECKER_DONE;
+        turn.cubeAction = _OGID_ACTION_NONE;
+        ply.ogid_after = ogid(board, {
+          on_roll: opp,
+          game_state: _OGID_STATE_CHECKER_DONE,
+          cube_action: _OGID_ACTION_NONE,
+        });
+      } else if (aid === 36) {
+        // A cube set: an edit stating the cube the game goes on from.
+        ply.ogid_before = ogid(board, {
+          on_roll: onRoll,
+          game_state: turn.curState,
+          cube_action: turn.cubeAction,
+        });
+        let v = Number(ply.cube_value || 1);
+        if (!(v >= 1) || (v & (v - 1)) !== 0) v = 1;
+        turn.cubeLog2 = Math.floor(Math.log2(v));
+        const owner = ply.cube_owner === undefined ? 2 : ply.cube_owner;
+        turn.cubeOwner = owner === 0 ? _OGID_CUBE_WHITE
+          : owner === 1 ? _OGID_CUBE_BLACK : _OGID_CUBE_CENTERED;
+        ply.ogid_after = ogid(board, {
+          on_roll: onRoll,
           game_state: turn.curState,
           cube_action: turn.cubeAction,
         });
@@ -1073,7 +1145,11 @@ function _readGvab(data, options) {
 
   _attachBlocks(ogxm, blocks, plyByKey);
 
-  if (unknown.length) ogxm._unknown_chunks = unknown;
+  if (unknown.length) {
+    ogxm._unknown_chunks = unknown;
+    // The clock and the video are document keys too (`clock`, `video`).
+    decodeV1Chunks(ogxm);
+  }
   if (baseBlocks.length) ogxm._base_analyses = baseBlocks;
 
   return ogxm;

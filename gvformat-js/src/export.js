@@ -22,6 +22,43 @@ export const _STARTING_BOARD_P1 = [
   5, 0, 0, 0, -3, 0, -5, 0, 0, 0, 0, 2, 0,
 ];
 
+// The opening positions of v2's variants (spec 5.2), in the absolute frame a
+// `set_position` ply carries: {point: checkers} for White (positive) and Black
+// (stored negated). Variant 0 is `_STARTING_BOARD_P1` in the other frame.
+const _VARIANT_OPENING = {
+  0: [{ 1: 2, 12: 5, 17: 3, 19: 5 }, { 24: 2, 13: 5, 8: 3, 6: 5 }],
+  1: [{ 1: 2, 2: 2, 12: 4, 17: 3, 19: 4 }, { 24: 2, 23: 2, 13: 4, 8: 3, 6: 4 }],
+  2: [{ 1: 1, 2: 1, 3: 1 }, { 24: 1, 23: 1, 22: 1 }],
+  3: [{ 1: 15 }, { 24: 15 }],
+};
+
+/** The opening board of a v2 variant in the absolute frame, or null for a
+ *  variant this code does not know (it cannot be replayed). */
+export function variantOpeningAbs(variant) {
+  const v = _VARIANT_OPENING[variant];
+  if (!v) return null;
+  const board = new Array(26).fill(0);
+  for (const [pt, n] of Object.entries(v[0])) board[Number(pt)] = n;
+  for (const [pt, n] of Object.entries(v[1])) board[Number(pt)] = -n;
+  return board;
+}
+
+/** `variantOpeningAbs` in the P1/White frame (the running board's). */
+export function variantOpeningP1(variant) {
+  const a = variantOpeningAbs(variant);
+  if (a === null) return null;
+  const p1 = new Array(26).fill(0);
+  p1[0] = -a[25];
+  p1[25] = a[0];
+  for (let i = 1; i < 25; i++) p1[i] = a[25 - i];
+  return p1;
+}
+
+/** Checkers a side starts with: 3 in hypergammon, 15 in the rest. */
+export function variantCheckers(variant) {
+  return variant === 2 ? 3 : 15;
+}
+
 const _DICE_PAIRS = [];
 for (let d1 = 1; d1 <= 6; d1++) {
   for (let d2 = d1; d2 <= 6; d2++) {
@@ -43,7 +80,7 @@ export const _OGID_ACTION_DOUBLE = "O";
 export const _OGID_ACTION_TAKE = "T";
 export const _OGID_ACTION_PASS = "P";
 
-const _OGID_CUBE_CENTERED = "N";
+export const _OGID_CUBE_CENTERED = "N";
 export const _OGID_CUBE_WHITE = "W";
 export const _OGID_CUBE_BLACK = "B";
 
@@ -605,6 +642,16 @@ export class _TurnState {
   get cubeValue() {
     return 1 << this.cubeLog2;
   }
+
+  /** The cube a game opens with (spec 5.3): `value` doubled once per automatic
+   *  double, held by seat `owner` (0 White, 1 Black, else centred). */
+  startCube(value = 1, owner = 2, autoDoubles = 0) {
+    let v = Number(value || 1);
+    if (!(v >= 1) || (v & (v - 1)) !== 0) v = 1;   // not a cube value: no cube at all
+    this.cubeLog2 = Math.floor(Math.log2(v)) + Math.max(0, Number(autoDoubles || 0));
+    this.cubeOwner = owner === 0 ? _OGID_CUBE_WHITE
+      : owner === 1 ? _OGID_CUBE_BLACK : _OGID_CUBE_CENTERED;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -625,6 +672,7 @@ export function _ogid(boardP1, opts) {
     matchLength: opts.matchLength,
     crawford: opts.crawford,
     moveId: opts.moveId,
+    nrofCheckers: opts.nrofCheckers ?? 15,
   });
 }
 

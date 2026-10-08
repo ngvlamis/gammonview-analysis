@@ -63,7 +63,7 @@ const plies = (doc) => doc.games.flatMap((g) => g.plies);
     'match: an unfinished match keeps its running score and no result');
   assert(doc.games[0].winner === 0 && doc.games[1].winner === 1 && doc.games[1].points_won === 4,
     'match: game winners and points');
-  assert(doc.analysis_info.model_id === 'hedgehog/xerxes', 'match: the model is named, not its UUID');
+  assert(doc.analysis_info.model_id === '16fcd41c-9f64-4fcc-bca2-c89e6de07721' && doc.analysis_info.model_name === 'xerxes', 'match: the model id and name as stated');
   assert(doc.analysis_info.ply === 2 && doc.analysis_info.eval_level === '2ply', 'match: block depth');
   // HedgeHog stores luck per roll; it is read, as an .xg's or a .bgf's is.
   const rolled = plies(doc).filter((p) => p.action_id <= 20);
@@ -172,11 +172,17 @@ const plies = (doc) => doc.games.flatMap((g) => g.plies);
 }
 
 // ---------------------------------------------------------------------------
-// What the v1 shape cannot replay is refused, in words for a player
+// A game that opens with the cube turned: read, not refused
 // ---------------------------------------------------------------------------
 
-assert(throwsGvab(() => readGvab(bytes('cube-on-two')), /cube already turned.*cannot show/),
-  'a game opening with the cube turned is refused, not shown wrongly');
+{
+  const doc = readGvab(bytes('cube-on-two'));
+  const g = doc.games[0];
+  assert(g.initial_cube_value === 2 && g.initial_cube_owner === undefined,
+    'cube-on-two: the cube the game opens with is on the game');
+  assert(ogidMismatches(doc, expected('cube-on-two')).length === 0,
+    'cube-on-two: every position carries that cube, as the reference states it');
+}
 
 // ---------------------------------------------------------------------------
 // Untrusted bytes: whatever is wrong with them, the failure is a GvabError

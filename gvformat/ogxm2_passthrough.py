@@ -6,18 +6,22 @@
 Mirrors ``gvformat-js/src/ogxm2_passthrough.js``; keep the two in step, byte
 for byte. ``docs/OGXM_V2_PROFILE.md`` (section 5) is the account for readers.
 
-Our document models a match and its analyses, so reading a foreign v2 file and
-writing it back used to drop everything else: the clock, the video, the
-signatures, other producers' annotations, sections and fields this version does
-not know. ``read_ogxm2`` now attaches ``_ogxm2_passthrough`` to the document,
-a JSON-safe record of the source's own bytes, and ``ogxm2_writer`` consults it.
+Our document models a match, its analyses, the clock, the video and every
+annotation a player or another tool wrote (``clock``, ``video``,
+``annotations``). What it cannot model -- the signatures, unknown sections,
+fields and annotation scopes this version does not know -- would be dropped by
+reading a foreign v2 file and writing it back. ``read_ogxm2`` therefore attaches
+``_ogxm2_passthrough`` to the document, a JSON-safe record of the source's own
+bytes, and ``ogxm2_writer`` consults it.
 
 **Fingerprints, not trust.** A signature digests the bytes as stored, so the
 only way to keep one valid is to write back the stored bytes -- and the only
 safe time to do that is when the document still says what they say. The reader
 therefore stamps each part (``MTCH``, each ``GAME``, each analysis block) with
 the SHA-256 of *our writer's canonical encoding of that part*, computed from
-the document it has just built. The writer encodes the document again; a part
+the document it has just built. The clock, the video and each annotation are
+parts too: they are encoded from the document, and the source's bytes go out
+instead only while the document still encodes to what the source decoded to. The writer encodes the document again; a part
 whose canonical bytes hash to the stored fingerprint has not been edited, and
 its original bytes are emitted instead. An edit changes the canonical bytes, so
 the original is not used and nothing stale is ever written. No flag is kept
@@ -30,15 +34,19 @@ The edit cases, in order of damage:
 * ``MTCH`` changed (a metadata edit): ``MTCH`` is re-encoded, keeping every
   field our document does not model; ``MSIG`` and ``SIGN`` go, since they cover
   it; ``match_digest`` inside a kept ``ANAL`` is recomputed;
-* a ``GAME`` changed (a move edit): plies are renumbered or reinterpreted, so
-  also ``CLCK``, ``VIDO``, foreign blocks and every ply-addressed annotation go.
+* a ``GAME`` changed (a move edit): the foreign analysis blocks go, since they
+  were made over the old moves, and with them ``SIGN`` and ``MSIG``. The clock,
+  the video and the annotations travel with their plies in the document, so
+  they are written from it and survive.
 
-A part is dropped only when keeping it would write a file that lies.
+A part is dropped only when keeping it would write a file that lies. A clock
+that cannot be written for lack of a reading is dropped (profile section 5).
 """
 
 from __future__ import annotations
 
 import base64
+import copy
 import hashlib
 import struct
 import uuid
@@ -49,18 +57,34 @@ VERSION = 1
 #: Document keys each group of ``MTCH`` fields is read into (see ``_v1_match``);
 #: a group whose keys still equal what the source stated is the source's.
 MTCH_DOC_KEYS = ("player_white", "player_black", "crawford", "jacoby", "beaver", "raccoon",
-                 "cube_limit", "result", "white_score", "black_score", "source", "timestamp",
-                 "event", "site")
+                 "auto_doubles", "rules_other", "cube_limit", "score_start", "result",
+                 "white_score", "black_score", "source", "timestamp", "date_precision",
+                 "completed_at", "crawford_before_start", "event", "event_year", "stage",
+                 "round", "table", "city", "country", "event_url", "player_seat", "platform",
+                 "match_ref", "white_profile", "black_profile", "rated")
+#: Groups of ``MTCH`` bits and the document keys they are read into. A group
+#: whose keys are as the source stated them keeps the source's bytes; fields
+#: that constrain one another (a year needs its event, a seat its profile's
+#: kind) share a group, so an edit to one can never leave the other invalid.
 _OWNED = (((0,), ("player_white",)), ((1,), ("player_black",)),
-          ((2,), ("crawford", "jacoby", "beaver", "raccoon")), ((3,), ("cube_limit",)),
-          ((6,), ("result", "white_score", "black_score")), ((7,), ("source",)),
-          ((8, 14), ("timestamp",)), ((12, 13), ("event",)))
+          ((2,), ("crawford", "jacoby", "beaver", "raccoon", "auto_doubles", "rules_other")),
+          ((3,), ("cube_limit",)),
+          ((4, 5, 6), ("score_start", "result", "white_score", "black_score")),
+          ((7,), ("source",)), ((8, 14), ("timestamp", "date_precision")),
+          ((9,), ("completed_at",)), ((11,), ("crawford_before_start",)),
+          ((12, 13), ("event", "event_year")), ((15,), ("stage",)), ((16,), ("round",)),
+          ((17,), ("table",)), ((18,), ("city",)), ((19,), ("country",)),
+          ((20,), ("event_url",)),
+          ((10, 21, 22, 23, 24), ("player_seat", "platform", "match_ref", "white_profile",
+                                  "black_profile")),
+          ((25,), ("rated",)))
 
 # How each MTCH field (spec 4) is laid out: s string, v varint, w varint64,
 # p a pair of varints, f flag, r nested record.
 _MTCH_KINDS = "ssvvppvvwwvfsvvsvssssssrrf"      # bits 0-25
 
 KNOWN_SCOPES = (0, 1, 2, 3, 4)
+CLOCK_PRECISION = 10
 
 
 def b64e(b: bytes) -> str:
@@ -135,11 +159,6 @@ def split_mtch(payload: bytes):
     return mandatory, fields, mask & ~((1 << len(_MTCH_KINDS)) - 1), payload[body.pos:start + length]
 
 
-def _str_of(field: bytes) -> str:
-    cur = _cursor(field)
-    return cur.str()
-
-
 def _mtch_record(mandatory: bytes, fields: dict[int, bytes], unknown_mask: int, tail: bytes) -> bytes:
     from .ogxm2_writer import _varint
     mask = unknown_mask
@@ -151,20 +170,25 @@ def _mtch_record(mandatory: bytes, fields: dict[int, bytes], unknown_mask: int, 
     return _varint(len(inner)) + inner
 
 
-def merge_mtch(match, doc: dict, pt_mtch: dict) -> bytes:
+def merge_mtch(match, doc: dict, pt_mtch: dict, games_same: bool = True) -> bytes:
     """``MTCH`` after an edit: ours for what the document says differently from
-    when it was read, the source's for the rest -- including every field the
-    document cannot hold (clock-style context, ``player_seat``, the unknown
-    tail). ``match`` is the writer's ``_Match``."""
+    when it was read, the source's for the rest -- including the unknown tail.
+    ``match`` is the writer's ``_Match``. A stated final score (bit 5) is the
+    source's only while its games are."""
     mandatory, orig, unk_mask, tail = split_mtch(b64d(pt_mtch["payload"]))
     snap = pt_mtch.get("doc") or {}
     ours = match.mtch_fields
     fields = {b: v for b, v in orig.items() if not any(b in bits for bits, _k in _OWNED)}
     for bits, keys in _OWNED:
         if all(doc.get(k) == snap.get(k) for k in keys):
-            fields.update({b: orig[b] for b in bits if b in orig})
+            fields.update({b: orig[b] for b in bits if b in orig and (games_same or b != 5)})
         else:
             fields.update({b: ours[b] for b in bits if b in ours})
+    # P4: the document counts seconds, so a source that stated milliseconds keeps
+    # them while the second is the same -- unless a precision now claims the
+    # instant is a period's first, which only the whole second can promise.
+    if (8 in orig and 14 not in fields and doc.get("timestamp") == snap.get("timestamp")):
+        fields[8] = orig[8]
     return _mtch_record(match.mtch_mandatory, fields, unk_mask, tail)
 
 
@@ -173,7 +197,7 @@ def merge_mtch(match, doc: dict, pt_mtch: dict) -> bytes:
 # ---------------------------------------------------------------------------
 
 _MAX_TS = 0xFFFFFFFF
-_MAX_VIDEO_URL = 512
+MAX_VIDEO_URL = 512
 _WALL_UNKNOWN = 0xFFFFFFFF
 _LAG_ABSENT = 0xFFFF
 _LAG_SATURATED = 0xFFFE
@@ -188,14 +212,15 @@ def _get_bits(blob: bytes, pos: int, n: int) -> int:
 
 
 def decode_clock(payload: bytes, ply_count: int):
-    """``(header, timestamps)`` of a valid ``CLCK`` payload (8.2), else None."""
+    """``(header, timestamps, precision)`` of a valid ``CLCK`` payload (8.2),
+    else None. ``precision`` is the canonical 10 when the series is empty."""
     if len(payload) < 29:
         return None
     reserve, delay, incr, start, flags = struct.unpack_from("<IIIIB", payload, 0)
     length, small_bits, precision = struct.unpack_from("<IBI", payload, 20)
     header = (reserve, delay, incr, start, flags)
     if length == 0:
-        return (header, [0]) if len(payload) == 29 else None
+        return (header, [0], CLOCK_PRECISION) if len(payload) == 29 else None
     if not 1 <= small_bits <= 31 or precision == 0 or length + 1 > ply_count:
         return None
     per_word = 64 // small_bits
@@ -238,10 +263,11 @@ def decode_clock(payload: bytes, ply_count: int):
         return None
     if bit % 8 and (msb[bit >> 3] >> (bit & 7)) != 0:
         return None
-    return header, ts
+    return header, ts, precision
 
 
-def encode_clock(header, ts: list[int], ply_count: int) -> bytes | None:
+def encode_clock(header, ts: list[int], ply_count: int,
+                 precision: int = CLOCK_PRECISION) -> bytes | None:
     """The canonical ``CLCK`` payload for these timestamps (8.2, Writing), or
     None where the section cannot be written."""
     if ts and ts[0] != 0 or len(ts) > ply_count:
@@ -250,8 +276,8 @@ def encode_clock(header, ts: list[int], ply_count: int) -> bytes | None:
     for i, t in enumerate(ts):
         if i and t < ts[i - 1]:
             return None
-        rounded.append((t + 5) // 10)
-        if rounded[-1] * 10 > _MAX_TS:
+        rounded.append((t + precision // 2) // precision)
+        if rounded[-1] * precision > _MAX_TS:
             return None
     length = max(0, len(ts) - 1)
     q = [rounded[i + 1] - rounded[i] for i in range(length)]
@@ -266,7 +292,7 @@ def encode_clock(header, ts: list[int], ply_count: int) -> bytes | None:
             s = size(b)
             if s < best_size:
                 best_size, best = s, b
-    out = bytearray(struct.pack("<IIIIB3xIBI", *header, length, best, 10))
+    out = bytearray(struct.pack("<IIIIB3xIBI", *header, length, best, precision))
     per_word = 64 // best
     for i in range(0, length, per_word):
         word = 0
@@ -286,7 +312,7 @@ def encode_clock(header, ts: list[int], ply_count: int) -> bytes | None:
     return bytes(out)
 
 
-def _url_storable(url: bytes, kind: int) -> bool:
+def url_storable(url: bytes, kind: int) -> bool:
     try:
         url.decode("utf-8")
     except UnicodeDecodeError:
@@ -302,10 +328,10 @@ def decode_video(payload: bytes, plies_per_game: list[int]):
     if len(payload) < 22 or payload[0] != 1:
         return None
     kind, flags, offset, base_wall, url_len, count = struct.unpack_from("<BHiQHI", payload, 1)
-    if url_len > _MAX_VIDEO_URL or count > 1 << 20 or len(payload) != 22 + url_len + 14 * count:
+    if url_len > MAX_VIDEO_URL or count > 1 << 20 or len(payload) != 22 + url_len + 14 * count:
         return None
     url = payload[22:22 + url_len]
-    if not _url_storable(url, kind):
+    if not url_storable(url, kind):
         url = b""
     marks = []
     prev = (-1, -1)
@@ -323,6 +349,69 @@ def decode_video(payload: bytes, plies_per_game: list[int]):
     return (kind, flags & 1, offset, url), marks
 
 
+def clock_doc(header, precision: int) -> dict:
+    """The document's ``clock`` for a decoded header: its four numbers, the
+    berserk flags when set, the unassigned flag bits when any, and ``precision``
+    only when it is not the canonical 10."""
+    reserve, delay, incr, start, flags = header
+    out: dict = {"reserve_ms": reserve, "delay_ms": delay, "increment_ms": incr,
+                 "start_timestamp": start}
+    if flags & 1:
+        out["white_berserk"] = True
+    if flags & 2:
+        out["black_berserk"] = True
+    if flags & ~3:
+        out["flags_other"] = flags & ~3
+    if precision != CLOCK_PRECISION:
+        out["precision"] = precision
+    return out
+
+
+def video_doc(header) -> dict:
+    """The document's ``video`` for a decoded header: its ``kind`` and the other
+    fields where they are not the default."""
+    kind, live, offset, url = header
+    out: dict = {"kind": kind}
+    if live:
+        out["is_live"] = True
+    if offset:
+        out["offset_ms"] = offset
+    if url:
+        out["url"] = url.decode("utf-8")
+    return out
+
+
+def video_mark_doc(hand: int, video_ms: int, wall, behind) -> dict:
+    """What a mark puts on its ply: ``video_ms``, and the wall-clock time, the
+    lag behind live and the hand-anchored flag where it states them."""
+    out: dict = {"video_ms": video_ms}
+    if wall is not None:
+        out["wall_ms"] = wall
+    if behind is not None:
+        out["behind_live_ms"] = behind
+    if hand:
+        out["video_hand_anchored"] = True
+    return out
+
+
+def msig_covers_clock(payload: bytes) -> bool:
+    """Whether an ``MSIG`` (8.6) signs the ``CLCK`` too (``covers`` bit 0)."""
+    from .ogxm2 import _Cursor
+    try:
+        body, has = _Cursor(payload, 0, len(payload)).record()
+        body.varint()
+        body.skip(body.varint())
+        if has(0):
+            body.str()
+        if has(1):
+            body.skip(body.varint())
+        if has(2):
+            body.varint64()
+        return bool(has(3) and body.varint() & 1)
+    except Exception:  # noqa: BLE001 - a signature that does not parse covers nothing we can tell
+        return True
+
+
 def encode_video(header, marks) -> bytes:
     kind, live, offset, url = header
     marks = sorted(marks, key=lambda m: (m[0], m[1]))
@@ -336,7 +425,7 @@ def encode_video(header, marks) -> bytes:
     for m in unique:
         if m[4] and (base == 0 or m[4] < base):
             base = m[4]
-    url = url if _url_storable(url, kind) else b""
+    url = url if url_storable(url, kind) else b""
     out = bytearray(struct.pack("<BBHiQHI", 1, kind, 1 if live else 0, offset, base,
                                 len(url), len(unique)))
     out += url
@@ -375,19 +464,6 @@ def v1_sign_to_v2(body: bytes) -> bytes | None:
 # Reading: attach the passthrough record to a document
 # ---------------------------------------------------------------------------
 
-def _anno_is_ours(r: dict) -> bool:
-    """Whether ``read_ogxm2`` consumes this annotation into the document (and
-    so regenerates it on write)."""
-    from . import ogxm2 as R
-    base = (r.get("key") or "").partition("~")[0]
-    if r["scope"] == R.SCOPE_MATCH:
-        return base in (R.GV_KEY_SITE, R.GV_KEY_EVENT, R.GV_KEY_SCORE) or base.startswith(
-            R.GV_KEY_ANALYSIS)
-    if r["scope"] == R.SCOPE_PLY:
-        return base == R.GV_KEY_ILLEGAL_PLY or base.startswith(R.GV_KEY_DECISIONS)
-    return False
-
-
 def attach(ogxm: dict, data: bytes, header: tuple, sections: list, annos: list,
            ours_ids: set) -> None:
     """Attach ``_ogxm2_passthrough`` to ``ogxm`` when the file holds anything
@@ -401,11 +477,17 @@ def attach(ogxm: dict, data: bytes, header: tuple, sections: list, annos: list,
     clock, video, signature, foreign annotation or unknown section. Anything
     that stops the document being encoded (it could not be written either)
     also gets nothing.
+
+    ``annos`` are the decoded ``ANNO`` records; ``read_ogxm2`` marks the ones it
+    hung on the document ``placed``. A placed record is kept by the fingerprint
+    of its canonical encoding, so it goes out verbatim while the document still
+    says what it said; one that addressed nothing (an unknown scope or decision
+    kind) is kept whole.
     """
     from . import ogxm2 as R
-    from .ogxm2_writer import _assemble, _encode
+    from .ogxm2_writer import _assemble, _encode, anno_canon
 
-    foreign_annos = [r for r in annos if not _anno_is_ours(r)]
+    foreign_annos = [r for r in annos if not R.anno_is_ours(r)]
     types = [s[0] for s in sections]
     blocks_in_file = [R.uuid_of(p) for t, _o, p in sections if t == b"ANAL"]
     unknown = [s for s in sections if s[0] not in R.KNOWN_SECTIONS]
@@ -428,14 +510,8 @@ def attach(ogxm: dict, data: bytes, header: tuple, sections: list, annos: list,
         "match_length": parts.match.match_length,
     }
     mtch = next(p for t, _o, p in sections if t == b"MTCH")
-    # `site` is v2's `city` or `site` field when the file states one and has no
-    # annotation of ours saying otherwise; then writing it again as an
-    # annotation would add a record to a file that already says it.
-    _m, fields, _u, _t = split_mtch(mtch)
-    stated = next((_str_of(fields[b]) for b in (18, 21) if b in fields), None)
     pt["mtch"] = {"payload": b64e(mtch), "fp": fingerprint(parts.mtch),
-                  "doc": {k: ogxm.get(k) for k in MTCH_DOC_KEYS},
-                  "site_stated": stated is not None and stated == ogxm.get("site")}
+                  "doc": {k: copy.deepcopy(ogxm.get(k)) for k in MTCH_DOC_KEYS}}
     pt["games"] = [{"payload": b64e(p), "fp": fingerprint(c)} for p, c in zip(games, parts.match.games)]
 
     by_id = {b.aid_str: b for b in parts.blocks}
@@ -443,6 +519,7 @@ def attach(ogxm: dict, data: bytes, header: tuple, sections: list, annos: list,
     anchors: list[tuple[bytes, bytes, dict]] = []
     cur = None
     gi = mi = 0
+    ancillary: dict[str, bytes] = {}
     anchor: dict = {"k": "head"}
     for t, _o, p in sections:
         if t == b"MTCH":
@@ -458,7 +535,7 @@ def attach(ogxm: dict, data: bytes, header: tuple, sections: list, annos: list,
             pt_blocks[cur]["decs" if t == b"DECS" else "sign"] = b64e(p)
             anchor = {"k": "BLOCK", "id": cur}
         elif t in (b"CLCK", b"VIDO"):
-            pt[t.decode().lower()] = b64e(p)
+            ancillary[t.decode().lower()] = p
             anchor = {"k": t.decode()}
         elif t == b"ANNO":
             anchor = {"k": "ANNO"}
@@ -474,11 +551,23 @@ def attach(ogxm: dict, data: bytes, header: tuple, sections: list, annos: list,
             return
         blk["fp"] = fingerprint(mine.anal, mine.decs, mine.anno_bytes())
     pt["blocks"] = pt_blocks
+    # The clock and the video are in the document; the source's bytes stand for
+    # them while the document still encodes to what they decoded to.
+    for name, canon in (("clck", parts.clck), ("vido", parts.vido)):
+        if name in ancillary:
+            pt[name] = {"payload": b64e(ancillary[name]), "fp": fingerprint(canon or b"")}
     pt["anno"] = [{
         "scope": r["scope"], "ref": r["ref"], "analysis": r.get("analysis"),
         "kind": r.get("kind"), "alt": r.get("alt_index"), "key": r.get("key"),
         "lang": r.get("lang"), "raw": b64e(r["raw"]),
-    } for r in foreign_annos]
+    } for r in foreign_annos if not r.get("placed")]
+    pt["anno_raw"] = []
+    for r in foreign_annos:
+        if r.get("placed"):
+            try:
+                pt["anno_raw"].append({"fp": fingerprint(anno_canon(r)), "raw": b64e(r["raw"])})
+            except (ValueError, OverflowError):
+                pass
     pt["unknown"] = [{"type": t.decode("latin-1"), "payload": b64e(p), "after": a}
                      for t, p, a in anchors]
     ogxm[KEY] = pt
@@ -500,15 +589,21 @@ class Plan:
         self.mtch = parts.mtch
         self.games = list(match.games)
         self.blocks: list[tuple[bytes, bytes, bytes | None, list]] = []   # anal, decs, sign, annos
-        self.clck: bytes | None = None
-        self.vido: bytes | None = None
+        self.clck: bytes | None = parts.clck
+        self.vido: bytes | None = parts.vido
         self.msig: list[bytes] = []
+        self.anno_raw: dict[str, list[bytes]] = {}
         self.foreign_annos: list[dict] = []
         self.unknown: list[tuple[bytes, bytes, dict]] = []
         self.minor_floor = self.min_minor_floor = 0
         self.verbatim_ids: set[str] = set()
+        #: The verbatim blocks that are another producer's: their ``DECS`` is
+        #: not ours, so what it carries is only what the source's annotations say.
+        self.foreign_verbatim: set[str] = set()
+        #: What those blocks' own ``DECS`` holds: ``{analysis_id: {(ply_ref, kind):
+        #: alternatives}}``, which says what an annotation can address there.
+        self.foreign_decs: dict[str, dict] = {}
         self.games_same = self.mtch_same = False
-        self.skip_site = False
 
         for b in parts.blocks:
             self.blocks.append((b.anal, b.decs, None, b.annos))
@@ -535,9 +630,7 @@ class Plan:
         if self.mtch_same:
             self.mtch = b64d(pt["mtch"]["payload"])
         else:
-            self.mtch = merge_mtch(match, doc, pt["mtch"])
-        self.skip_site = bool(pt["mtch"].get("site_stated")
-                              and doc.get("site") == (pt["mtch"].get("doc") or {}).get("site"))
+            self.mtch = merge_mtch(match, doc, pt["mtch"], self.games_same)
         self.minor_floor = int(pt.get("version_minor") or 0)
         self.min_minor_floor = int(pt.get("min_reader_minor") or 0)
 
@@ -546,6 +639,8 @@ class Plan:
             pb = (pt.get("blocks") or {}).get(b.aid_str)
             if (pb is None or not self.games_same
                     or fingerprint(b.anal, b.decs, b.anno_bytes()) != pb["fp"]):
+                if pb is not None:
+                    self._keep_started(k, b, pb)
                 continue
             anal = b64d(pb["anal"])
             if digest is not None:
@@ -553,12 +648,28 @@ class Plan:
             sign = b64d(pb["sign"]) if pb.get("sign") and self.mtch_same else None
             self.blocks[k] = (anal, b64d(pb["decs"]), sign, [] if not pb["ours"] else b.annos)
             self.verbatim_ids.add(b.aid_str)
+            if not pb["ours"]:
+                self.foreign_verbatim.add(b.aid_str)
+                from .ogxm2 import _decode_decs
+                self.foreign_decs[b.aid_str] = {
+                    (d["ply_ref"], d["kind"]): len(d.get("alternatives") or [])
+                    for d in _decode_decs(b64d(pb["decs"]))}
 
-        if self.games_same:
-            self.clck = b64d(pt["clck"]) if pt.get("clck") else None
-            self.vido = b64d(pt["vido"]) if pt.get("vido") else None
+        original = {}
+        for name, mine in (("clck", parts.clck), ("vido", parts.vido)):
+            pc = pt.get(name)
+            original[name] = None
+            if pc is not None:
+                original[name] = b64d(pc["payload"])
+                if fingerprint(mine or b"") == pc["fp"]:
+                    setattr(self, name, original[name])
+        for r in pt.get("anno_raw") or []:
+            self.anno_raw.setdefault(r["fp"], []).append(b64d(r["raw"]))
+        # A match signature digests the clock when it says so, so it stands only
+        # while the clock written is the one it signed.
         if self.games_same and self.mtch_same:
-            self.msig = [b64d(m) for m in pt.get("msig") or []]
+            self.msig = [b64d(m) for m in pt.get("msig") or []
+                         if not msig_covers_clock(b64d(m)) or self.clck == original["clck"]]
         emitted = {_uuid_of_record(a) for a, _d, _s, _n in self.blocks}
         n_games = len(match.games)
         for r in pt.get("anno") or []:
@@ -574,36 +685,85 @@ class Plan:
         self.unknown = [(t["type"].encode("latin-1"), b64d(t["payload"]), t["after"])
                         for t in pt.get("unknown") or []]
 
+    def take_raw(self, canon: bytes) -> bytes | None:
+        """The source's bytes for an annotation the document still encodes to
+        ``canon`` -- each used once, so duplicates stay duplicates."""
+        pool = self.anno_raw.get(fingerprint(canon))
+        return pool.pop(0) if pool else None
+
+    def _keep_started(self, k: int, b, pb: dict) -> None:
+        """P4 for a block re-encoded from the document: a source that stated
+        milliseconds for ``started_at`` keeps them while the document's second
+        (``timestamp``) is the same."""
+        from .ogxm2 import _decode_anal
+        try:
+            src = _decode_anal(b64d(pb["anal"])).get("started_at")
+            mine = _decode_anal(b.anal).get("started_at")
+        except Exception:  # noqa: BLE001
+            return
+        if src is not None and mine is not None and src != mine and src // 1000 == mine // 1000:
+            self.blocks[k] = (b.anal_started(src), b.decs, None, b.annos)
+
     # -- a v1 source ---------------------------------------------------------
 
     def _v1_chunks(self, parts, doc: dict) -> None:
-        from .binary import CHUNK_CLCK, CHUNK_SIGN, CHUNK_VIDO
-        match = parts.match
-        counts = [0] * len(match.games)
-        for key, _p in match.ply_at:
-            counts[key[0]] += 1
+        """A v1 file's ``SIGN`` chunks. Its clock and video are in the document
+        (``decode_v1_chunks``), and are written from there."""
+        from .binary import CHUNK_SIGN
         for c in doc.get("_unknown_chunks") or []:
+            if int(c.get("type", 0) or 0) != CHUNK_SIGN:
+                continue
             body = c.get("data") or b""
             body = b64d(body) if isinstance(body, str) else body
-            t = int(c.get("type", 0) or 0)
-            if t == CHUNK_SIGN:
-                k = c.get("anal_index")
-                sign = v1_sign_to_v2(body)
-                if isinstance(k, int) and 0 <= k < len(self.blocks) and sign is not None:
-                    a, d, s, n = self.blocks[k]
-                    if s is None:
-                        self.blocks[k] = (a, d, sign, n)
-            elif t == CHUNK_CLCK and self.clck is None:
-                clock = decode_clock(body, len(match.ply_at))
-                if clock is not None:
-                    self.clck = encode_clock(clock[0], clock[1], len(match.ply_at))
-            elif t == CHUNK_VIDO and self.vido is None:
-                video = decode_video(body, [n + s for n, s in zip(counts, match.game_start)])
-                if video is not None:
-                    header_, marks = video
-                    shifted = [(g, p - match.game_start[g], *rest) for g, p, *rest in marks
-                               if p - match.game_start[g] >= 0]
-                    self.vido = encode_video(header_, shifted)
+            k = c.get("anal_index")
+            sign = v1_sign_to_v2(body)
+            if isinstance(k, int) and 0 <= k < len(self.blocks) and sign is not None:
+                a, d, s, n = self.blocks[k]
+                if s is None:
+                    self.blocks[k] = (a, d, sign, n)
+
+
+def decode_v1_chunks(doc: dict) -> None:
+    """Read a v1 file's ``CLCK`` and ``VIDO`` chunks into ``clock``, ``video``
+    and the plies' ``clock_ms`` / ``video_ms``, as the reference's ``v1_to_v2``
+    reads them. The chunks stay in ``_unknown_chunks``, so a v1 rewrite is
+    unchanged. A chunk that is not valid (8.2, 8.3) is dropped, as it is there."""
+    from .binary import CHUNK_CLCK, CHUNK_VIDO
+    from .ogxm2_writer import ply_layout
+    chunks = [c for c in doc.get("_unknown_chunks") or []
+              if int(c.get("type", 0) or 0) in (CHUNK_CLCK, CHUNK_VIDO)]
+    if not chunks:
+        return
+    keys, _starts = ply_layout(doc)
+    games = doc["games"]
+    done: set = set()
+    for c in chunks:
+        t = int(c["type"])
+        if t in done:
+            continue
+        body = c.get("data") or b""
+        body = b64d(body) if isinstance(body, str) else body
+        if t == CHUNK_CLCK:
+            got = decode_clock(body, len(keys))
+            if got is not None:
+                # The reference rewrites a v1 clock at the canonical step, so
+                # does this: the stated precision is not kept.
+                header, ts, _precision = got
+                doc["clock"] = clock_doc(header, CLOCK_PRECISION)
+                for i, v in enumerate(ts):
+                    gi, pi = keys[i]
+                    games[gi]["plies"][pi]["clock_ms"] = v
+                done.add(t)
+        else:
+            # v1 addresses a mark by the ply's place in the game as the document
+            # lists it, a game's set-up position included.
+            got = decode_video(body, [len(g["plies"]) for g in games])
+            if got is not None:
+                header, marks = got
+                doc["video"] = video_doc(header)
+                for gi, pi, hand, video_ms, wall, behind in marks:
+                    games[gi]["plies"][pi].update(video_mark_doc(hand, video_ms, wall, behind))
+                done.add(t)
 
 
 def _uuid_of_record(anal: bytes) -> str:

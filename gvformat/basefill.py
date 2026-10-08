@@ -52,7 +52,7 @@ from .met import mwc_anchors
 # ``stats._ACTION_SET_POSITION``).
 _MAX_CHECKER_ACTION_ID = 20
 _ACTION_SET_POSITION = 31
-_TAKE_PASS_ACTIONS = frozenset({22, 23})
+_TAKE_PASS_ACTIONS = frozenset({22, 23, 32, 33})
 
 # Mirrors gvformat.xg._CHECKER_SPREAD_EPS / xg2gva's CHECKER_SPREAD_EPS.
 _CHECKER_SPREAD_EPS = 1e-4

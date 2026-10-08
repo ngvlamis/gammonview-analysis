@@ -7,18 +7,22 @@
 // byte for byte. `docs/OGXM_V2_PROFILE.md` (section 5) is the account for
 // readers.
 //
-// Our document models a match and its analyses, so reading a foreign v2 file and
-// writing it back used to drop everything else: the clock, the video, the
-// signatures, other producers' annotations, sections and fields this version does
-// not know. `_readOgxm2` now attaches `_ogxm2_passthrough` to the document, a
-// JSON-safe record of the source's own bytes, and `ogxm2_writer` consults it.
+// Our document models a match, its analyses, the clock, the video and every
+// annotation a player or another tool wrote (`clock`, `video`, `annotations`).
+// What it cannot model -- the signatures, unknown sections, fields and annotation
+// scopes this version does not know -- would be dropped by reading a foreign v2
+// file and writing it back. `_readOgxm2` therefore attaches `_ogxm2_passthrough`
+// to the document, a JSON-safe record of the source's own bytes, and
+// `ogxm2_writer` consults it.
 //
 // Fingerprints, not trust. A signature digests the bytes as stored, so the only
 // way to keep one valid is to write back the stored bytes -- and the only safe
 // time to do that is when the document still says what they say. The reader
 // stamps each part (MTCH, each GAME, each analysis block) with the SHA-256 of our
 // writer's canonical encoding of that part, computed from the document it has
-// just built. The writer encodes the document again; a part whose canonical
+// just built. The clock, the video and each annotation are parts too: they are
+// encoded from the document, and the source's bytes go out instead only while
+// the document still encodes to what the source decoded to. The writer encodes the document again; a part whose canonical
 // bytes hash to the stored fingerprint has not been edited, and its original
 // bytes are emitted instead. An edit changes the canonical bytes, so the original
 // is not used and nothing stale is ever written.
@@ -29,32 +33,49 @@
 //  * MTCH changed (a metadata edit): MTCH is re-encoded keeping every field the
 //    document does not model; MSIG and SIGN go, since they cover it;
 //    `match_digest` inside a kept ANAL is recomputed;
-//  * a GAME changed (a move edit): also CLCK, VIDO, foreign blocks and every
-//    ply-addressed annotation go.
+//  * a GAME changed (a move edit): the foreign analysis blocks go, since they
+//    were made over the old moves, and with them SIGN and MSIG. The clock, the
+//    video and the annotations travel with their plies in the document, so they
+//    are written from it and survive.
+//
+// A part is dropped only when keeping it would write a file that lies. A clock
+// that cannot be written for lack of a reading is dropped (profile section 5).
 
 import { _b64encode, _b64decode } from './binary.js';
 import { sha256 } from './sha256.js';
 import { CHUNK_SIGN, CHUNK_CLCK, CHUNK_VIDO } from './constants.js';
 import {
-  Cursor, KNOWN_SECTIONS, SCOPE_MATCH, SCOPE_PLY, GV_KEY_ANALYSIS, GV_KEY_DECISIONS,
-  GV_KEY_ILLEGAL_PLY, GV_KEY_SITE, GV_KEY_EVENT, GV_KEY_SCORE, uuidOf,
+  Cursor, KNOWN_SECTIONS, annoIsOurs, uuidOf, _decodeAnal, _decodeDecs,
 } from './ogxm2.js';
 import {
-  _encode, _assemble, _varint, _record, _uuidBytes, _cmpBytes,
+  _encode, _assemble, _varint, _record, _uuidBytes, _cmpBytes, annoCanon, plyLayout,
 } from './ogxm2_writer.js';
 
 export const KEY = '_ogxm2_passthrough';
 const VERSION = 1;
+export const CLOCK_PRECISION = 10;
 
 // Document keys each group of MTCH fields is read into (see _v1Match); a group
-// whose keys still equal what the source stated is the source's.
+// whose keys still equal what the source stated is the source's. Fields that
+// constrain one another (a year needs its event, a seat its profile's kind)
+// share a group, so an edit to one can never leave the other invalid.
 const MTCH_DOC_KEYS = ['player_white', 'player_black', 'crawford', 'jacoby', 'beaver', 'raccoon',
-  'cube_limit', 'result', 'white_score', 'black_score', 'source', 'timestamp', 'event', 'site'];
+  'auto_doubles', 'rules_other', 'cube_limit', 'score_start', 'result', 'white_score',
+  'black_score', 'source', 'timestamp', 'date_precision', 'completed_at',
+  'crawford_before_start', 'event', 'event_year', 'stage', 'round', 'table', 'city', 'country',
+  'event_url', 'player_seat', 'platform', 'match_ref', 'white_profile', 'black_profile', 'rated'];
 const OWNED = [
   [[0], ['player_white']], [[1], ['player_black']],
-  [[2], ['crawford', 'jacoby', 'beaver', 'raccoon']], [[3], ['cube_limit']],
-  [[6], ['result', 'white_score', 'black_score']], [[7], ['source']],
-  [[8, 14], ['timestamp']], [[12, 13], ['event']],
+  [[2], ['crawford', 'jacoby', 'beaver', 'raccoon', 'auto_doubles', 'rules_other']],
+  [[3], ['cube_limit']],
+  [[4, 5, 6], ['score_start', 'result', 'white_score', 'black_score']],
+  [[7], ['source']], [[8, 14], ['timestamp', 'date_precision']],
+  [[9], ['completed_at']], [[11], ['crawford_before_start']],
+  [[12, 13], ['event', 'event_year']], [[15], ['stage']], [[16], ['round']],
+  [[17], ['table']], [[18], ['city']], [[19], ['country']], [[20], ['event_url']],
+  [[10, 21, 22, 23, 24], ['player_seat', 'platform', 'match_ref', 'white_profile',
+    'black_profile']],
+  [[25], ['rated']],
 ];
 
 // How each MTCH field (spec 4) is laid out: s string, v varint, w varint64,
@@ -164,16 +185,17 @@ function _mtchRecord(mandatory, fields, unknownMask, tail) {
   return _cat(_varint(inner.length), inner);
 }
 
-function _strOf(field) {
-  return new Cursor(field, 0, field.length).str();
-}
-
 const _nul = (v) => (v === undefined ? null : v);
 
+/** Whether two document values are the same (arrays and objects by content). */
+function _same(a, b) {
+  return JSON.stringify(_nul(a)) === JSON.stringify(_nul(b));
+}
+
 /** MTCH after an edit: ours for what the document says differently from when it
- *  was read, the source's for the rest -- including every field the document
- *  cannot hold and the unknown tail. */
-function mergeMtch(match, doc, ptMtch) {
+ *  was read, the source's for the rest -- including the unknown tail. A stated
+ *  final score (bit 5) is the source's only while its games are. */
+function mergeMtch(match, doc, ptMtch, gamesSame = true) {
   const { fields: orig, unknownMask, tail } = splitMtch(b64d(ptMtch.payload));
   const snap = ptMtch.doc || {};
   const ours = match.mtch_fields;
@@ -181,21 +203,25 @@ function mergeMtch(match, doc, ptMtch) {
   const fields = {};
   for (const [b, v] of Object.entries(orig)) if (!owned.has(Number(b))) fields[b] = v;
   for (const [bits, keys] of OWNED) {
-    if (keys.every((k) => _nul(doc[k]) === _nul(snap[k]))) {
-      for (const b of bits) if (b in orig) fields[b] = orig[b];
+    if (keys.every((k) => _same(doc[k], snap[k]))) {
+      for (const b of bits) if (b in orig && (gamesSame || b !== 5)) fields[b] = orig[b];
     } else {
       for (const b of bits) if (b in ours) fields[b] = ours[b];
     }
   }
+  // P4: the document counts seconds, so a source that stated milliseconds keeps
+  // them while the second is the same -- unless a precision now claims the
+  // instant is a period's first, which only the whole second can promise.
+  if (8 in orig && !(14 in fields) && _same(doc.timestamp, snap.timestamp)) fields[8] = orig[8];
   return _mtchRecord(match.mtch_mandatory, fields, unknownMask, tail);
 }
 
 // ---------------------------------------------------------------------------
-// The clock and the video (8.2, 8.3), for v1 files
+// The clock and the video (8.2, 8.3)
 // ---------------------------------------------------------------------------
 
 const MAX_TS = 0xFFFFFFFF;
-const MAX_VIDEO_URL = 512;
+export const MAX_VIDEO_URL = 512;
 const WALL_UNKNOWN = 0xFFFFFFFF;
 const LAG_ABSENT = 0xFFFF;
 const LAG_SATURATED = 0xFFFE;
@@ -209,8 +235,9 @@ function _getBits(blob, pos, n) {
   return v;
 }
 
-/** `{header, ts}` of a valid CLCK payload (8.2), else null. */
-function decodeClock(payload, plyCount) {
+/** `{header, ts, precision}` of a valid CLCK payload (8.2), else null.
+ *  `precision` is the canonical 10 when the series is empty. */
+export function decodeClock(payload, plyCount) {
   if (payload.length < 29) return null;
   const dv = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
   const header = [dv.getUint32(0, true), dv.getUint32(4, true), dv.getUint32(8, true),
@@ -218,7 +245,7 @@ function decodeClock(payload, plyCount) {
   const length = dv.getUint32(20, true);
   const smallBits = payload[24];
   const precision = dv.getUint32(25, true);
-  if (length === 0) return payload.length === 29 ? { header, ts: [0] } : null;
+  if (length === 0) return payload.length === 29 ? { header, ts: [0], precision: CLOCK_PRECISION } : null;
   if (smallBits < 1 || smallBits > 31 || precision === 0 || length + 1 > plyCount) return null;
   const perWord = Math.floor(64 / smallBits);
   const words = Math.ceil(length / perWord);
@@ -252,17 +279,17 @@ function decodeClock(payload, plyCount) {
   }
   if (Math.ceil(bit / 8) !== msb.length) return null;
   if (bit % 8 && (msb[bit >> 3] >> (bit & 7)) !== 0) return null;
-  return { header, ts };
+  return { header, ts, precision };
 }
 
 /** The canonical CLCK payload for these timestamps (8.2, Writing), or null. */
-function encodeClock(header, ts, plyCount) {
+export function encodeClock(header, ts, plyCount, precision = CLOCK_PRECISION) {
   if ((ts.length && ts[0] !== 0) || ts.length > plyCount) return null;
   const rounded = [];
   for (let i = 0; i < ts.length; i++) {
     if (i && ts[i] < ts[i - 1]) return null;
-    rounded.push(Math.floor((ts[i] + 5) / 10));
-    if (rounded[i] * 10 > MAX_TS) return null;
+    rounded.push(Math.floor((ts[i] + Math.floor(precision / 2)) / precision));
+    if (rounded[i] * precision > MAX_TS) return null;
   }
   const length = Math.max(0, ts.length - 1);
   const q = [];
@@ -283,7 +310,7 @@ function encodeClock(header, ts, plyCount) {
   out.push(header[4], 0, 0, 0);
   u32(length);
   out.push(best);
-  u32(10);
+  u32(precision);
   const perWord = Math.floor(64 / best);
   for (let i = 0; i < length; i += perWord) {
     const word = new Uint8Array(8);
@@ -312,7 +339,7 @@ function encodeClock(header, ts, plyCount) {
   return Uint8Array.from(out);
 }
 
-function urlStorable(url, kind) {
+export function urlStorable(url, kind) {
   try {
     _dec.decode(url);
   } catch {
@@ -325,7 +352,7 @@ function urlStorable(url, kind) {
 
 /** `{header, marks}` of a valid VIDO payload (8.3), else null. A mark
  *  addressing no ply is dropped on its own. */
-function decodeVideo(payload, pliesPerGame) {
+export function decodeVideo(payload, pliesPerGame) {
   if (payload.length < 22 || payload[0] !== 1) return null;
   const dv = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
   const kind = payload[1];
@@ -357,7 +384,7 @@ function decodeVideo(payload, pliesPerGame) {
   return { header: [kind, flags & 1, offset, url], marks };
 }
 
-function encodeVideo(header, marksIn) {
+export function encodeVideo(header, marksIn) {
   const [kind, live, offset, urlIn] = header;
   const marks = marksIn.map((m, i) => [m, i]).sort((a, b) => a[0][0] - b[0][0]
     || a[0][1] - b[0][1] || a[1] - b[1]).map((e) => e[0]);
@@ -395,6 +422,55 @@ function encodeVideo(header, marksIn) {
   return out;
 }
 
+/** The document's `clock` for a decoded header: its four numbers, the berserk
+ *  flags when set, the unassigned flag bits when any, and `precision` only when
+ *  it is not the canonical 10. */
+export function clockDoc(header, precision) {
+  const [reserve, delay, incr, start, flags] = header;
+  const out = { reserve_ms: reserve, delay_ms: delay, increment_ms: incr, start_timestamp: start };
+  if (flags & 1) out.white_berserk = true;
+  if (flags & 2) out.black_berserk = true;
+  if (flags & ~3) out.flags_other = flags & ~3;
+  if (precision !== CLOCK_PRECISION) out.precision = precision;
+  return out;
+}
+
+/** The document's `video` for a decoded header: its `kind` and the other fields
+ *  where they are not the default. */
+export function videoDoc(header) {
+  const [kind, live, offset, url] = header;
+  const out = { kind };
+  if (live) out.is_live = true;
+  if (offset) out.offset_ms = offset;
+  if (url.length) out.url = _dec.decode(url);
+  return out;
+}
+
+/** What a mark puts on its ply: `video_ms`, and the wall-clock time, the lag
+ *  behind live and the hand-anchored flag where it states them. */
+export function videoMarkDoc(hand, videoMs, wall, behind) {
+  const out = { video_ms: videoMs };
+  if (wall !== null) out.wall_ms = wall;
+  if (behind !== null) out.behind_live_ms = behind;
+  if (hand) out.video_hand_anchored = true;
+  return out;
+}
+
+/** Whether an MSIG (8.6) signs the CLCK too (`covers` bit 0). */
+function msigCoversClock(payload) {
+  try {
+    const { body, has } = new Cursor(payload, 0, payload.length).record();
+    body.varint();
+    body.skip(body.varint());
+    if (has(0)) body.str();
+    if (has(1)) body.skip(body.varint());
+    if (has(2)) body.varint64();
+    return Boolean(has(3) && (body.varint() & 1));
+  } catch {
+    return true;        // a signature that does not parse covers nothing we can tell
+  }
+}
+
 /** A v1 SIGN chunk as a v2 SIGN payload, as the reference's `v1_to_v2` does. It
  *  cannot verify there (the signed payload differs, 8.1.1 against v1), and is
  *  carried because dropping it would erase who vouched for the analysis; a
@@ -416,18 +492,6 @@ function v1SignToV2(body) {
 // Reading: attach the passthrough record to a document
 // ---------------------------------------------------------------------------
 
-/** Whether `readOgxm2` consumes this annotation into the document (and so
- *  regenerates it on write). */
-function annoIsOurs(r) {
-  const base = (r.key || '').split('~')[0];
-  if (r.scope === SCOPE_MATCH) {
-    return base === GV_KEY_SITE || base === GV_KEY_EVENT || base === GV_KEY_SCORE
-      || base.startsWith(GV_KEY_ANALYSIS);
-  }
-  if (r.scope === SCOPE_PLY) return base === GV_KEY_ILLEGAL_PLY || base.startsWith(GV_KEY_DECISIONS);
-  return false;
-}
-
 /** Attach `_ogxm2_passthrough` to `ogxm` when the file holds anything the
  *  document cannot. `sections` is `[{type, start, payload}]` in file order,
  *  `annos` the decoded ANNO records (each with its `raw` bytes) and `oursIds`
@@ -438,7 +502,13 @@ function annoIsOurs(r) {
  *  without encoding when every block is marked ours and the file holds no clock,
  *  video, signature, foreign annotation or unknown section. Anything that stops
  *  the document being encoded (it could not be written either) also gets
- *  nothing. */
+ *  nothing.
+ *
+ *  `annos` are the decoded ANNO records; `readOgxm2` marks the ones it hung on
+ *  the document `placed`. A placed record is kept by the fingerprint of its
+ *  canonical encoding, so it goes out verbatim while the document still says
+ *  what it said; one that addressed nothing (an unknown scope or decision kind)
+ *  is kept whole. */
 export function attach(ogxm, data, header, sections, annos, oursIds) {
   const foreignAnnos = annos.filter((r) => !annoIsOurs(r));
   const types = sections.map((s) => s.type);
@@ -463,21 +533,13 @@ export function attach(ogxm, data, header, sections, annos, oursIds) {
     match_length: parts.match.match_length,
   };
   const mtch = sections.find((s) => s.type === 'MTCH').payload;
-  // `site` is v2's `city` or `site` field when the file states one and has no
-  // annotation of ours saying otherwise; then writing it again as an annotation
-  // would add a record to a file that already says it.
-  const { fields } = splitMtch(mtch);
-  const bit = [18, 21].find((b) => b in fields);
-  const stated = bit === undefined ? null : _strOf(fields[bit]);
   const snap = {};
-  for (const k of MTCH_DOC_KEYS) snap[k] = _nul(ogxm[k]);
-  pt.mtch = {
-    payload: b64e(mtch), fp: fingerprint(parts.mtch), doc: snap,
-    site_stated: stated !== null && stated === _nul(ogxm.site),
-  };
+  for (const k of MTCH_DOC_KEYS) snap[k] = structuredClone(_nul(ogxm[k]));
+  pt.mtch = { payload: b64e(mtch), fp: fingerprint(parts.mtch), doc: snap };
   pt.games = games.map((p, i) => ({ payload: b64e(p), fp: fingerprint(parts.match.games[i]) }));
 
   const byId = new Map(parts.blocks.map((b) => [b.aid_str, b]));
+  const ancillary = {};
   const ptBlocks = {};
   const anchors = [];
   let cur = null;
@@ -495,7 +557,7 @@ export function attach(ogxm, data, header, sections, annos, oursIds) {
       ptBlocks[cur][t === 'DECS' ? 'decs' : 'sign'] = b64e(s.payload);
       anchor = { k: 'BLOCK', id: cur };
     } else if (t === 'CLCK' || t === 'VIDO') {
-      pt[t.toLowerCase()] = b64e(s.payload);
+      ancillary[t.toLowerCase()] = s.payload;
       anchor = { k: t };
     } else if (t === 'ANNO') anchor = { k: 'ANNO' };
     else if (t === 'MSIG') {
@@ -510,10 +572,26 @@ export function attach(ogxm, data, header, sections, annos, oursIds) {
     blk.fp = fingerprint(mine.anal, mine.decs, mine.anno_bytes());
   }
   pt.blocks = ptBlocks;
-  pt.anno = foreignAnnos.map((r) => ({
+  // The clock and the video are in the document; the source's bytes stand for
+  // them while the document still encodes to what they decoded to.
+  for (const [name, canon] of [['clck', parts.clck], ['vido', parts.vido]]) {
+    if (name in ancillary) {
+      pt[name] = { payload: b64e(ancillary[name]), fp: fingerprint(canon || new Uint8Array(0)) };
+    }
+  }
+  pt.anno = foreignAnnos.filter((r) => !r.placed).map((r) => ({
     scope: r.scope, ref: r.ref, analysis: _nul(r.analysis), kind: _nul(r.kind),
     alt: _nul(r.alt_index), key: _nul(r.key), lang: _nul(r.lang), raw: b64e(r.raw),
   }));
+  pt.anno_raw = [];
+  for (const r of foreignAnnos) {
+    if (!r.placed) continue;
+    try {
+      pt.anno_raw.push({ fp: fingerprint(annoCanon(r)), raw: b64e(r.raw) });
+    } catch {
+      // a record the writer could not encode is not kept by fingerprint
+    }
+  }
   pt.unknown = anchors.map(([t, p, a]) => ({ type: t, payload: b64e(p), after: a }));
   ogxm[KEY] = pt;
 }
@@ -546,17 +624,23 @@ export class Plan {
     this.mtch = parts.mtch;
     this.games = [...match.games];
     this.blocks = parts.blocks.map((b) => [b.anal, b.decs, null, b.annos]);
-    this.clck = null;
-    this.vido = null;
+    this.clck = parts.clck;
+    this.vido = parts.vido;
     this.msig = [];
+    this.anno_raw = new Map();
     this.foreign_annos = [];
     this.unknown = [];
     this.minor_floor = 0;
     this.min_minor_floor = 0;
     this.verbatim_ids = new Set();
+    // The verbatim blocks that are another producer's: their DECS is not ours,
+    // so what it carries is only what the source's annotations say.
+    this.foreign_verbatim = new Set();
+    // What those blocks' own DECS holds: analysis_id -> Map "ply_ref,kind" ->
+    // alternatives, which says what an annotation can address there.
+    this.foreign_decs = new Map();
     this.games_same = false;
     this.mtch_same = false;
-    this.skip_site = false;
     if (pt !== null) {
       try {
         this._passthrough(parts, doc, pt);
@@ -578,9 +662,7 @@ export class Plan {
       if (i < pg.length && fingerprint(g) === pg[i].fp) this.games[i] = b64d(pg[i].payload);
     });
     this.mtch_same = fingerprint(parts.mtch) === pt.mtch.fp;
-    this.mtch = this.mtch_same ? b64d(pt.mtch.payload) : mergeMtch(match, doc, pt.mtch);
-    this.skip_site = Boolean(pt.mtch.site_stated
-      && _nul(doc.site) === _nul((pt.mtch.doc || {}).site));
+    this.mtch = this.mtch_same ? b64d(pt.mtch.payload) : mergeMtch(match, doc, pt.mtch, this.games_same);
     this.minor_floor = pt.version_minor || 0;
     this.min_minor_floor = pt.min_reader_minor || 0;
 
@@ -588,19 +670,42 @@ export class Plan {
     parts.blocks.forEach((b, k) => {
       const pb = (pt.blocks || {})[b.aid_str];
       if (pb === undefined || !this.games_same
-          || fingerprint(b.anal, b.decs, b.anno_bytes()) !== pb.fp) return;
+          || fingerprint(b.anal, b.decs, b.anno_bytes()) !== pb.fp) {
+        if (pb !== undefined) this._keepStarted(k, b, pb);
+        return;
+      }
       let anal = b64d(pb.anal);
       if (digest !== null) anal = patchDigest(anal, digest);
       const sign = pb.sign && this.mtch_same ? b64d(pb.sign) : null;
       this.blocks[k] = [anal, b64d(pb.decs), sign, pb.ours ? b.annos : []];
       this.verbatim_ids.add(b.aid_str);
+      if (!pb.ours) {
+        this.foreign_verbatim.add(b.aid_str);
+        this.foreign_decs.set(b.aid_str, new Map(_decodeDecs(b64d(pb.decs)).map(
+          (d) => [`${d.ply_ref},${d.kind}`, (d.alternatives || []).length])));
+      }
     });
 
-    if (this.games_same) {
-      this.clck = pt.clck ? b64d(pt.clck) : null;
-      this.vido = pt.vido ? b64d(pt.vido) : null;
+    const original = {};
+    for (const [name, mine] of [['clck', parts.clck], ['vido', parts.vido]]) {
+      const pc = pt[name];
+      original[name] = null;
+      if (pc !== undefined && pc !== null) {
+        original[name] = b64d(pc.payload);
+        if (fingerprint(mine || new Uint8Array(0)) === pc.fp) this[name] = original[name];
+      }
     }
-    if (this.games_same && this.mtch_same) this.msig = (pt.msig || []).map(b64d);
+    for (const r of pt.anno_raw || []) {
+      if (!this.anno_raw.has(r.fp)) this.anno_raw.set(r.fp, []);
+      this.anno_raw.get(r.fp).push(b64d(r.raw));
+    }
+    // A match signature digests the clock when it says so, so it stands only
+    // while the clock written is the one it signed.
+    if (this.games_same && this.mtch_same) {
+      this.msig = (pt.msig || []).map(b64d).filter((m) => !msigCoversClock(m)
+        || (this.clck === null ? original.clck === null
+          : original.clck !== null && _eq(this.clck, original.clck)));
+    }
     const emitted = new Set(this.blocks.map(([a]) => uuidOf(a)));
     const nGames = match.games.length;
     for (const r of pt.anno || []) {
@@ -614,31 +719,82 @@ export class Plan {
     this.unknown = (pt.unknown || []).map((t) => [t.type, b64d(t.payload), t.after]);
   }
 
+  /** The source's bytes for an annotation the document still encodes to
+   *  `canon` -- each used once, so duplicates stay duplicates. */
+  takeRaw(canon) {
+    const pool = this.anno_raw.get(fingerprint(canon));
+    return pool && pool.length ? pool.shift() : null;
+  }
+
+  /** P4 for a block re-encoded from the document: a source that stated
+   *  milliseconds for `started_at` keeps them while the document's second
+   *  (`timestamp`) is the same. */
+  _keepStarted(k, b, pb) {
+    let src;
+    let mine;
+    try {
+      src = _decodeAnal(b64d(pb.anal)).started_at;
+      mine = _decodeAnal(b.anal).started_at;
+    } catch {
+      return;
+    }
+    if (src !== undefined && mine !== undefined && src !== mine && src / 1000n === mine / 1000n) {
+      this.blocks[k] = [b.anal_started(Number(src)), b.decs, null, b.annos];
+    }
+  }
+
+  /** A v1 file's SIGN chunks. Its clock and video are in the document
+   *  (`decodeV1Chunks`), and are written from there. */
   _v1Chunks(parts, doc) {
-    const match = parts.match;
-    const counts = new Array(match.games.length).fill(0);
-    for (const { key } of match.ply_at) counts[Number(key.split(',')[0])]++;
     for (const c of doc._unknown_chunks || []) {
+      if (Number(c.type || 0) !== CHUNK_SIGN) continue;
       const body = typeof c.data === 'string' ? b64d(c.data) : (c.data || new Uint8Array(0));
-      const t = Number(c.type || 0);
-      if (t === CHUNK_SIGN) {
-        const k = c.anal_index;
-        const sign = v1SignToV2(body);
-        if (Number.isInteger(k) && k >= 0 && k < this.blocks.length && sign !== null) {
-          const [a, d, s, n] = this.blocks[k];
-          if (s === null) this.blocks[k] = [a, d, sign, n];
+      const k = c.anal_index;
+      const sign = v1SignToV2(body);
+      if (Number.isInteger(k) && k >= 0 && k < this.blocks.length && sign !== null) {
+        const [a, d, sg, n] = this.blocks[k];
+        if (sg === null) this.blocks[k] = [a, d, sign, n];
+      }
+    }
+  }
+}
+
+/** Read a v1 file's CLCK and VIDO chunks into `clock`, `video` and the plies'
+ *  `clock_ms` / `video_ms`, as the reference's `v1_to_v2` reads them. The chunks
+ *  stay in `_unknown_chunks`, so a v1 rewrite is unchanged. A chunk that is not
+ *  valid (8.2, 8.3) is dropped, as it is there. */
+export function decodeV1Chunks(doc) {
+  const chunks = (doc._unknown_chunks || []).filter((c) => {
+    const t = Number(c.type || 0);
+    return t === CHUNK_CLCK || t === CHUNK_VIDO;
+  });
+  if (!chunks.length) return;
+  const { keys } = plyLayout(doc);
+  const { games } = doc;
+  const done = new Set();
+  for (const c of chunks) {
+    const t = Number(c.type);
+    if (done.has(t)) continue;
+    const body = typeof c.data === 'string' ? b64d(c.data) : (c.data || new Uint8Array(0));
+    if (t === CHUNK_CLCK) {
+      const got = decodeClock(body, keys.length);
+      if (got !== null) {
+        // The reference rewrites a v1 clock at the canonical step, so does this:
+        // the stated precision is not kept.
+        doc.clock = clockDoc(got.header, CLOCK_PRECISION);
+        got.ts.forEach((v, i) => { games[keys[i][0]].plies[keys[i][1]].clock_ms = v; });
+        done.add(t);
+      }
+    } else {
+      // v1 addresses a mark by the ply's place in the game as the document
+      // lists it, a game's set-up position included.
+      const got = decodeVideo(body, games.map((g) => g.plies.length));
+      if (got !== null) {
+        doc.video = videoDoc(got.header);
+        for (const [gi, pi, hand, videoMs, wall, behind] of got.marks) {
+          Object.assign(games[gi].plies[pi], videoMarkDoc(hand, videoMs, wall, behind));
         }
-      } else if (t === CHUNK_CLCK && this.clck === null) {
-        const clock = decodeClock(body, match.ply_at.length);
-        if (clock !== null) this.clck = encodeClock(clock.header, clock.ts, match.ply_at.length);
-      } else if (t === CHUNK_VIDO && this.vido === null) {
-        const video = decodeVideo(body, counts.map((n, i) => n + match.game_start[i]));
-        if (video !== null) {
-          const shifted = video.marks
-            .filter(([g, p]) => p - match.game_start[g] >= 0)
-            .map(([g, p, ...rest]) => [g, p - match.game_start[g], ...rest]);
-          this.vido = encodeVideo(video.header, shifted);
-        }
+        done.add(t);
       }
     }
   }

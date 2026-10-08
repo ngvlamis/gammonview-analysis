@@ -132,8 +132,10 @@ _MAX_CHECKER_ACTION_ID = 20
 #: on whether the play's longest hop happened to fit three bits.
 _ACTION_SET_POSITION = 31
 
-#: Standalone cube-decision ply action ids: 21 = double, 22 = take, 23 = pass.
-_CUBE_ACTION_IDS = frozenset({21, 22, 23})
+#: Standalone cube-decision ply action ids: 21 = double, 22 = take, 23 = pass, and
+#: 32 = a beaver, which answers a double as a take does (the engine's response lands
+#: there; the raccoon after it answers the beaver and holds no decision).
+_CUBE_ACTION_IDS = frozenset({21, 22, 23, 32})
 
 #: color -> player key, per the White = Player 1 / Black = Player 2 convention.
 _COLOR_NAME = {1: "white", 0: "black"}

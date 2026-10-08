@@ -31,7 +31,11 @@ from __future__ import annotations
 from bgsage.board import flip_board
 
 from gvformat.reader import _absolute_to_p1, _apply_moves_p1, _game_start_scores
-from gvformat.export import _STARTING_BOARD_P1
+from gvformat.export import variant_opening_p1
+
+
+class UnsupportedMatch(ValueError):
+    """The match is valid OGXM, but the engine cannot analyze it."""
 
 
 def _mover_frame(board_p1: list[int], is_white: bool) -> list[int]:
@@ -68,9 +72,15 @@ def reconstruct_game_decisions(
     def name(is_white: bool) -> str:
         return player_white if is_white else player_black
 
-    board_p1 = list(_STARTING_BOARD_P1)
-    cube_value = 1
-    cube_owner_abs: str | None = None   # None=centered, 'W', or 'B'
+    board_p1 = list(variant_opening_p1(0))
+    # The cube a game opens with (OGXM v2, 5.3): its initial value doubled once
+    # per automatic double, held by the owner after them -- not always a
+    # centred 1.
+    initial = int(game.get("initial_cube_value") or 1)
+    if initial < 1 or initial & (initial - 1):
+        initial = 1                     # not a cube value; v2 cannot hold one either
+    cube_value = initial * 2 ** max(0, int(game.get("auto_doubles") or 0))
+    cube_owner_abs: str | None = {0: "W", 1: "B"}.get(game.get("initial_cube_owner"))
     any_move_made = False
 
     # Pending-double state (captured at the 21 ply, emitted at the take/drop).
@@ -190,6 +200,43 @@ def reconstruct_game_decisions(
             if aid == 22:                                 # taker now owns the cube
                 cube_owner_abs = "W" if resp_is_white else "B"
 
+        elif aid == 32:                                   # beaver: the responder redoubles
+            # A beaver answers the double (spec M6): the cube is doubled again,
+            # to 4x its value before the double, and the beaverer owns it. The
+            # engine has no beaver verdict -- it judges take or pass -- so the
+            # responder's decision is recorded as the take it implies, and what
+            # comes after is analyzed at the beavered cube.
+            resp_is_white = is_white
+            away_m, away_o = _away(sw, sb, match_length, dbl_is_white)
+            decisions.append({
+                "kind": "cube",
+                "board": _mover_frame(dbl_board_p1, dbl_is_white),
+                "cube_value": dbl_value,
+                "cube_owner": _cube_owner_rel(dbl_owner_abs, dbl_is_white),
+                "doubled": True,
+                "response": "take",
+                "doubler": name(dbl_is_white),
+                "responder": name(resp_is_white),
+                "is_doubler_p1": dbl_is_white,
+                "away1": away_m,
+                "away2": away_o,
+                "is_crawford": crawford,
+            })
+            cube_value = dbl_value * 4
+            cube_owner_abs = "W" if resp_is_white else "B"
+
+        elif aid == 33:                                   # raccoon: the doubler redoubles
+            # A raccoon answers the beaver (M6): 8x the value before the double,
+            # owned by the raccooner, the original doubler. The engine knows no
+            # such decision, so there is nothing to analyze -- only the cube to
+            # carry forward.
+            cube_value = dbl_value * 8
+            cube_owner_abs = "W" if is_white else "B"
+
+        elif aid == 36:                                   # cube set by hand
+            cube_value = int(ply.get("cube_value") or cube_value)
+            cube_owner_abs = {0: "W", 1: "B"}.get(ply.get("cube_owner"))
+
         elif aid == 31:                                   # set position, no dice
             # The opening position of an exported saved position: no turn, no
             # decision. The board it states is still the one every later ply
@@ -239,11 +286,17 @@ def reconstruct_decisions_from_ogxm(ogxm: dict) -> list[dict]:
     ``ogxm["games"]`` and shaped for ``game_eval.evaluate_game`` (which reads
     ``decisions`` + ``game_result``).
     """
+    if int(ogxm.get("variant") or 0) != 0:
+        raise UnsupportedMatch(
+            "This match is a backgammon variant (nackgammon, hypergammon or "
+            "longgammon); the engine plays backgammon only, so it cannot be analyzed.")
     match_length = int(ogxm.get("match_length", 0) or 0)
     player_white = ogxm.get("player_white") or "White"
     player_black = ogxm.get("player_black") or "Black"
     games = ogxm.get("games") or []
-    start_scores = _game_start_scores(games)
+    # The match opens at its own score (a mid-match start), and every game's
+    # points are capped at what its winner still needed, as the OGID replay does.
+    start_scores = _game_start_scores(games, match_length, ogxm.get("score_start"))
 
     out = []
     for game, (sw, sb) in zip(games, start_scores):

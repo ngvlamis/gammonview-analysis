@@ -161,8 +161,8 @@ assert(Object.keys(o.fields).every((b) => b === '0' || eq(n.fields[b], o.fields[
   'metadata edit: every other MTCH field is as it was');
 
 const mv = out.move_edit;
-assert(['SIGN', 'MSIG', 'CLCK', 'VIDO'].every((t) => !kinds(mv).includes(t)) && kinds(mv).includes('ZZZZ'),
-  'move edit: SIGN, MSIG, CLCK, VIDO gone; unknown section stays');
+assert(['SIGN', 'MSIG'].every((t) => !kinds(mv).includes(t)) && ['CLCK', 'VIDO', 'ZZZZ'].every((t) => kinds(mv).includes(t)),
+  'move edit: SIGN and MSIG gone; the clock, the video and the unknown section stay');
 assert(eq(payloads(mv, 'GAME')[0], payloads(FOREIGN, 'GAME')[0])
   && !eq(payloads(mv, 'GAME')[1], payloads(FOREIGN, 'GAME')[1]), 'move edit: only the edited game is re-encoded');
 
