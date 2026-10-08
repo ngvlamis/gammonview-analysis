@@ -14,7 +14,7 @@ this analysis appended, preserving any it already carried):
      the .mat reconstructor produces (the eval-relevant fields).
   3. Append / multi-analysis: feeding an analyzed .gva back in yields a
      two-block OGXM (analyses_info + per-ply analyses[]), and that round-trips
-     through the binary (write==read==write) with min_reader_minor == 3.
+     through the binary (write==read==write), each block with its own id.
   5. The producer label: analysis_info.model_id names the engine's exact build
      and carries no gammonview version -- the property that lets 1. pin bytes.
 
@@ -162,8 +162,12 @@ def main() -> int:
     b2 = write_gvab(rt)
     check(b1 == b2, "multi round-trip: write_gvab(read_gvab(b)) == b")
     check(len(rt.get("analyses_info", [])) == 2, "multi round-trip: 2 blocks survive the binary")
-    rmin = struct.unpack_from("<IHHHHII", b1, 0)[4]
-    check(rmin == 3, "multi: min_reader_minor == 3 (pre-1.3 readers must reject)")
+    # v2 takes up to 64 analysis blocks at any minor; what keeps a v1 reader out
+    # is min_reader_major (v1 needed min_reader_minor 3 for a second block).
+    vmaj, _vmin, rmaj, _rmin = struct.unpack_from("<HHHH", b1, 4)
+    check(vmaj == 2 and rmaj == 2, "multi: an OGXM v2 file, which v1 readers refuse cleanly")
+    ids = [i.get("analysis_id") for i in rt["analyses_info"]]
+    check(len(set(ids)) == 2 and all(ids), "multi: each block has its own analysis_id")
 
     # 4. A ply with no legal move still carries an evaluation of the position it
     # leaves behind. It is the only thing a viewer can show probabilities from

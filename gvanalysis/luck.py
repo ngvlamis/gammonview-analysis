@@ -3,10 +3,11 @@
 
 """Per-ply luck for a match whose analysis was made somewhere else.
 
-Luck is the one number in a GammonView match that no other producer's file
-carries. It is a `[GV]` field -- it rides in our GVAN chunk -- so a match
-analysed by another program arrives with evaluations, ranked moves and cube
-equities intact and nothing at all in the luck column.
+Luck is the one number in a GammonView match that other producers' files
+usually lack. v2 has a field for it (a ``ROLL`` decision) and we fill it, but
+an XG or BGBlitz analysis, a v1 file from anyone else, or a v2 one written
+without rolls arrives with evaluations, ranked moves and cube equities intact
+and nothing at all in the luck column.
 
 That is worth fixing rather than living with, because **luck does not belong to
 the analysis**. It is a property of the dice: how good was this roll, in this

@@ -3,12 +3,12 @@
 
 """Completing an analysis block that was written without the [GV] extensions.
 
-OGXM is HedgeHog's format and ours extends it. Our GVAN chunk carries the
-fields the base spec has no room for: whether a ply counted as a *decision*,
-per-ply luck, and the engine's own name for the level it searched at. A file
-from any other producer -- a ``.ogxm`` off hedgehog-bg.com, say -- has no GVAN,
-and a reader that takes its absence literally reports "not a decision" for
-every ply in the match. That is not what the file says. The file says
+OGXM is HedgeHog's format. The fields it has no room for -- whether a ply
+counted as a *decision*, the engine's own name for the level it searched at,
+and in v1 per-ply luck -- travel in our own extension: the GVAN chunk in a v1
+file, ``x-gammonview`` annotations in a v2 one. A file from any other producer
+-- a ``.ogxm`` off hedgehog-bg.com, say -- has neither, and a reader that takes
+their absence literally reports "not a decision" for every ply in the match. That is not what the file says. The file says
 nothing, and a performance rating over an empty denominator is worse than no
 rating at all.
 
@@ -134,6 +134,33 @@ def mwc_frame(ply: dict):
     Public for ``ogxm2.py``, whose blocks state their currency outright and so
     convert every value in them, not only the three cube values.
     """
+    anchors = _frame_anchors(ply)
+    if anchors is None:
+        return None
+    mid, span = anchors
+
+    def to_equity(mwc: float) -> float:
+        return round((2 * (mwc - mid) / span) * 10000) / 10000
+
+    def to_delta(mwc: float) -> float:
+        return round((2 * mwc / span) * 10000) / 10000
+
+    return to_equity, to_delta
+
+
+def mwc_frame_inverse(ply: dict):
+    """``mwc_frame`` run backwards, for a writer: ``(from_equity, from_delta)``
+    mapping normalized equity onto this ply's MWC, or None where ``mwc_frame``
+    has no frame either. Unrounded -- the writer quantizes."""
+    anchors = _frame_anchors(ply)
+    if anchors is None:
+        return None
+    mid, span = anchors
+    return (lambda eq: mid + eq * span / 2), (lambda d: d * span / 2)
+
+
+def _frame_anchors(ply: dict) -> tuple[float, float] | None:
+    """``(mid, span)`` of the MWC interval this ply's equities normalize over."""
     ctx = _parse_ogid_context(ply.get("ogid_before"))
     if ctx is None:
         return None
@@ -152,15 +179,7 @@ def mwc_frame(ply: dict):
     span = mwc_win - mwc_lose
     if span == 0:
         return None
-    mid = (mwc_win + mwc_lose) / 2
-
-    def to_equity(mwc: float) -> float:
-        return round((2 * (mwc - mid) / span) * 10000) / 10000
-
-    def to_delta(mwc: float) -> float:
-        return round((2 * mwc / span) * 10000) / 10000
-
-    return to_equity, to_delta
+    return (mwc_win + mwc_lose) / 2, span
 
 
 def _cube_values(sub: dict | None) -> tuple[float, float, float] | None:

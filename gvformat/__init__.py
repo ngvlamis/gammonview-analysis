@@ -13,7 +13,7 @@ separate layer (it depends on this one, not the other way around).
 Public API::
 
     from gvformat import (
-        write_gvab,        # OGXM-JSON dict -> .gvab bytes
+        write_gvab,        # OGXM-JSON dict -> .gvab bytes (OGXM v2)
         read_gvab,         # .gvab bytes -> OGXM-JSON dict
         canonicalize,      # normalize an OGXM-JSON dict to read_gvab's form
         to_ogxm_json,      # analyzer result -> OGXM-JSON dict
@@ -27,7 +27,7 @@ Public API::
 The on-wire format is specified in the ``OGXM_*`` docs at the repo root.
 """
 
-from .binary import write_gvab
+from .binary import write_gvab, write_gvab_v1
 from .reader import read_gvab, canonicalize, GvabError
 from .export import to_ogxm_json
 from .stats import compute_aggregates
@@ -41,6 +41,7 @@ from .place import PLACE_SEPARATOR, clean_place, split_place, join_place
 
 __all__ = [
     "write_gvab",
+    "write_gvab_v1",
     "read_gvab",
     "canonicalize",
     "GvabError",

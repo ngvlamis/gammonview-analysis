@@ -68,12 +68,13 @@ def _fixtures() -> list[tuple[str, dict]]:
 
     Read from the ``.gvab``, not the ``.gva``: the corpus ships one readable
     JSON copy and a binary for every match (the binary is ~12x smaller), so the
-    binaries are what reach all of them. ``read_gvab`` output is already
-    canonical, which is why there is no ``canonicalize`` call here.
+    binaries are what reach all of them. They are OGXM v1, kept so that real v1
+    files stay in the corpus; a link carries v2, so each is put in the form v2
+    states it (``canonicalize``) before it is compared with what comes back.
     """
     out = []
     for gvab in sorted((_REPO_ROOT / "samples" / "gv").glob("*.gvab")):
-        out.append((gvab.name, read_gvab(gvab.read_bytes())))
+        out.append((gvab.name, canonicalize(read_gvab(gvab.read_bytes()))))
     return out
 
 

@@ -116,6 +116,32 @@ function _normalizer(ply) {
  * and so convert every value in them, not only the three cube values.
  */
 export function mwcFrame(ply) {
+  const anchors = _frameAnchors(ply);
+  if (anchors === null) return null;
+  const [mid, span] = anchors;
+  return {
+    toEquity: (mwc) => Math.round((2 * (mwc - mid) / span) * 10000) / 10000,
+    toDelta: (mwc) => Math.round((2 * mwc / span) * 10000) / 10000,
+  };
+}
+
+/**
+ * `mwcFrame` run backwards, for a writer: `{fromEquity, fromDelta}` mapping
+ * normalized equity onto this ply's MWC, or null where `mwcFrame` has no frame
+ * either. Unrounded -- the writer quantizes.
+ */
+export function mwcFrameInverse(ply) {
+  const anchors = _frameAnchors(ply);
+  if (anchors === null) return null;
+  const [mid, span] = anchors;
+  return {
+    fromEquity: (eq) => mid + eq * span / 2,
+    fromDelta: (d) => d * span / 2,
+  };
+}
+
+/** `[mid, span]` of the MWC interval this ply's equities normalize over. */
+function _frameAnchors(ply) {
   const ctx = _parseOgidContext(ply.ogid_before);
   if (ctx == null) return null;
   if (ctx.matchLength <= 0) return null; // money play: already equity
@@ -129,11 +155,7 @@ export function mwcFrame(ply) {
   const [mwcWin, mwcLose] = mwcAnchors(away1, away2, ctx.cubeValue, ctx.isCrawford);
   const span = mwcWin - mwcLose;
   if (span === 0) return null;
-  const mid = (mwcWin + mwcLose) / 2;
-  return {
-    toEquity: (mwc) => Math.round((2 * (mwc - mid) / span) * 10000) / 10000,
-    toDelta: (mwc) => Math.round((2 * mwc / span) * 10000) / 10000,
-  };
+  return [(mwcWin + mwcLose) / 2, span];
 }
 
 /** The three cube values a payload carries, if it carries them. */
@@ -292,4 +314,6 @@ export function completeBaseBlock(blockObj, plyByKey, analysisInfo, options) {
   }
 }
 
-export { CHECKER_SPREAD_EPS, trivialCube, trivialTakePass };
+export {
+  CHECKER_SPREAD_EPS, trivialCube, trivialTakePass, _checkerIsDecision, _cubePlyIsDecision,
+};

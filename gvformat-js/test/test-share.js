@@ -11,7 +11,11 @@
 import { encode_match, decode_match } from '../src/share.js';
 import { write_gvab } from '../src/binary.js';
 import { readGvab } from '../src/reader.js';
+import { canonicalize } from '../src/reader.js';
 import { inflate } from 'pako';
+import { readFileSync, readdirSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 let passed = 0;
 let failed = 0;
@@ -74,6 +78,11 @@ const raw = {
 };
 const match = readGvab(write_gvab(raw));
 
+function base64urlBytes(payload) {
+  const b64 = payload.replace(/-/g, "+").replace(/_/g, "/");
+  return Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+}
+
 // 1. encode -> decode is an exact inverse.
 {
   const back = decode_match(encode_match(match));
@@ -104,6 +113,30 @@ const match = readGvab(write_gvab(raw));
   let threw = false;
   try { decode_match("@@@not-base64@@@"); } catch { threw = true; }
   assert(threw, "corrupt payload throws");
+}
+
+// 5. Every sample match, as the canonical form a link round-trips. The
+//    samples/gv binaries are OGXM v1, kept so real v1 files stay in the corpus;
+//    a link carries v2, so each is put in the form v2 states it (canonicalize)
+//    before it is compared with what comes back (mirrors tests/test_share_link.py).
+{
+  const dir = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'samples', 'gv');
+  const names = readdirSync(dir).filter((f) => f.endsWith('.gvab')).sort();
+  assert(names.length > 0, `fixtures found under samples/gv/ (${names.length})`);
+  for (const name of names) {
+    const buf = readFileSync(join(dir, name));
+    const sample = canonicalize(readGvab(new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength)));
+    const payload = encode_match(sample);
+    assert(JSON.stringify(decode_match(payload)) === JSON.stringify(sample),
+      `${name} survives encode -> decode unchanged`);
+    assert(/^[A-Za-z0-9\-_]+$/.test(payload), `${name} payload is URL-safe, unpadded base64url`);
+    assert(bytesEqual(inflate(base64urlBytes(payload)), write_gvab(sample)),
+      `${name} payload inflates to write_gvab(match)`);
+  }
+  const b4 = 'B4_SrGcsKAQmoTyHlgJCbM';
+  const fromGvab = encode_match(readGvab(new Uint8Array(readFileSync(join(dir, `${b4}.gvab`)))));
+  const fromGva = encode_match(canonicalize(JSON.parse(readFileSync(join(dir, `${b4}.gva`), 'utf8'))));
+  assert(fromGvab === fromGva, '.gvab and .gva encode to the same payload');
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

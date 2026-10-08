@@ -22,7 +22,7 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_REPO_ROOT))
 
 from gvformat.basefill import complete_base_block
-from gvformat.binary import CHUNK_GVAN, write_gvab
+from gvformat.binary import CHUNK_GVAN, write_gvab_v1
 from gvformat.met import eq2mwc
 from gvformat.reader import read_gvab
 from gvformat.stats import compute_aggregates
@@ -65,7 +65,7 @@ def _strip_gvan(data: bytes) -> bytes:
 
 
 def _read_foreign(doc: dict) -> dict:
-    return read_gvab(_strip_gvan(write_gvab(doc)), verify_crc=False)
+    return read_gvab(_strip_gvan(write_gvab_v1(doc)), verify_crc=False)
 
 
 def _eval_of(win: float) -> dict:
@@ -153,7 +153,7 @@ def _match() -> dict:
 
 def main() -> int:
     print("--- 1. a block with GVAN is left exactly as it was written ---")
-    native = read_gvab(write_gvab(_match()))
+    native = read_gvab(write_gvab_v1(_match()))
     check("_base_analyses" not in native,
           "1. our own file reports no base-only block")
     check(native["games"][0]["plies"][0]["analysis"]["decision"] is True
@@ -261,7 +261,7 @@ def main() -> int:
     doc = _match()
     doc["games"][0]["plies"][0]["analysis"]["eval"] = {
         "win": 0, "gammon_win": 0, "bg_win": 0, "gammon_loss": 0, "bg_loss": 0, "equity": 0}
-    native = read_gvab(write_gvab(doc))["games"][0]["plies"][0]["analysis"]
+    native = read_gvab(write_gvab_v1(doc))["games"][0]["plies"][0]["analysis"]
     check(close(native["eval"]["win"], native["alternatives"][0]["eval"]["win"]),
           "8. all-zero probabilities mean \"not recorded\", and the best move has them")
     check(not close(native["eval"]["win"], 0),
@@ -287,7 +287,7 @@ def main() -> int:
         analysis = ply.get("analysis")
         if analysis is not None and analysis.get("alternatives") is not None:
             analysis["equity_loss"] = 0.15
-    native = compute_aggregates(read_gvab(write_gvab(doc)))["match"]
+    native = compute_aggregates(read_gvab(write_gvab_v1(doc)))["match"]
     foreign = compute_aggregates(_read_foreign(doc))["match"]
     check(native["white"]["total_decisions"] == foreign["white"]["total_decisions"]
           and native["black"]["total_decisions"] == foreign["black"]["total_decisions"],

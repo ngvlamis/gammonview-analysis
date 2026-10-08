@@ -5,7 +5,7 @@
 // Mirrors tests/test_chunk_passthrough.py -- keep the two in step.
 
 import {
-  write_gvab, capPointsWon, clampMatchScore, _b64decode,
+  write_gvab_v1, capPointsWon, clampMatchScore, _b64decode,
 } from '../src/binary.js';
 import { readGvab, GvabError } from '../src/reader.js';
 import { CHUNK_CSUM, CHUNK_SIGN, CHUNK_VIDO } from '../src/constants.js';
@@ -82,7 +82,7 @@ const enc = (s) => new TextEncoder().encode(s);
 // exact chunk layout this test is about. One analysis
 // block is what matters: SIGN binds to it, so the passthrough needs a block to
 // bind against.
-const src = write_gvab({
+const src = write_gvab_v1({
   match_length: 5, player_white: 'W', player_black: 'B',
   white_score: 0, black_score: 5,
   analysis_info: { ply: 2, model_id: 'test', timestamp: 0 },
@@ -112,7 +112,7 @@ assert(new TextDecoder().decode(_b64decode(carried[0].data)) === 'signature-payl
 assert(carried.every((c) => c.anal_index === 0),
   '1. each records the analysis block it followed');
 
-const out = write_gvab(d);
+const out = write_gvab_v1(d);
 assert(JSON.stringify(chunkNames(out)) === JSON.stringify(chunkNames(withChunks)),
   '1. the rewritten file has the same chunks in the same order');
 assert(JSON.stringify(readGvab(out)._unknown_chunks) === JSON.stringify(carried),
@@ -151,7 +151,7 @@ const ogxm = {
     { game_index: 2, winner: 1, points_won: 4, plies: [] },
   ],
 };
-const back = readGvab(write_gvab(ogxm));
+const back = readGvab(write_gvab_v1(ogxm));
 assert(JSON.stringify(back.games.map((g) => g.points_won)) === '[7,12,4]',
   '3. points_won is stored uncapped (the win type is recoverable)');
 assert(back.white_score === 7 && back.black_score === 13,

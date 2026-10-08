@@ -2,8 +2,13 @@
 // Copyright (C) 2026 Nicholas Vlamis
 
 // Multi-analysis: appendAnalysis + the reader/writer's ANAL-group handling.
+//
+// Sections 1-10 check the v1 container (ANAL groups, min_reader_minor 3), so
+// they write with `write_gvab_v1`: the v1 reader, unlike v2's, can read a block
+// back without OGIDs (`deriveOgids: false`), which they rely on. Section 11 is
+// the same multi-analysis property through the v2 writer.
 
-import { write_gvab } from '../src/binary.js';
+import { write_gvab, write_gvab_v1 } from '../src/binary.js';
 import { readGvab } from '../src/reader.js';
 import { appendAnalysis, analysisCount, MAX_ANALYSES } from '../src/merge.js';
 import { OGXM_MAGIC, CHUNK_ANAL, END_MAGIC } from '../src/constants.js';
@@ -156,7 +161,7 @@ function makeMatch({ analysis, modelId, equity = 0.53 } = {}) {
 // Normalize through a write/read cycle so every float is already quantized --
 // comparisons downstream can then be exact.
 function canonical(ogxm) {
-  return readGvab(write_gvab(ogxm), { deriveOgids: false });
+  return readGvab(write_gvab_v1(ogxm), { deriveOgids: false });
 }
 
 // --- 1. Appending onto a base with no analysis gives the legacy shape --------
@@ -177,7 +182,7 @@ function canonical(ogxm) {
   assert(merged.games[1].plies[1].analysis === undefined,
     'terminal ply gets no analysis');
 
-  assert(uint8Equal(write_gvab(merged), write_gvab(our)),
+  assert(uint8Equal(write_gvab_v1(merged), write_gvab_v1(our)),
     'merging into an unanalysed base is byte-identical to analysing directly');
 }
 
@@ -209,7 +214,7 @@ function canonical(ogxm) {
   const our = canonical(makeMatch({ analysis: true, modelId: 'engine-b', equity: 0.21 }));
   const merged = appendAnalysis(base, our);
 
-  const bytes = write_gvab(merged);
+  const bytes = write_gvab_v1(merged);
   assert(countAnalChunks(bytes) === 2, 'two ANAL chunk groups are written');
   assert(minReaderMinor(bytes) === 3, 'min_reader_minor is raised to 3');
 
@@ -228,14 +233,14 @@ function canonical(ogxm) {
   const cubePly = decoded.games[0].plies[1];
   assert(cubePly.analyses.length === 2, 'cube decision plies carry both blocks too');
 
-  assert(uint8Equal(bytes, write_gvab(decoded)),
+  assert(uint8Equal(bytes, write_gvab_v1(decoded)),
     'byte-for-byte round-trip (multi-analysis)');
 }
 
 // --- 4. Single-analysis files are untouched by the change -------------------
 {
   const one = canonical(makeMatch({ analysis: true }));
-  const bytes = write_gvab(one);
+  const bytes = write_gvab_v1(one);
   assert(countAnalChunks(bytes) === 1, 'one analysis still writes one ANAL group');
   assert(minReaderMinor(bytes) !== 3, 'a single block does not raise min_reader_minor');
   assert(one.analyses_info === undefined, 'single analysis has no analyses_info');
@@ -263,7 +268,7 @@ function canonical(ogxm) {
   const base = canonical(makeMatch({ analysis: true }));
   const empty = canonical(makeMatch({ analysis: false }));
   const merged = appendAnalysis(base, empty);
-  assert(uint8Equal(write_gvab(merged), write_gvab(base)),
+  assert(uint8Equal(write_gvab_v1(merged), write_gvab_v1(base)),
     'appending an unanalysed document changes nothing');
   assert(merged !== base, 'the result is still a copy, not the base itself');
 }
@@ -271,9 +276,9 @@ function canonical(ogxm) {
 // --- 7. The base is never mutated ------------------------------------------
 {
   const base = canonical(makeMatch({ analysis: true, modelId: 'engine-a' }));
-  const before = write_gvab(base);
+  const before = write_gvab_v1(base);
   appendAnalysis(base, canonical(makeMatch({ analysis: true, modelId: 'engine-b' })));
-  assert(uint8Equal(write_gvab(base), before), 'appendAnalysis leaves the base untouched');
+  assert(uint8Equal(write_gvab_v1(base), before), 'appendAnalysis leaves the base untouched');
 }
 
 // --- 8. Guards --------------------------------------------------------------
@@ -305,7 +310,7 @@ function canonical(ogxm) {
   }
   assert(doc.analyses_info.length === MAX_ANALYSES,
     `${MAX_ANALYSES} blocks can be accumulated`);
-  assert(countAnalChunks(write_gvab(doc)) === MAX_ANALYSES,
+  assert(countAnalChunks(write_gvab_v1(doc)) === MAX_ANALYSES,
     'all of them serialize');
 
   assertThrows(
@@ -324,6 +329,25 @@ function canonical(ogxm) {
     canonical(makeMatch({ analysis: true, modelId: 'a' })),
     canonical(makeMatch({ analysis: true, modelId: 'b' })));
   assert(analysisCount(two) === 2, 'analysisCount is 2 after a merge');
+}
+
+// --- 11. The same through v2 -----------------------------------------------
+{
+  const base = readGvab(write_gvab(makeMatch({ analysis: true, modelId: 'engine-a', equity: 0.53 })));
+  const our = readGvab(write_gvab(makeMatch({ analysis: true, modelId: 'engine-b', equity: 0.21 })));
+  const merged = appendAnalysis(base, our);
+  const bytes = write_gvab(merged);
+  const decoded = readGvab(bytes);
+  assert(decoded.analyses_info.length === 2, 'v2: both blocks survive');
+  assert(decoded.analyses_info.map((i) => i.model_id).join(',') === 'engine-a,engine-b',
+    'v2: blocks keep their order and model ids');
+  const ids = decoded.analyses_info.map((i) => i.analysis_id);
+  assert(ids.every(Boolean) && ids[0] !== ids[1], 'v2: each block has its own analysis_id');
+  const ply = decoded.games[0].plies[0];
+  assert(Math.abs(ply.analyses[0].alternatives[0].equity - 0.51) < 0.001
+         && Math.abs(ply.analyses[1].alternatives[0].equity - 0.19) < 0.001,
+    'v2: alternatives bind to their own block');
+  assert(uint8Equal(bytes, write_gvab(decoded)), 'v2: byte-for-byte round-trip (multi-analysis)');
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

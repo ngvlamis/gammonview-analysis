@@ -36,7 +36,7 @@ import { convertXg } from '../src/xg2gva.js';
 import { canonicalNotation } from '../src/notation.js';
 import { parseOgid } from '../src/ogid.js';
 import { boardProblems } from '../src/legality.js';
-import { write_gvab } from '../src/binary.js';
+import { write_gvab, write_gvab_v1 } from '../src/binary.js';
 import { readGvab, _absoluteToP1, _applyMovesP1 } from '../src/reader.js';
 import { compute_aggregates } from '../src/stats.js';
 
@@ -113,14 +113,19 @@ const doc = (ply) => ({
   games: [{ game_index: 0, plies: [ply] }],
 });
 
+const over = doc({ color: 1, action_id: 2, d1: 3, d2: 1, moves: split });
 let threw = null;
 try {
-  write_gvab(doc({ color: 1, action_id: 2, d1: 3, d2: 1, moves: split }));
+  write_gvab_v1(over);
 } catch (err) {
   threw = err;
 }
 assert(threw !== null && /room for 2/.test(threw.message),
-  'writing an over-long ply throws instead of dropping a step');
+  'v1: writing an over-long ply throws instead of dropping a step');
+// v2 states an illegal play as the board it produced and keeps its steps beside
+// it (x-gammonview-illegal-ply), so the play survives whole.
+assert(eq(readGvab(write_gvab(over)).games[0].plies[0].moves, split),
+  'v2: an over-long ply survives the round trip, every step of it');
 
 const fits = doc({ color: 1, action_id: 2, d1: 3, d2: 1, moves: collapsed });
 const back = readGvab(write_gvab(fits));
@@ -270,14 +275,17 @@ assert(eq(fitMoveSteps(_notationToSteps('13/6', true, 4, 3), '13/6', true, 4, 3)
           [{ from: 12, pips: 4 }, { from: 16, pips: 3 }]),
   'and a seven-pip span is split by its dice, not refused for its length');
 
+const longPlayDoc = doc({ color: 1, action_id: 11, d1: 3, d2: 3, moves: longSplit });
 let longThrew = null;
 try {
-  write_gvab(doc({ color: 1, action_id: 11, d1: 3, d2: 3, moves: longSplit }));
+  write_gvab_v1(longPlayDoc);
 } catch (err) {
   longThrew = err;
 }
 assert(longThrew !== null && /at most 7/.test(longThrew.message),
-  'and the writer refuses the ten-pip step rather than wrapping it to two');
+  'and the v1 writer refuses the ten-pip step rather than wrapping it to two');
+assert(eq(readGvab(write_gvab(longPlayDoc)).games[0].plies[0].moves, longSplit),
+  'while v2 keeps it, ten pips and all, beside the board it produced');
 
 // End to end: a `.mat` states the play in notation, so the converter sees the
 // span at full length and never builds the step that cannot hold it.

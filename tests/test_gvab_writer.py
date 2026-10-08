@@ -67,7 +67,7 @@ sys.path.insert(0, str(_HEDGEHOG_EXAMPLES))
 from gvanalysis import analyze_mat
 from gvformat.export import to_ogxm_json
 from gvformat.binary import (
-    write_gvab, _encode_eval_level, _enc_equity, _missed_double_counts,
+    write_gvab_v1, _encode_eval_level, _enc_equity, _missed_double_counts,
     CHUNK_MHDR, CHUNK_GAME, CHUNK_ANAL, CHUNK_EVAL, CHUNK_ALTS, CHUNK_CUBE, CHUNK_GVAN,
     CUBE_TYPE_DOUBLE_DECISION, CUBE_TYPE_TAKE_PASS, CUBE_TYPE_MISSED_DOUBLE,
     CUBE_TYPE_RESIGN, CUBE_TYPE_LIVE_CHECKER,
@@ -292,6 +292,13 @@ def _game_base_equal(ours: bytes, ref: bytes) -> bool:
 # Main
 # ---------------------------------------------------------------------------
 
+def _writes_v1(data: bytes) -> bool:
+    """Whether the reference writer produced OGXM v1. HedgeHog writes v2 only
+    since its 2.x line, so the v1 byte-parity checks run only against a
+    library built before it."""
+    return len(data) >= 6 and struct.unpack_from("<H", data, 4)[0] == 1
+
+
 def main() -> int:
     if ogxm_ctypes is None:
         print(_OGXM_SKIP)
@@ -307,7 +314,7 @@ def main() -> int:
     print(f"{len(ogxm['games'])} games, "
           f"{sum(len(g['plies']) for g in ogxm['games'])} plies total.\n")
 
-    our_bytes = write_gvab(ogxm)
+    our_bytes = write_gvab_v1(ogxm)
     print(f"write_gvab() -> {len(our_bytes)} bytes\n")
 
     # =======================================================================
@@ -368,93 +375,96 @@ def main() -> int:
     print("--- 2. Base-chunk byte parity vs ogxm_json_to_binary ---")
     ref_bytes = ogxm_ctypes.json_to_binary(json.dumps(ogxm))
     print(f"   reference (libogxm) -> {len(ref_bytes)} bytes")
-
     ours_chunks = _parse_chunks(our_bytes)
-    ref_chunks = _parse_chunks(ref_bytes)
+    if not _writes_v1(ref_bytes):
+        print("   skipped: this libogxm writes OGXM v2; v1 byte parity needs a pre-v2 build")
+    else:
 
-    for label, ctype in (("ANAL", CHUNK_ANAL), ("EVAL", CHUNK_EVAL), ("ALTS", CHUNK_ALTS)):
-        ours = ours_chunks.get(ctype, [])
-        ref = ref_chunks.get(ctype, [])
-        ok = ours == ref
-        check(ok, f"2. {label} chunk byte-identical to libogxm ({len(ours)} instance(s))")
-        if not ok:
-            for i, (o, r) in enumerate(zip(ours, ref)):
+        ref_chunks = _parse_chunks(ref_bytes)
+
+        for label, ctype in (("ANAL", CHUNK_ANAL), ("EVAL", CHUNK_EVAL), ("ALTS", CHUNK_ALTS)):
+            ours = ours_chunks.get(ctype, [])
+            ref = ref_chunks.get(ctype, [])
+            ok = ours == ref
+            check(ok, f"2. {label} chunk byte-identical to libogxm ({len(ours)} instance(s))")
+            if not ok:
+                for i, (o, r) in enumerate(zip(ours, ref)):
+                    if o != r:
+                        _report_mismatch(f"{label}[{i}]", o, r)
+                if len(ours) != len(ref):
+                    print(f"      {label}: {len(ours)} chunks (ours) vs {len(ref)} chunks (ref)")
+
+        # CUBE: identical except the missed-double probabilities the reference
+        # writer has no JSON field to fill (see _cube_base_equal).
+        ours_cube = ours_chunks.get(CHUNK_CUBE, [])
+        ref_cube = ref_chunks.get(CHUNK_CUBE, [])
+        cube_ok = (len(ours_cube) == len(ref_cube)
+                   and all(_cube_base_equal(o, r) for o, r in zip(ours_cube, ref_cube)))
+        check(cube_ok, "2. CUBE chunk byte-identical to libogxm, missed-double probs "
+                       f"included ({len(ours_cube)} instance(s))")
+        if not cube_ok:
+            for i, (o, r) in enumerate(zip(ours_cube, ref_cube)):
                 if o != r:
-                    _report_mismatch(f"{label}[{i}]", o, r)
-            if len(ours) != len(ref):
-                print(f"      {label}: {len(ours)} chunks (ours) vs {len(ref)} chunks (ref)")
+                    _report_mismatch(f"CUBE[{i}]", o, r)
+                    _diff_cube_entries(o, r)
+            if len(ours_cube) != len(ref_cube):
+                print(f"      CUBE: {len(ours_cube)} chunks (ours) vs {len(ref_cube)} chunks (ref)")
 
-    # CUBE: identical except the missed-double probabilities the reference
-    # writer has no JSON field to fill (see _cube_base_equal).
-    ours_cube = ours_chunks.get(CHUNK_CUBE, [])
-    ref_cube = ref_chunks.get(CHUNK_CUBE, [])
-    cube_ok = (len(ours_cube) == len(ref_cube)
-               and all(_cube_base_equal(o, r) for o, r in zip(ours_cube, ref_cube)))
-    check(cube_ok, "2. CUBE chunk byte-identical to libogxm, missed-double probs "
-                   f"included ({len(ours_cube)} instance(s))")
-    if not cube_ok:
-        for i, (o, r) in enumerate(zip(ours_cube, ref_cube)):
-            if o != r:
-                _report_mismatch(f"CUBE[{i}]", o, r)
-                _diff_cube_entries(o, r)
-        if len(ours_cube) != len(ref_cube):
-            print(f"      CUBE: {len(ours_cube)} chunks (ours) vs {len(ref_cube)} chunks (ref)")
+        # MHDR: no longer byte-identical -- ours carries the documented
+        # GammonView metadata (flags bits 2-3, cube_limit, trailing event).
+        ours_mhdr_list = ours_chunks.get(CHUNK_MHDR, [])
+        ref_mhdr_list = ref_chunks.get(CHUNK_MHDR, [])
+        mhdr_ok = (
+            len(ours_mhdr_list) == len(ref_mhdr_list) == 1
+            and _mhdr_base_equal(ours_mhdr_list[0], ref_mhdr_list[0])
+        )
+        check(mhdr_ok, "2. MHDR chunk identical to libogxm except documented GammonView metadata bytes")
+        if not mhdr_ok and ours_mhdr_list and ref_mhdr_list:
+            _report_mismatch("MHDR", ours_mhdr_list[0], ref_mhdr_list[0])
 
-    # MHDR: no longer byte-identical -- ours carries the documented
-    # GammonView metadata (flags bits 2-3, cube_limit, trailing event).
-    ours_mhdr_list = ours_chunks.get(CHUNK_MHDR, [])
-    ref_mhdr_list = ref_chunks.get(CHUNK_MHDR, [])
-    mhdr_ok = (
-        len(ours_mhdr_list) == len(ref_mhdr_list) == 1
-        and _mhdr_base_equal(ours_mhdr_list[0], ref_mhdr_list[0])
-    )
-    check(mhdr_ok, "2. MHDR chunk identical to libogxm except documented GammonView metadata bytes")
-    if not mhdr_ok and ours_mhdr_list and ref_mhdr_list:
-        _report_mismatch("MHDR", ours_mhdr_list[0], ref_mhdr_list[0])
+        # CUBE type=4 (live_checker) / type=2 (missed_double) are the key new
+        # check: they must round-trip as ordinary CUBE entries (not be diverted
+        # into a GammonView-only GVAN section). Cross-check the per-type entry
+        # counts against what ogxm's own missed_double/cube_decision sub-objects
+        # imply, independent of gvab's internals.
+        ours_cube_blob = b"".join(ours_chunks.get(CHUNK_CUBE, []))
+        ref_cube_blob = b"".join(ref_chunks.get(CHUNK_CUBE, []))
+        ours_type_counts = _cube_type_counts(ours_cube_blob)
+        ref_type_counts = _cube_type_counts(ref_cube_blob)
+        check(ours_type_counts == ref_type_counts,
+              f"2. CUBE per-type entry counts match libogxm ({ours_type_counts})")
 
-    # CUBE type=4 (live_checker) / type=2 (missed_double) are the key new
-    # check: they must round-trip as ordinary CUBE entries (not be diverted
-    # into a GammonView-only GVAN section). Cross-check the per-type entry
-    # counts against what ogxm's own missed_double/cube_decision sub-objects
-    # imply, independent of gvab's internals.
-    ours_cube_blob = b"".join(ours_chunks.get(CHUNK_CUBE, []))
-    ref_cube_blob = b"".join(ref_chunks.get(CHUNK_CUBE, []))
-    ours_type_counts = _cube_type_counts(ours_cube_blob)
-    ref_type_counts = _cube_type_counts(ref_cube_blob)
-    check(ours_type_counts == ref_type_counts,
-          f"2. CUBE per-type entry counts match libogxm ({ours_type_counts})")
+        expected_md_count = expected_lc_count = 0
+        for g in ogxm.get("games", []):
+            for ply in g.get("plies", []):
+                a = ply.get("analysis")
+                if isinstance(a, dict):
+                    if isinstance(a.get("missed_double"), dict):
+                        expected_md_count += 1
+                    elif isinstance(a.get("cube_decision"), dict):
+                        expected_lc_count += 1
+        check(ours_type_counts.get(CUBE_TYPE_MISSED_DOUBLE, 0) == expected_md_count,
+              f"2. CUBE type=2 (missed_double) count matches ogxm ({expected_md_count})")
+        check(ours_type_counts.get(CUBE_TYPE_LIVE_CHECKER, 0) == expected_lc_count,
+              f"2. CUBE type=4 (live_checker) count matches ogxm ({expected_lc_count})")
+        check(expected_md_count > 0 and expected_lc_count > 0,
+              f"2. sample match exercises both CUBE type=2 and type=4 "
+              f"(md={expected_md_count}, lc={expected_lc_count})")
 
-    expected_md_count = expected_lc_count = 0
-    for g in ogxm.get("games", []):
-        for ply in g.get("plies", []):
-            a = ply.get("analysis")
-            if isinstance(a, dict):
-                if isinstance(a.get("missed_double"), dict):
-                    expected_md_count += 1
-                elif isinstance(a.get("cube_decision"), dict):
-                    expected_lc_count += 1
-    check(ours_type_counts.get(CUBE_TYPE_MISSED_DOUBLE, 0) == expected_md_count,
-          f"2. CUBE type=2 (missed_double) count matches ogxm ({expected_md_count})")
-    check(ours_type_counts.get(CUBE_TYPE_LIVE_CHECKER, 0) == expected_lc_count,
-          f"2. CUBE type=4 (live_checker) count matches ogxm ({expected_lc_count})")
-    check(expected_md_count > 0 and expected_lc_count > 0,
-          f"2. sample match exercises both CUBE type=2 and type=4 "
-          f"(md={expected_md_count}, lc={expected_lc_count})")
-
-    # GAME: byte-identical to libogxm again -- the per-game trailing met_value
-    # is gone (equity<->MWC anchors moved to per-decision GVAN records).
-    ours_games = ours_chunks.get(CHUNK_GAME, [])
-    ref_games = ref_chunks.get(CHUNK_GAME, [])
-    check(len(ours_games) == len(ref_games), f"2. GAME chunk count matches ({len(ours_games)})")
-    all_games_ok = True
-    for gi, (og, rg) in enumerate(zip(ours_games, ref_games)):
-        ok = _game_base_equal(og, rg)
-        all_games_ok &= ok
-        if not ok:
-            _report_mismatch(f"GAME[{gi}]", og, rg)
-    check(all_games_ok,
-          f"2. all {len(ours_games)} GAME chunks byte-identical to libogxm")
-    print()
+        # GAME: byte-identical to libogxm again -- the per-game trailing met_value
+        # is gone (equity<->MWC anchors moved to per-decision GVAN records).
+        ours_games = ours_chunks.get(CHUNK_GAME, [])
+        ref_games = ref_chunks.get(CHUNK_GAME, [])
+        check(len(ours_games) == len(ref_games), f"2. GAME chunk count matches ({len(ours_games)})")
+        all_games_ok = True
+        for gi, (og, rg) in enumerate(zip(ours_games, ref_games)):
+            ok = _game_base_equal(og, rg)
+            all_games_ok &= ok
+            if not ok:
+                _report_mismatch(f"GAME[{gi}]", og, rg)
+        check(all_games_ok,
+              f"2. all {len(ours_games)} GAME chunks byte-identical to libogxm")
+        print()
 
     # =======================================================================
     # 3. GVAN self-check
@@ -619,7 +629,7 @@ def main() -> int:
             },
         ],
     }
-    synth_bytes = write_gvab(synthetic)
+    synth_bytes = write_gvab_v1(synthetic)
 
     try:
         json.loads(ogxm_ctypes.binary_to_json(synth_bytes))
@@ -642,15 +652,18 @@ def main() -> int:
 
     synth_games = synth_chunks.get(CHUNK_GAME, [])
     synth_ref_bytes = ogxm_ctypes.json_to_binary(json.dumps(synthetic))
-    synth_ref_chunks = _parse_chunks(synth_ref_bytes)
-    check(_mhdr_base_equal(synth_chunks[CHUNK_MHDR][0], synth_ref_chunks[CHUNK_MHDR][0]),
-          "4b. synthetic MHDR identical to libogxm except documented GammonView metadata bytes")
-    synth_ref_games = synth_ref_chunks.get(CHUNK_GAME, [])
-    synth_games_ok = len(synth_games) == len(synth_ref_games) == 2 and all(
-        _game_base_equal(o, r) for o, r in zip(synth_games, synth_ref_games)
-    )
-    check(synth_games_ok,
-          "4b. synthetic GAME chunks byte-identical to libogxm")
+    if not _writes_v1(synth_ref_bytes):
+        print("   skipped: v1 byte parity needs a pre-v2 libogxm")
+    else:
+        synth_ref_chunks = _parse_chunks(synth_ref_bytes)
+        check(_mhdr_base_equal(synth_chunks[CHUNK_MHDR][0], synth_ref_chunks[CHUNK_MHDR][0]),
+              "4b. synthetic MHDR identical to libogxm except documented GammonView metadata bytes")
+        synth_ref_games = synth_ref_chunks.get(CHUNK_GAME, [])
+        synth_games_ok = len(synth_games) == len(synth_ref_games) == 2 and all(
+            _game_base_equal(o, r) for o, r in zip(synth_games, synth_ref_games)
+        )
+        check(synth_games_ok,
+              "4b. synthetic GAME chunks byte-identical to libogxm")
     print()
 
     print(f"{_checks - len(_failures)}/{_checks} checks passed.")

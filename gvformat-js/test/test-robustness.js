@@ -12,9 +12,11 @@
 // rather than raising. Both used to happen here, producing a silently wrong
 // board instead of an error.
 //
-// Mirrors tests/test_read_gvab.py sections 3b and 5 in the Python repo.
+// Mirrors tests/test_read_gvab.py sections 3b and 5 in the Python repo. The
+// fuzz and truncation run over both writers' output (v2 is what `write_gvab`
+// writes now; v1 is still read for good). The min_reader guard of 3b is v1's.
 
-import { write_gvab } from '../src/binary.js';
+import { write_gvab, write_gvab_v1 } from '../src/binary.js';
 import { readGvab, GvabError, _applyMovesP1 } from '../src/reader.js';
 import { VERSION_MAJOR, VERSION_MINOR } from '../src/constants.js';
 
@@ -57,8 +59,8 @@ const SAMPLE = {
 };
 
 // --- 1. Every malformed stream raises GvabError -----------------------------
-{
-  const good = write_gvab(SAMPLE);
+for (const [writer, label] of [[write_gvab, 'v2'], [write_gvab_v1, 'v1']]) {
+  const good = writer(SAMPLE);
 
   // Deterministic PRNG: a flaky fuzz test is worse than no fuzz test.
   let seed = 20260801;
@@ -82,13 +84,13 @@ const SAMPLE = {
       if (e.name !== 'GvabError') leaked.push(`${e.name}: ${e.message}`);
     }
   }
-  assert(leaked.length === 0, `4000 mutated streams raise only GvabError (leaked ${leaked.length}, ${accepted} still parsed)`);
+  assert(leaked.length === 0, `${label}: 4000 mutated streams raise only GvabError (leaked ${leaked.length}, ${accepted} still parsed)`);
   for (const msg of leaked.slice(0, 5)) console.error(`      leaked: ${msg}`);
 }
 
 // --- 2. A truncated ply record is an error, not a phantom ply ---------------
-{
-  const good = write_gvab(SAMPLE);
+for (const [writer, label] of [[write_gvab, 'v2'], [write_gvab_v1, 'v1']]) {
+  const good = writer(SAMPLE);
   // Lop off the tail. Something inside a GAME chunk now runs past its end.
   let threw = null;
   try {
@@ -96,7 +98,7 @@ const SAMPLE = {
   } catch (e) {
     threw = e;
   }
-  assert(threw instanceof GvabError, "a truncated stream throws GvabError");
+  assert(threw instanceof GvabError, `${label}: a truncated stream throws GvabError`);
 }
 
 // --- 3. An out-of-board `from` is rejected, not silently applied ------------
@@ -128,7 +130,7 @@ const SAMPLE = {
     return b;
   };
 
-  const base = write_gvab(SAMPLE);
+  const base = write_gvab_v1(SAMPLE);
   const baseView = new DataView(base.buffer, base.byteOffset, base.byteLength);
   const hdrMaj = baseView.getUint16(8, true);
   const hdrMin = baseView.getUint16(10, true);

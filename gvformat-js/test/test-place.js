@@ -8,7 +8,7 @@
 // Mirrors the "2b. Legacy combined event string" section of the Python
 // tests/test_read_gvab.py.
 
-import { write_gvab } from '../src/binary.js';
+import { write_gvab, write_gvab_v1 } from '../src/binary.js';
 import { readGvab } from '../src/reader.js';
 import { PLACE_SEPARATOR, splitPlace, joinPlace, cleanPlace } from '../src/place.js';
 
@@ -72,19 +72,20 @@ function baseMatch(extra) {
 // --- Legacy files: one combined string, no site field --------------------
 {
   const legacy = baseMatch({ event: `Spring League${PLACE_SEPARATOR}Heroes Lounge` });
-  const back = readGvab(write_gvab(legacy));
+  // Only a v1 file can be a legacy one: v2 states `site` apart from `event`.
+  const back = readGvab(write_gvab_v1(legacy));
   assert(back.event === 'Spring League' && back.site === 'Heroes Lounge',
     'a legacy combined event string splits into the pair');
 
   // No separator -> all event. Guessing "site" would move data between two
   // columns that mean different things.
-  const unsplit = readGvab(write_gvab(baseMatch({ event: 'Just An Event' })));
+  const unsplit = readGvab(write_gvab_v1(baseMatch({ event: 'Just An Event' })));
   assert(unsplit.event === 'Just An Event' && unsplit.site === null,
     'an unseparated legacy string stays entirely in event');
 
   // Healing is a one-time fixup: re-encoding the decoded doc is stable.
-  const once = write_gvab(back);
-  const twice = write_gvab(readGvab(once));
+  const once = write_gvab_v1(back);
+  const twice = write_gvab_v1(readGvab(once));
   assert(uint8Equal(once, twice), 'the healed document is a write/read fixed point');
 }
 

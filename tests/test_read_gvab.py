@@ -31,7 +31,7 @@ sys.path.insert(0, str(_REPO_ROOT))
 
 from gvanalysis import analyze_mat
 from gvformat.export import to_ogxm_json
-from gvformat.binary import write_gvab, VERSION_MAJOR, VERSION_MINOR
+from gvformat.binary import write_gvab, write_gvab_v1, VERSION_MAJOR, VERSION_MINOR
 from gvformat.reader import read_gvab, canonicalize, GvabError
 from gvformat.stats import compute_aggregates
 
@@ -283,7 +283,7 @@ def main() -> int:
     legacy = _synthetic()
     legacy["event"] = "Synthetic • Somewhere"
     legacy.pop("site")
-    dl = read_gvab(write_gvab(legacy))
+    dl = read_gvab(write_gvab_v1(legacy))
     check(dl["event"] == "Synthetic" and dl["site"] == "Somewhere",
           f"2b. legacy combined event splits ({dl['event']!r}, {dl['site']!r})")
     # No separator -> all event. Guessing "site" would move data between two
@@ -291,11 +291,11 @@ def main() -> int:
     unsplit = _synthetic()
     unsplit["event"] = "Just An Event"
     unsplit.pop("site")
-    du = read_gvab(write_gvab(unsplit))
+    du = read_gvab(write_gvab_v1(unsplit))
     check(du["event"] == "Just An Event" and du["site"] is None,
           "2b. an unseparated legacy string stays entirely in event")
     # Healing is a one-time fixup: re-encoding the decoded doc is stable.
-    check(write_gvab(dl) == write_gvab(read_gvab(write_gvab(dl))),
+    check(write_gvab_v1(dl) == write_gvab_v1(read_gvab(write_gvab_v1(dl))),
           "2b. the healed document is a write/read fixed point")
     print()
 
@@ -327,7 +327,7 @@ def main() -> int:
 
     # --- 3. CRC verification guard ---
     print("--- 3. CRC guard ---")
-    b = bytearray(write_gvab(synth))
+    b = bytearray(write_gvab_v1(synth))
     b[40] ^= 0xFF
     raised = False
     try:
@@ -354,7 +354,7 @@ def main() -> int:
         _struct.pack_into("<HH", b, 8, maj, minr)
         return bytes(b)
 
-    base = write_gvab(synth)
+    base = write_gvab_v1(synth)
     hdr_rmaj, hdr_rmin = _struct.unpack_from("<HH", base, 8)
     check((hdr_rmaj, hdr_rmin) <= (VERSION_MAJOR, VERSION_MINOR),
           f"3b. we write a min_reader we can read ({hdr_rmaj}.{hdr_rmin})")
@@ -409,8 +409,8 @@ def main() -> int:
         # https://gitlab.com/eranlambooij/hedgehog-public (`make libogxm`).
         sys.path.insert(0, str(Path("~/projects/hedgehog-public/examples").expanduser()))
         import ogxm_ctypes
-        ref = json.loads(ogxm_ctypes.binary_to_json(write_gvab(ogxm)))
-        ours = read_gvab(write_gvab(ogxm))
+        ref = json.loads(ogxm_ctypes.binary_to_json(write_gvab_v1(ogxm)))
+        ours = read_gvab(write_gvab_v1(ogxm))
         check(ref.get("match_length") == ours["match_length"], "4. match_length agrees with libogxm")
         check(ref.get("player_white") == ours["player_white"], "4. player_white agrees with libogxm")
         check(len(ref.get("games", [])) == len(ours["games"]), "4. game count agrees with libogxm")

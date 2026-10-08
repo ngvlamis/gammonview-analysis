@@ -8,7 +8,7 @@
 // the normalized equity we store. `basefill.js` completes such a block on read.
 // Mirrors tests/test_basefill.py -- keep the two in step.
 
-import { write_gvab } from '../src/binary.js';
+import { write_gvab_v1 } from '../src/binary.js';
 import { readGvab } from '../src/reader.js';
 import { completeBaseBlock } from '../src/basefill.js';
 import { compute_aggregates } from '../src/stats.js';
@@ -49,7 +49,7 @@ function stripGvan(bytes) {
   return out;
 }
 
-const readForeign = (doc) => readGvab(stripGvan(write_gvab(doc)), { verifyCrc: false });
+const readForeign = (doc) => readGvab(stripGvan(write_gvab_v1(doc)), { verifyCrc: false });
 
 const evalOf = (win) => ({
   win, gammon_win: 0.12, bg_win: 0.01, gammon_loss: 0.11, bg_loss: 0.01,
@@ -117,7 +117,7 @@ const MATCH = () => ({
 
 console.log('--- 1. a block with GVAN is left exactly as it was written ---');
 {
-  const native = readGvab(write_gvab(MATCH()));
+  const native = readGvab(write_gvab_v1(MATCH()));
   assert(native._base_analyses === undefined,
     '1. our own file reports no base-only block');
   assert(native.games[0].plies[0].analysis.decision === true
@@ -230,7 +230,7 @@ console.log('\n--- 8. EVAL probabilities left unset fall back to the best move -
   const doc = MATCH();
   doc.games[0].plies[0].analysis.eval = {
     win: 0, gammon_win: 0, bg_win: 0, gammon_loss: 0, bg_loss: 0, equity: 0 };
-  const native = readGvab(write_gvab(doc)).games[0].plies[0].analysis;
+  const native = readGvab(write_gvab_v1(doc)).games[0].plies[0].analysis;
   assert(close(native.eval.win, native.alternatives[0].eval.win),
     '8. all-zero probabilities mean "not recorded", and the best move has them');
   assert(!close(native.eval.win, 0),
@@ -255,7 +255,7 @@ console.log('\n--- 10. a completed block rates like the one it was written from 
   for (const ply of doc.games[0].plies) {
     if (ply.analysis && ply.analysis.alternatives) ply.analysis.equity_loss = 0.15;
   }
-  const native = compute_aggregates(readGvab(write_gvab(doc))).match;
+  const native = compute_aggregates(readGvab(write_gvab_v1(doc))).match;
   const foreign = compute_aggregates(readForeign(doc)).match;
   assert(native.white.total_decisions === foreign.white.total_decisions
       && native.black.total_decisions === foreign.black.total_decisions,

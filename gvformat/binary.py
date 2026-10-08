@@ -5,9 +5,16 @@
 # (MIT, Copyright (c) 2026 Eran Lambooij). See THIRD-PARTY-NOTICES.md,
 # whose notices must be preserved in copies of this file.
 
-"""Pure-Python OGXM binary WRITER: OGXM-JSON dict -> ``.gvab`` bytes.
+"""Pure-Python OGXM **v1** binary WRITER: OGXM-JSON dict -> v1 ``.gvab`` bytes.
 
-``write_gvab(ogxm)`` serializes a dict shaped like ``ogxm_export.to_ogxm_json(...)``
+Since 1.6.0 ``write_gvab`` writes OGXM v2 (``ogxm2_writer``; profile in
+``docs/OGXM_V2_PROFILE.md``) and is defined at the bottom of this module only
+so that its import path stays where every caller has it. Everything else here
+is the v1 writer, ``write_gvab_v1``: kept because ``read_gvab`` reads v1 for
+good and the tests check that reader against the writer it was built with.
+What follows describes v1.
+
+``write_gvab_v1(ogxm)`` serializes a dict shaped like ``ogxm_export.to_ogxm_json(...)``
 produces into the compact OGXM binary format. Pure stdlib -- no bgsage/engine
 calls, no C++ extension.
 
@@ -874,8 +881,16 @@ def _analysis_blocks(ogxm: dict, games: list[dict]) -> list[tuple[dict, list[dic
 # ---------------------------------------------------------------------------
 
 def write_gvab(ogxm: dict) -> bytes:
+    """Serialize our document to ``.gvab`` bytes -- OGXM v2 since 1.6.0 (see
+    ``ogxm2_writer``). The v1 writer below stays for reading tests and
+    comparisons; ``read_gvab`` reads both."""
+    from .ogxm2_writer import write_ogxm2
+    return write_ogxm2(ogxm)
+
+
+def write_gvab_v1(ogxm: dict) -> bytes:
     """Serialize an OGXM-JSON dict (``ogxm_export.to_ogxm_json(...)`` shape)
-    to ``.gvab`` binary bytes.
+    to OGXM **v1** + GVAN bytes, the format ``write_gvab`` wrote until 1.6.0.
 
     Emits, in order: File Header -> MHDR -> GAME (per game) -> one
     [ANAL -> EVAL -> ALTS -> CUBE -> GVAN] group **per analysis block** (0..N,

@@ -31,7 +31,7 @@ sys.path.insert(0, str(_REPO_ROOT))
 
 from gvformat.binary import (
     CHUNK_CSUM, CHUNK_GVAN, CHUNK_SIGN, CHUNK_VIDO, _chunk,
-    cap_points_won, clamp_match_score, write_gvab,
+    cap_points_won, clamp_match_score, write_gvab_v1,
     GVAN_VERSION, GVAN_CHECKER_REC, GVAN_CUBE_REC,
     GVAN_CHECKER_REC_V2, GVAN_CUBE_REC_V2,
 )
@@ -101,7 +101,7 @@ def main() -> int:
     check(all(c["anal_index"] == 0 for c in carried),
           "1. each records the analysis block it followed")
 
-    out = write_gvab(d)
+    out = write_gvab_v1(d)
     check(_chunk_names(out) == _chunk_names(withchunks),
           "1. the rewritten file has the same chunks in the same order")
     again = read_gvab(out).get("_unknown_chunks") or []
@@ -121,7 +121,7 @@ def main() -> int:
         for ply in g.get("plies") or []:
             ply.pop("analysis", None)
             ply.pop("analyses", None)
-    check(_chunk_names(write_gvab(stripped)).count("SIGN") == 1,
+    check(_chunk_names(write_gvab_v1(stripped)).count("SIGN") == 1,
           "1. a SIGN whose block is gone is re-emitted in the trailing group")
 
     print()
@@ -155,7 +155,7 @@ def main() -> int:
             {"game_index": 2, "winner": 1, "points_won": 4, "plies": []},
         ],
     }
-    back = read_gvab(write_gvab(ogxm))
+    back = read_gvab(write_gvab_v1(ogxm))
     check([g["points_won"] for g in back["games"]] == [7, 12, 4],
           "3. points_won is stored uncapped (the win type is recoverable)")
     check((back["white_score"], back["black_score"]) == (7, 13),
@@ -181,7 +181,7 @@ def main() -> int:
             {"color": 1, "action_id": 24},
         ]}],
     }
-    v3 = write_gvab(ogxm)
+    v3 = write_gvab_v1(ogxm)
     gvan_v3 = next(b for t, b, _f in _walk_chunks(v3)[0] if t == CHUNK_GVAN)
     check(gvan_v3[0] == GVAN_VERSION, f"4. writer emits GVAN v{GVAN_VERSION}")
     check(GVAN_CHECKER_REC == 3 and GVAN_CUBE_REC == 2,

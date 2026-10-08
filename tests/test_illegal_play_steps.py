@@ -34,7 +34,7 @@ from pathlib import Path
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_REPO_ROOT))
 
-from gvformat import read_gvab, write_gvab  # noqa: E402
+from gvformat import read_gvab, write_gvab, write_gvab_v1  # noqa: E402
 from gvformat.export import (  # noqa: E402
     _flip_board, _notation_to_steps, _notation_to_steps_unsplit, _p1_to_absolute,
     _steps_per_roll, board_diff_has_non_forward_hop, fit_move_steps,
@@ -125,11 +125,15 @@ def main() -> int:
 
     over = _doc({"color": 1, "action_id": 2, "d1": 3, "d2": 1, "moves": split})
     try:
-        write_gvab(over)
-        check(False, "writing an over-long ply raises instead of dropping a step")
+        write_gvab_v1(over)
+        check(False, "v1: writing an over-long ply raises instead of dropping a step")
     except ValueError as exc:
         check("room for 2" in str(exc),
-              "writing an over-long ply raises instead of dropping a step")
+              "v1: writing an over-long ply raises instead of dropping a step")
+    # v2 states an illegal play as the board it produced and keeps its steps
+    # beside it (x-gammonview-illegal-ply), so the play survives whole.
+    check(read_gvab(write_gvab(over))["games"][0]["plies"][0]["moves"] == split,
+          "v2: an over-long ply survives the round trip, every step of it")
 
     fits = _doc({"color": 1, "action_id": 2, "d1": 3, "d2": 1, "moves": collapsed})
     back = read_gvab(write_gvab(fits))
@@ -293,14 +297,16 @@ def main() -> int:
           == [{"from": 12, "pips": 4}, {"from": 16, "pips": 3}],
           "and a seven-pip span is split by its dice, not refused for its length")
 
+    long_doc = _doc({"color": 1, "action_id": 11, "d1": 3, "d2": 3, "moves": long_split})
     long_threw = None
     try:
-        write_gvab(_doc({"color": 1, "action_id": 11, "d1": 3, "d2": 3,
-                         "moves": long_split}))
+        write_gvab_v1(long_doc)
     except ValueError as err:
         long_threw = err
     check(long_threw is not None and "at most 7" in str(long_threw),
-          "and the writer refuses the ten-pip step rather than wrapping it to two")
+          "and the v1 writer refuses the ten-pip step rather than wrapping it to two")
+    check(read_gvab(write_gvab(long_doc))["games"][0]["plies"][0]["moves"] == long_split,
+          "while v2 keeps it, ten pips and all, beside the board it produced")
 
     # End to end: a `.mat` states the play in notation, so the converter sees
     # the span at full length and never builds the step that cannot hold it.

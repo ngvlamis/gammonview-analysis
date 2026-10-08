@@ -13,11 +13,19 @@ v1's magic and changes nearly every byte: a 16-byte header, sections with a
 one match-wide ordinal (``ply_ref``), and one ``DECS`` section holding every
 decision of an analysis block.
 
-**A reader into the v1 shape, not a v2 codec.** Nothing here writes v2. The
-document that comes out is the one a v1 file holding the same match would give;
-``basefill`` completes its analysis as it completes any foreign v1 block, and
-saving it writes ordinary v1 ``.gvab``. HedgeHog's own ``to_v1``
-(``src/match/ogxm2_v1.cpp``) is the model, with two departures:
+**A reader into our document's shape.** The document that comes out is the one
+a v1 file holding the same match would give, so nothing downstream learns there
+are two versions. ``ogxm2_writer`` is the other half, and since 1.6.0 what
+``write_gvab`` writes; ``docs/OGXM_V2_PROFILE.md`` is the profile the two
+share.
+
+**Two kinds of block.** A block our writer made is marked by its
+``x-gammonview-analysis`` annotation and read exactly: the ``x-`` annotations
+put back what v2 has no field for (an illegal play's analysis and steps, the
+PR-counting flags, level labels, ``site``), and the reader derives nothing it
+was told. Any other producer's block is read as below, and ``basefill``
+completes it as it completes any foreign v1 block. HedgeHog's own ``to_v1``
+(``src/match/ogxm2_v1.cpp``) is the model for that, with two departures:
 
 * Content that does not change the board -- signatures, annotations, the clock,
   the video, a game's ``termination`` -- is not carried rather than refused.
@@ -40,10 +48,15 @@ varint must fit, every ``ply_ref`` must name a ply.
 
 from __future__ import annotations
 
+import base64
 import struct
+import uuid
 import zlib
+from urllib.parse import unquote
 
-from .basefill import complete_base_block, mwc_frame
+from .basefill import (
+    _checker_is_decision, _cube_ply_is_decision, _trivial_cube, complete_base_block, mwc_frame,
+)
 from .binary import DICE_TABLE
 from .reader import (
     GvabError, _attach_blocks, _cube_action_label, _derive_ogids, _eval_from_probs,
@@ -81,7 +94,23 @@ KIND_CUBE = 1
 KIND_RESIGN = 2
 KIND_ROLL = 3
 
+CURRENCY_CUBEFUL_MONEY = 1
 CURRENCY_CUBEFUL_MATCH = 2
+
+# What v2 has no field for, carried in ANNO under the `x-` namespace the spec
+# reserves for producers outside it (N6). See ogxm2_writer.py for what each
+# holds; every value starts with GV_FORMAT.
+GV_FORMAT = "1:"
+GV_KEY_ANALYSIS = "x-gammonview-analysis/"
+GV_KEY_DECISIONS = "x-gammonview-decisions/"
+GV_KEY_ILLEGAL_PLY = "x-gammonview-illegal-ply"
+GV_KEY_SITE = "x-gammonview-site"
+GV_KEY_EVENT = "x-gammonview-event"
+GV_KEY_SCORE = "x-gammonview-score"
+
+SCOPE_MATCH = 0
+SCOPE_PLY = 2
+MARKER_ACTIONS = (24, 25, 26, 30)
 
 #: verdict -> the v1 label set. "Too good" is a no-double; a beaver or raccoon
 #: verdict is a take that does better than a take.
@@ -392,8 +421,7 @@ def _decode_game(payload: bytes) -> dict:
 
 def _decode_anal(payload: bytes) -> dict:
     body, has = _Cursor(payload, 0, len(payload)).record()
-    body.skip(16)                                      # analysis_id
-    a: dict = {}
+    a: dict = {"analysis_id": str(uuid.UUID(bytes=body.bytes(16)))}
     if has(0):
         body.skip(32)                                  # match_digest
     if has(1):
@@ -506,6 +534,54 @@ def _decode_decs(payload: bytes) -> list[dict]:
     return out
 
 
+def _decode_anno(payload: bytes) -> list[dict]:
+    """ANNO records, in file order (8.4). Drawings are stepped over."""
+    cur = _Cursor(payload, 0, len(payload))
+    out = []
+    while cur.pos < cur.end:
+        body, has = cur.record()
+        r: dict = {"scope": body.varint(), "ref": body.varint(), "value": body.str()}
+        if has(0):
+            r["key"] = body.str()
+        if has(1):
+            r["kind"] = body.varint()
+        if has(2):
+            r["alt_index"] = body.varint()
+        if has(3):
+            body.str()                                 # lang
+        if has(4):
+            body.str()                                 # author
+        if has(5):
+            body.varint64()                            # at
+        if has(6):
+            for _ in range(body.varint()):
+                body.record()                          # a drawing
+        if has(7):
+            r["analysis"] = str(uuid.UUID(bytes=body.bytes(16)))
+        out.append(r)
+    return out
+
+
+def _gv_values(annos: list[dict], scope: int) -> dict:
+    """Our ``x-gammonview`` values at ``scope``, as ``{(ref, key): value}``,
+    with a value split over ``key``, ``key~1``, ... joined back and the format
+    prefix checked off."""
+    parts: dict = {}
+    for r in annos:
+        key = r.get("key") or ""
+        if r["scope"] != scope or not key.startswith("x-gammonview-"):
+            continue
+        base, _sep, idx = key.partition("~")
+        parts.setdefault((r["ref"], base), []).append((int(idx) if idx.isdigit() else 0, r["value"]))
+    out = {}
+    for k, chunks in parts.items():
+        value = "".join(v for _i, v in sorted(chunks))
+        if not value.startswith(GV_FORMAT):
+            raise GvabError(f"annotation {k[1]!r} is in a format this reader does not know")
+        out[k] = value[len(GV_FORMAT):]
+    return out
+
+
 def _verify_csum(data: bytes, payload: bytes, section_start: int) -> None:
     """Verify a CRC32 CSUM; a SHA-256 one is skipped, as the spec allows."""
     body, _has = _Cursor(payload, 0, len(payload)).record()
@@ -527,6 +603,11 @@ def _verify_csum(data: bytes, payload: bytes, section_start: int) -> None:
 
 def _unsupported(what: str) -> GvabError:
     return GvabError(f"This match uses {what}, which GammonView cannot show yet.")
+
+
+def _dice_action_id(d1: int, d2: int) -> int:
+    a, b = sorted((d1, d2))
+    return (0, 6, 11, 15, 18, 20)[a - 1] + (b - a)
 
 
 def _color(seat: int) -> int:
@@ -554,6 +635,9 @@ def _v1_ply(p: dict) -> dict:
             raise GvabError("OGXM v2 set-position ply without its board")
         if "dice" in x:
             ply["d1"], ply["d2"] = x["dice"]
+            # A set position with dice restates a play (5.4.7). Its seat is the
+            # side on roll afterwards (M2); our colour is the player who made it.
+            ply["color"] = 1 - ply["color"]
         ply["set_position"] = x["board"]
     return ply
 
@@ -615,6 +699,12 @@ def _v1_match(mtch: dict, v2games: list[dict]):
         if g.get("auto_doubles"):
             raise _unsupported("automatic doubles")
         plies = [_v1_ply(p) for p in g["plies"]]
+        # A marker has no actor (its seat is always 0); our documents stamp it
+        # with the game's winner, as every converter here does.
+        if g.get("winner") in (0, 1):
+            for p in plies:
+                if p["action_id"] in MARKER_ACTIONS:
+                    p["color"] = _color(g["winner"])
         first = next((p for p in plies if p["action_id"] < 24
                       or p["action_id"] in (ACTION_RESIGN_GAME, ACTION_RESIGN_MATCH)), None)
         # A set-up position is stated the way our own exports state one: a
@@ -682,23 +772,31 @@ def _r4(v: float) -> float:
 _IDENTITY = (_r4, _r4)
 
 
-def _checker(d: dict, block_level: dict, frame) -> dict:
+def _label(level: dict, ours: bool) -> str | None:
+    """A level's display label. Our own blocks name it in ``preset``
+    (``3ply``, ``truncated2``, ``rollout``); a foreign block's preset is the
+    producer's own vocabulary, so its label comes from the depth instead."""
+    if ours and "preset" in level:
+        return level["preset"]
+    return _level_label(level)
+
+
+def _checker(d: dict, block_level: dict, frame, ours: bool = False) -> dict:
     to_eq, to_delta = frame
     level = _resolve(block_level, d.get("level"))
     alts = d.get("alternatives") or []
     levels = [_resolve(level, a.get("level")) for a in alts]
-    split = any(_level_label(lv) != _level_label(levels[0]) for lv in levels)
+    split = ours or any(_level_label(lv) != _level_label(levels[0]) for lv in levels)
 
     best_mwc = d["best_equity"] if "best_equity" in d else (alts[0]["equity"] if alts else 0.0)
     played = next((a for a in alts if a.get("is_played")), None)
+    # A derived loss (7.1) is the difference of the stored values, taken before
+    # either is rounded to the four places a document holds.
     loss_mwc = (d["equity_loss"] if "equity_loss" in d
                 else (best_mwc - played["equity"] if played else 0.0))
 
     best = to_eq(best_mwc)
-    if played is not None and "equity_loss" not in d:
-        loss = max(0.0, _r4(best - to_eq(played["equity"])))
-    else:
-        loss = max(0.0, to_delta(loss_mwc))
+    loss = max(0.0, to_delta(loss_mwc))
     out_alts = []
     for a, lv in zip(alts, levels):
         o: dict = {"move": a["steps"], "equity": to_eq(a["equity"]),
@@ -706,7 +804,7 @@ def _checker(d: dict, block_level: dict, frame) -> dict:
         if "probs" in a:
             o["eval"] = _eval_from_probs(*a["probs"])
         if split:
-            label = _level_label(lv)
+            label = _label(lv, ours)
             if label is not None:
                 o["eval_level"] = label
         out_alts.append(o)
@@ -733,7 +831,7 @@ def _cube_triple(d: dict, frame) -> dict:
     }
 
 
-def _live_cube(d: dict, frame, analysis: dict) -> None:
+def _live_cube(d: dict, frame, analysis: dict, label: str | None = None) -> None:
     triple = _cube_triple(d, frame)
     eval_obj = _eval_from_probs(*d["probs"]) if "probs" in d else None
     should_double = d["verdict"] == 1
@@ -745,6 +843,8 @@ def _live_cube(d: dict, frame, analysis: dict) -> None:
     }
     if eval_obj is not None:
         live["eval"] = eval_obj
+    if label is not None:
+        live["eval_level"] = label
     if "equity_loss" in d:
         missed: dict = {
             **triple,
@@ -753,13 +853,15 @@ def _live_cube(d: dict, frame, analysis: dict) -> None:
         }
         if eval_obj is not None:
             missed["eval"] = dict(eval_obj)
+        if label is not None:
+            missed["eval_level"] = label
         analysis["missed_double"] = missed
     else:
         live["decision"] = False
     analysis["cube_decision"] = live
 
 
-def _cube_ply(d: dict, action: int, block_level: dict, frame) -> dict:
+def _cube_ply(d: dict, action: int, block_level: dict, frame, ours: bool = False) -> dict:
     level = _resolve(block_level, d.get("level"))
     analysis: dict = {
         "correct_action": VERDICT_NAMES.get(d["verdict"], "no_double"),
@@ -771,6 +873,8 @@ def _cube_ply(d: dict, action: int, block_level: dict, frame) -> dict:
     }
     if "probs" in d:
         analysis["eval"] = _eval_from_probs(*d["probs"])
+    if ours and "preset" in level:
+        analysis["eval_level"] = level["preset"]
     if "cube_ply" in level and level["cube_ply"] != block_level.get("cube_ply"):
         analysis["ply"] = level["cube_ply"]
     return analysis
@@ -789,11 +893,65 @@ def _resign(d: dict, frame) -> dict:
     return analysis
 
 
-def _v1_block(anal: dict, decisions: list[dict], ply_at: list, match_length: int):
+def _plays_dice(ply: dict) -> bool:
+    """A dice action, or an illegal play restated as a set position."""
+    action = ply["action_id"]
+    return action <= 20 or (action == ACTION_SET_POSITION and bool(ply.get("d1")))
+
+
+def default_flags(ply: dict, analysis: dict, illegal_play: bool) -> None:
+    """Set the flags v2 has no field for to what a block of ours holds unless it
+    says otherwise (``x-gammonview-analysis``): ``illegal_move`` on a checker
+    analysis of an illegal play, the PR-counting ``decision`` by the rule
+    ``basefill`` applies to a foreign block, and a live cube's own
+    ``decision`` by triviality. Shared with the writer, which records only
+    where its document disagrees."""
+    action = ply["action_id"]
+    if illegal_play and "alternatives" in analysis:
+        analysis["illegal_move"] = True
+    if _plays_dice(ply):
+        analysis["decision"] = ("alternatives" in analysis and _checker_is_decision(analysis))
+    elif action in (ACTION_DOUBLE, ACTION_TAKE, ACTION_DROP):
+        analysis["decision"] = _cube_ply_is_decision(ply, analysis)
+    elif action in (ACTION_RESIGN_GAME, ACTION_RESIGN_MATCH):
+        analysis["decision"] = True
+    live = analysis.get("cube_decision")
+    if isinstance(live, dict) and "missed_double" not in analysis:
+        live["decision"] = not _trivial_cube(
+            live["no_double_equity"], live["double_take_equity"], live["double_pass_equity"])
+
+
+def _apply_exceptions(analysis: dict, letters: set) -> None:
+    if "c" in letters:
+        analysis["decision"] = not analysis.get("decision")
+    if "l" in letters and isinstance(analysis.get("cube_decision"), dict):
+        live = analysis["cube_decision"]
+        live["decision"] = not live.get("decision")
+    if "i" in letters:
+        if analysis.get("illegal_move"):
+            del analysis["illegal_move"]
+        else:
+            analysis["illegal_move"] = True
+
+
+def _v1_block(anal: dict, decisions: list[dict], ply_at: list, match_length: int,
+              ours: dict | None = None):
+    """One v2 analysis block in v1's shape. ``ours`` is set for a block our
+    writer made: ``{"extra": {ply_ref: [records]}, "exceptions": {tokens},
+    "illegal": {ply_refs}}`` -- the annotation's decision records, which stand
+    in for ``DECS``'s at their ply and kind, and the flags to flip."""
     block_level = _resolve({}, anal.get("level"))
     block_mwc = match_length > 0 and anal.get("currency") == CURRENCY_CUBEFUL_MATCH
     block_obj: dict = {}
     luck_levels: set = set()
+    mine = ours is not None
+
+    if mine and ours["extra"]:
+        replaced = {(ref, d["kind"]) for ref, recs in ours["extra"].items() for d in recs}
+        decisions = sorted(
+            [d for d in decisions if (d["ply_ref"], d["kind"]) not in replaced]
+            + [d for recs in ours["extra"].values() for d in recs],
+            key=lambda d: (d["ply_ref"], d["kind"]))
 
     for d in decisions:
         if d["ply_ref"] >= len(ply_at):
@@ -811,23 +969,43 @@ def _v1_block(anal: dict, decisions: list[dict], ply_at: list, match_length: int
             continue
 
         action = ply["action_id"]
-        if kind == KIND_CHECKER and (action <= 20 or action == ACTION_SET_POSITION):
+        dice = _plays_dice(ply)
+        if kind == KIND_CHECKER and dice:
             prior = block_obj.get(key) or {}
-            block_obj[key] = {**_checker(d, block_level, frame), **prior}
-        elif kind == KIND_CUBE and action <= 20:
-            _live_cube(d, frame, block_obj.setdefault(key, {}))
+            block_obj[key] = {**_checker(d, block_level, frame, mine), **prior}
+        elif kind == KIND_CUBE and dice:
+            label = _label(_resolve(block_level, d.get("level")), True) if mine else None
+            _live_cube(d, frame, block_obj.setdefault(key, {}), label)
         elif kind == KIND_CUBE and action in (ACTION_DOUBLE, ACTION_TAKE, ACTION_DROP):
-            block_obj[key] = _cube_ply(d, action, block_level, frame)
-        elif kind == KIND_ROLL and action <= 20:
+            block_obj[key] = _cube_ply(d, action, block_level, frame, mine)
+        elif kind == KIND_ROLL and dice:
             # From the roller's side, in the block's currency -- a difference
             # of two MWCs, so it converts by the frame's slope alone.
             block_obj.setdefault(key, {"decision": False})["luck"] = frame[1](d["luck"])
-            luck_levels.add(_level_label(_resolve(block_level, d.get("level"))))
+            luck_levels.add(_label(_resolve(block_level, d.get("level")), mine))
         elif kind == KIND_RESIGN and action in (ACTION_RESIGN_GAME, ACTION_RESIGN_MATCH):
             block_obj[key] = _resign(d, frame)
 
+    if mine:
+        ref_of = {k: i for i, (k, _p) in enumerate(ply_at)}
+        flips: dict = {}
+        for token in ours["exceptions"]:
+            flips.setdefault(int(token[:-1]), set()).add(token[-1])
+        for key, obj in block_obj.items():
+            ref = ref_of[key]
+            default_flags(ply_at[ref][1], obj, ref in ours["illegal"])
+            _apply_exceptions(obj, flips.get(ref, set()))
+
     info: dict = {"ply": block_level.get("checker_ply") or 0}
-    if block_level.get("rollout") is not None:
+    if mine:
+        # The block's own label travels in its annotation when it is not the
+        # level most decisions share, which is what v2's block level states.
+        label = ours["level"] if "level" in ours else block_level.get("preset")
+        if label is not None:
+            info["eval_level"] = label
+        if luck_levels and ours.get("luck"):
+            luck_levels = {ours["luck"]}
+    elif block_level.get("rollout") is not None:
         info["eval_level"] = "rollout"
     info["model_id"] = _model_id(anal)
     info["timestamp"] = anal["started_at"] // 1000 if "started_at" in anal else 0
@@ -837,6 +1015,8 @@ def _v1_block(anal: dict, decisions: list[dict], ply_at: list, match_length: int
         label = next(iter(luck_levels))
         if label is not None:
             info["luck_eval_level"] = label
+    if mine:
+        info["analysis_id"] = anal["analysis_id"]
     return info, block_obj, bool(luck_levels)
 
 
@@ -891,6 +1071,7 @@ def read_ogxm2(data: bytes, *, verify_crc: bool = True, derive_ogids: bool = Tru
     mtch = None
     v2games: list[dict] = []
     blocks: list[dict] = []
+    annos: list[dict] = []
     for stype, _start, payload in sections:
         if stype == b"MTCH":
             mtch = _decode_mtch(payload)
@@ -902,30 +1083,87 @@ def read_ogxm2(data: bytes, *, verify_crc: bool = True, derive_ogids: bool = Tru
             if not blocks:
                 raise GvabError("OGXM v2 DECS with no ANAL before it")
             blocks[-1]["decisions"] = _decode_decs(payload)
+        elif stype == b"ANNO":
+            annos = _decode_anno(payload)
     if mtch is None:
         raise GvabError(
             "This file holds an analysis without its match, so there is nothing to show.")
 
     ogxm, games, offsets = _v1_match(mtch, v2games)
-    if derive_ogids:
-        _derive_ogids({"match_length": ogxm["match_length"], "games": games})
+    gv_match = _gv_values(annos, SCOPE_MATCH)
+    gv_ply = _gv_values(annos, SCOPE_PLY)
+    if (0, GV_KEY_SITE) in gv_match:
+        ogxm["site"] = gv_match[(0, GV_KEY_SITE)]
+    if (0, GV_KEY_EVENT) in gv_match:
+        ogxm["event"] = gv_match[(0, GV_KEY_EVENT)]
+    if (0, GV_KEY_SCORE) in gv_match:
+        try:
+            ogxm["white_score"], ogxm["black_score"] = (
+                int(v) for v in gv_match[(0, GV_KEY_SCORE)].split(","))
+        except ValueError as exc:
+            raise GvabError("the stated-score annotation is malformed") from exc
 
     # ply_ref is the ply's ordinal across the whole match, in v2's plies --
     # which a synthetic set-position ply is not one of.
     ply_at: list = []
     ply_by_key: dict = {}
+    illegal_refs: set = set()
     for gi, g in enumerate(games):
         for pi, ply in enumerate(g["plies"]):
             if pi >= offsets[gi]:
+                v2ply = v2games[gi]["plies"][pi - offsets[gi]]
+                if (v2ply.get("extras") or {}).get("illegal"):
+                    illegal_refs.add(len(ply_at))
                 ply_at.append(((gi, pi), ply))
             ply_by_key[(gi, pi)] = ply
+
+    # An illegal play our document held as a dice ply: v2 states it as the
+    # board it produced, and the annotation keeps the steps that produced it.
+    for (ref, key), value in gv_ply.items():
+        if key != GV_KEY_ILLEGAL_PLY:
+            continue
+        if ref not in illegal_refs:
+            raise GvabError(f"ply {ref} carries an illegal play's steps but is not one")
+        ply = ply_at[ref][1]
+        action = _dice_action_id(ply["d1"], ply["d2"])
+        steps = [s.split("/") for s in value.split(",")] if value else []
+        restored = {"color": ply["color"], "action_id": action,
+                    "d1": DICE_TABLE[action][0], "d2": DICE_TABLE[action][1],
+                    "moves": [{"from": int(f), "pips": int(n)} for f, n in steps]}
+        ply.clear()
+        ply.update(restored)
+
+    if derive_ogids:
+        _derive_ogids({"match_length": ogxm["match_length"], "games": games})
 
     decoded = []
     base_blocks = []
     for blk in blocks:
+        aid = blk["anal"]["analysis_id"]
+        ours = None
+        if (0, GV_KEY_ANALYSIS + aid) in gv_match:
+            items = dict(item.partition("=")[::2]
+                         for item in gv_match[(0, GV_KEY_ANALYSIS + aid)].split(";") if item)
+            extra = {}
+            for (ref, key), value in gv_ply.items():
+                if key == GV_KEY_DECISIONS + aid:
+                    try:
+                        raw = base64.b64decode(value, validate=True)
+                    except ValueError as exc:
+                        raise GvabError(f"annotation on ply {ref} is not base64") from exc
+                    recs = _decode_decs(raw)
+                    if any(d["ply_ref"] != ref for d in recs):
+                        raise GvabError(f"annotation on ply {ref} holds another ply's decision")
+                    extra[ref] = recs
+            ours = {"extra": extra, "illegal": illegal_refs,
+                    "exceptions": {t for t in items.get("pr", "").split(",") if t}}
+            if "level" in items:
+                ours["level"] = unquote(items["level"]) or None
+            if "luck" in items:
+                ours["luck"] = unquote(items["luck"])
         info, block_obj, has_luck = _v1_block(
-            blk["anal"], blk["decisions"], ply_at, ogxm["match_length"])
-        if block_obj:
+            blk["anal"], blk["decisions"], ply_at, ogxm["match_length"], ours)
+        if block_obj and ours is None:
             if derive_ogids:
                 complete_base_block(block_obj, ply_by_key, info, convert_units=False)
             if not has_luck:

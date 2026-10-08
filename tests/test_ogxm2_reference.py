@@ -52,6 +52,7 @@ sys.path.insert(0, str(_REPO_ROOT))
 sys.path.insert(0, str(_REPO_ROOT / "tests"))
 
 import ogxm2_oracle as oracle  # noqa: E402
+from gvformat import read_gvab, write_gvab_v1  # noqa: E402
 
 _GOLDEN = _REPO_ROOT / "tests" / "golden"
 
@@ -101,7 +102,9 @@ def main() -> int:
         expected = _EXPECTED.get(stem)
         if expected is None:
             continue
-        v1 = golden.read_bytes()
+        # The goldens are v2 since 1.6.0; this asks what the reference makes of
+        # the same content as v1, which is the question the table answers.
+        v1 = write_gvab_v1(read_gvab(golden.read_bytes()))
         v2, rule = oracle.v1_to_v2(v1)
         check(rule == expected, f"{stem}: v1 -> v2 is {expected!r} (got {rule!r})")
         if rule != "ok" or v2 is None:

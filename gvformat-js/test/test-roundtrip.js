@@ -2,8 +2,15 @@
 // Copyright (C) 2026 Nicholas Vlamis
 
 // Round-trip test: write_gvab(read_gvab(bytes)) === bytes
+//
+// `write_gvab` writes OGXM v2 and `write_gvab_v1` the v1 it wrote before 1.6.0.
+// Tests of properties either must keep (round-trip stability, PR surviving a
+// write) run on `write_gvab`; those that look inside v1's bytes (the GVAN chunk)
+// run on `write_gvab_v1`. A v2 match-play block is stored in MWC, so reading one
+// back converts through each ply's score frame and needs its OGIDs -- unlike
+// v1, which `{ deriveOgids: false }` reads fine.
 
-import { write_gvab, _encode_gvan, _build_checker_eval, _build_cube_eval_decision } from '../src/binary.js';
+import { write_gvab, write_gvab_v1, _encode_gvan, _build_checker_eval, _build_cube_eval_decision } from '../src/binary.js';
 import { readGvab } from '../src/reader.js';
 import { compute_aggregates } from '../src/stats.js';
 import { OGXM_MAGIC, END_MAGIC, CHUNK_GVAN } from '../src/constants.js';
@@ -87,8 +94,9 @@ function findChunk(bytes, type) {
   assert(uint8Equal(bytes, rebytes), "byte-for-byte round-trip (no analysis)");
 }
 
-// Test 2: Match with analysis
-{
+// Test 2: Match with analysis, through each writer
+for (const [write, readOpts, label] of [
+  [write_gvab, undefined, 'v2'], [write_gvab_v1, { deriveOgids: false }, 'v1']]) {
   const ogxm = {
     match_length: 7,
     player_white: "White",
@@ -141,28 +149,28 @@ function findChunk(bytes, type) {
     }],
   };
 
-  const bytes = write_gvab(ogxm);
-  const decoded = readGvab(bytes, { deriveOgids: false });
-  const rebytes = write_gvab(decoded);
-  assert(uint8Equal(bytes, rebytes), "byte-for-byte round-trip (with analysis)");
+  const bytes = write(ogxm);
+  const decoded = readGvab(bytes, readOpts);
+  const rebytes = write(decoded);
+  assert(uint8Equal(bytes, rebytes), `${label}: byte-for-byte round-trip (with analysis)`);
 
   // Verify analysis fields survived
   const ply0 = decoded.games[0].plies[0];
-  assert(ply0.analysis !== undefined, "analysis present on decoded ply");
-  assert(ply0.analysis.decision === true, "decision flag round-trips");
-  assert(Math.abs(ply0.analysis.best_equity - 0.53) < 0.0001, "best_equity round-trips (quantized)");
-  assert(Math.abs(ply0.analysis.equity_loss - 0.01) < 0.0001, "equity_loss round-trips");
+  assert(ply0.analysis !== undefined, `${label}: analysis present on decoded ply`);
+  assert(ply0.analysis.decision === true, `${label}: decision flag round-trips`);
+  assert(Math.abs(ply0.analysis.best_equity - 0.53) < 0.0001, `${label}: best_equity round-trips (quantized)`);
+  assert(Math.abs(ply0.analysis.equity_loss - 0.01) < 0.0001, `${label}: equity_loss round-trips`);
 
   const md = ply0.analysis.missed_double;
-  assert(md !== undefined, "missed_double round-trips");
+  assert(md !== undefined, `${label}: missed_double round-trips`);
   assert(md.eval !== undefined && Math.abs(md.eval.win - 0.68) < 0.0001
          && Math.abs(md.eval.gammon_win - 0.24) < 0.0001
          && Math.abs(md.eval.bg_loss - 0.01) < 0.0001,
-    "missed_double pre-roll probs round-trip");
-  assert(md.eval_level === "2ply", "missed_double eval_level round-trips");
+    `${label}: missed_double pre-roll probs round-trip`);
+  assert(md.eval_level === "2ply", `${label}: missed_double eval_level round-trips`);
   // And they are the cube's own numbers, not the checker play's.
   assert(Math.abs(md.eval.win - ply0.analysis.eval.win) > 0.01,
-    "missed_double probs are distinct from the checker ply's post-roll probs");
+    `${label}: missed_double probs are distinct from the checker ply's post-roll probs`);
 }
 
 // Test 3: Empty match
@@ -263,7 +271,7 @@ function findChunk(bytes, type) {
     }],
   };
 
-  const bytes = write_gvab(ogxm);
+  const bytes = write_gvab_v1(ogxm);
   const gvan = findChunk(bytes, CHUNK_GVAN);
   assert(gvan !== null, "GVAN chunk present");
   if (gvan !== null) {

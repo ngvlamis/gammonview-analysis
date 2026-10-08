@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Copyright (C) 2026 Nicholas Vlamis
 
-export { write_gvab } from './binary.js';
+export { write_gvab, write_gvab_v1 } from './binary.js';
 export { readGvab as read_gvab, canonicalize, GvabError } from './reader.js';
 export { toOgxmJson as to_ogxm_json } from './export.js';
 export {
