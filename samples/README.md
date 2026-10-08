@@ -55,6 +55,13 @@ The JS suite reads `mat/`, `xg/` and `bgf/` from here too — see
 `mat/`, `xg/` and `bgf/` are source data. `gv/` is pipeline *output* — don't
 curate it, regenerate it (see [below](#regenerating-the-derived-files)).
 
+**`gv/` is OGXM v1, on purpose.** Since 1.6.0 `write_gvab` writes v2, but
+`read_gvab` reads v1 for good, and these are the corpus's real v1 files — the
+form every file written before the switch is in. The tests that exercise the v1
+reader on a real match (`test_chunk_passthrough`, `test_share_link`'s fixtures,
+`test_loader_formats`) read them, and `tests/gen_js_v2_fixtures.py` pins what
+both writers make of them in v2. Keep them v1 when regenerating (below).
+
 **Why `gv/` ships one `.gva` and eleven `.gvab`.** The JSON is fully derivable:
 `.gva == read_gvab(.gvab)`, because both come out of a single `write_gvab`.
 Shipping all eleven as JSON cost 4.0 MB against 340 KB for the binaries, so the
@@ -220,6 +227,10 @@ After changing the source matches:
 uv run gvan-batch samples/mat/*.mat --preset fast --gvab --out-dir samples/gv/
 uv run gvan-match samples/mat/B4_SrGcsKAQmoTyHlgJCbM.mat --preset fast \
     -o samples/gv/B4_SrGcsKAQmoTyHlgJCbM.gva        # the one readable copy
+uv run python -c "import pathlib; from gvformat import read_gvab, write_gvab_v1
+for f in pathlib.Path('samples/gv').glob('*.gvab'): f.write_bytes(write_gvab_v1(read_gvab(f.read_bytes())))"
+                                                    # back to v1 (see above)
+uv run python tests/gen_js_v2_fixtures.py           # what both writers make of them
 uv run python tests/regen_golden.py --check         # what would move
 uv run python tests/regen_golden.py                 # rewrite them
 uv run python tests/audit_corpus.py samples         # and check the result

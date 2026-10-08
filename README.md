@@ -85,32 +85,34 @@ a file you open by hand is likelier to want to be readable.)
 
 ## The format
 
-The files this repo reads and writes — `.gvab` (binary) and `.gva` (JSON) — are
-based directly on **OGXM** (OpenGammon eXtensible Match), the chunked match
-format from [HedgeHog](https://gitlab.com/eranlambooij/hedgehog-public), and
-extend it with what GammonView's viewer shows and OGXM has no field for: luck,
-per-decision PR and illegal-move flags, and per-alternative eval levels — all in
-one `GVAN` chunk — plus match metadata like `event`, `site` and `cube_limit`.
+`.gvab` files are **OGXM v2** — the match format of
+[HedgeHog](https://gitlab.com/eranlambooij/hedgehog-public), in the version it
+writes today — and nothing else. Any conforming OGXM v2 reader loads them,
+replays every game and finds every decision v2 has a field for; HedgeHog's own
+codec checks each of our test files for exactly that.
 
-**We read OGXM.** `read_gvab` takes a file this repo never wrote, including one
-carrying another engine's analysis, and `gvan-match` appends its own analysis
-block rather than replacing what is already there.
+What GammonView keeps that v2 has no field for — the analysis of an illegal
+play, which decisions count toward PR, the match's site as the source named it —
+travels in `ANNO` records keyed `x-gammonview-…`, the namespace v2 reserves for
+producers outside the spec. Another reader keeps them and ignores them; ours
+reads them back, so nothing is lost either way.
+[`docs/OGXM_V2_PROFILE.md`](docs/OGXM_V2_PROFILE.md) says exactly how a document
+maps onto v2.
 
-We make no claim in the other direction, and that is about us, not about OGXM.
-One of our choices is a genuine departure: in match play we store **normalized
-equity** in the three cube equity fields, where the base spec specifies **raw
-MWC**. We do it for quantization — these fields are an `int16` at 1e-4, which
-gives normalized equity about 20,000 usable steps at any score, while raw MWC
-has as few as **16** at a lopsided one — and we recover MWC on read from the
-shipped MET. It is the right trade for us and it is still a difference a reader
-cannot see: same fields, same layout, different numbers.
+In match play the file stores equities as **match-winning chances**, v2's unit,
+converted through each position's own score; our document and `.gva` hold
+normalized equity, and the reader converts back.
 
-So: treat these as GammonView files that an OGXM reader may well be able to make
-partial sense of, not as OGXM files with extras. The two spec documents describe
-**what this repo writes** — the base spec with every addition marked
-`[GammonView extension]` and every divergence marked, including where a base
-reader would go wrong. The upstream specs they track are in HedgeHog's `docs/`
-and remain the authority on the base format.
+**We read OGXM, both versions.** `read_gvab` takes a v1 or v2 file this repo
+never wrote, including one carrying another engine's analysis, and `gvan-match`
+appends its own analysis block rather than replacing what is already there.
+Files written before 1.6.0 are OGXM v1 with a `GVAN` chunk
+([`docs/OGXM_FORMAT_SPEC_GAMMONVIEW.md`](docs/OGXM_FORMAT_SPEC_GAMMONVIEW.md));
+they stay readable for good.
+
+`.gva` is our document as JSON — the same content as the `.gvab`, in the shape
+[`docs/OGXM_JSON_SPEC_GAMMONVIEW.md`](docs/OGXM_JSON_SPEC_GAMMONVIEW.md)
+describes.
 
 ## In the browser
 
@@ -255,7 +257,8 @@ tiers fire, parallelism, and preset overrides.
 | [`CHANGELOG.md`](CHANGELOG.md) | Release history, including the measurements behind several design decisions |
 | [`CLAUDE.md`](CLAUDE.md) | Maintainer and coding-agent notes: design rationale, measurements, and the rituals around an engine upgrade |
 | [`docs/OGXM_JSON_SPEC_GAMMONVIEW.md`](docs/OGXM_JSON_SPEC_GAMMONVIEW.md) | The JSON shape this repo writes (match → game → ply → analysis) — base spec plus every GammonView addition, marked |
-| [`docs/OGXM_FORMAT_SPEC_GAMMONVIEW.md`](docs/OGXM_FORMAT_SPEC_GAMMONVIEW.md) | The binary `.gvab` chunk layout, including the `GVAN` extension chunk |
+| [`docs/OGXM_V2_PROFILE.md`](docs/OGXM_V2_PROFILE.md) | How a document is written as OGXM v2 — the mapping, the `x-gammonview` annotations, and what reading back can change |
+| [`docs/OGXM_FORMAT_SPEC_GAMMONVIEW.md`](docs/OGXM_FORMAT_SPEC_GAMMONVIEW.md) | The OGXM **v1** `.gvab` layout written before 1.6.0, including the `GVAN` chunk — still read |
 | [`docs/OGXM_COMPUTED_FIELDS.md`](docs/OGXM_COMPUTED_FIELDS.md) | Fields the reader computes rather than stores (PR, luck-MWC, MWC, classification) |
 | [`docs/METHODOLOGY.md`](docs/METHODOLOGY.md) | PR / luck / cube-decision methodology and filters |
 | [`docs/PRESET_ACCURACY.md`](docs/PRESET_ACCURACY.md) | What each preset costs in accuracy, measured against XG over 493 matches |

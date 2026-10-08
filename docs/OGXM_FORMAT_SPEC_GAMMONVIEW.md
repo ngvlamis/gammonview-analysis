@@ -1,5 +1,9 @@
 # OGXM Format Specification — GammonView Extended
 
+> **This is the v1 format, written until 1.6.0 and read for good.** Since 1.6.0
+> `write_gvab` writes OGXM v2; see [`OGXM_V2_PROFILE.md`](OGXM_V2_PROFILE.md).
+> `write_gvab_v1` still produces what this document describes.
+
 Based on `OGXM_FORMAT_SPEC.md` from [HedgeHog](https://gitlab.com/eranlambooij/hedgehog-public) (`docs/`). Additions specific to bgsage analysis output are marked **[GammonView extension]**. Compatibility notes explain which changes require a version bump.
 
 ## OpenGammon eXtensible Match (OGXM) — Version 1.3 + GammonView Extensions

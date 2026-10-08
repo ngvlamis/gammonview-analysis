@@ -136,16 +136,20 @@ MIT terms in [LICENSE](LICENSE).
 `gvformat` writes a format that other software reads, so a format change is not
 a local decision:
 
-- **Additive changes** — a new chunk, a new optional field — are the safe kind.
-  Undecoded chunks survive a rewrite, so a reader that does not know yours will
-  not destroy it.
-- **Anything a current reader could not parse** needs `min_reader_minor` raised,
-  and a good reason.
+- We write **OGXM v2** and add nothing to it but `ANNO` records keyed
+  `x-gammonview-…`, the namespace v2 reserves for producers outside the spec
+  (`docs/OGXM_V2_PROFILE.md`). Something new GammonView needs to keep goes there
+  as a new key — never in an unassigned presence bit or a new section, which
+  would collide with whatever upstream assigns next.
+- A new key, or a new item in an existing value, is the safe kind of change:
+  another reader keeps an `x-` record without reading it. Changing what an
+  existing value means needs its format prefix (`1:`) raised, and a reader for
+  both.
 - OGXM is **HedgeHog's** format and this is one implementation of it. A change to
-  the shared part of the format belongs upstream first
-  (<https://gitlab.com/eranlambooij/hedgehog-public>); the GammonView-specific
-  extensions live in the ancillary `GVAN` chunk precisely so they do not collide
-  with it.
+  the shared part of the format belongs upstream
+  (<https://gitlab.com/eranlambooij/hedgehog-public>), and
+  `tests/test_ogxm2_writer.py` checks every file we write against the reference
+  codec.
 
 Bear in mind that rewriting a file **canonicalizes** it. `write_gvab(read_gvab(x))`
 reaches a fixed point after one pass and preserves the decoded content exactly,

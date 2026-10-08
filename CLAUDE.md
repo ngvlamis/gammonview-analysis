@@ -67,9 +67,8 @@ converters — a `.mat` through `mat_to_ogxm`, with no analysis; an `.xg`/`.bgf`
 with the source's own), its plies are turned back into engine decisions
 (`ogxm_reconstructor`), analyzed (`analyze_ogxm`), and the result is **appended**
 as a new analysis block (`gvformat.append_analysis`) — any analysis the input
-already carried is preserved (OGXM allows up to 16 blocks: `analyses_info` +
-per-ply `analyses[]`, with `min_reader_minor = 3` in the binary once there is
-more than one). `analyze_match(path)` returns those bytes; `analyze_file(path)` is the same
+already carried is preserved (up to 64 blocks in v2: `analyses_info` +
+per-ply `analyses[]`, each block with its own `analysis_id`). `analyze_match(path)` returns those bytes; `analyze_file(path)` is the same
 path stopping at the dict (load → analyze → append →
 merged OGXM); `analyze_mat(path)` is the back-compat wrapper returning the
 internal analyzed `data` dict.
@@ -355,18 +354,71 @@ in step when a flag changes; the rationale belongs only here.
   batch continues, exiting `1` if any failed. Analyzers are rebuilt per file
   (via `analyze_file`), so a large batch repays net-loading cost each file.
 
-## OGXM v2, and the reference codec as an oracle
+## OGXM v2: what we write, and the reference codec as an oracle
 
-We write **OGXM v1** (`min_reader_minor` 3). Upstream froze v1 at 1.6 and now
-writes **v2** only — a different container (varint framing and presence masks
-instead of TLV chunks) reached through `min_reader_major = 2`, which our reader
-refuses cleanly rather than misparsing. `docs/OGXM_FORMAT_SPEC.md` in the
-HedgeHog checkout is the v2 spec; `docs/OGXM_V1_FORMAT_SPEC.md` is the frozen v1
-one.
+**`write_gvab` writes OGXM v2** (`gvformat/ogxm2_writer.py`), HedgeHog's current
+format; upstream froze v1 at 1.6 and writes nothing else. `read_gvab` reads both
+and always will — every file and share link from before the switch is v1 — and
+`write_gvab_v1` keeps the old writer, for tests that exercise the v1 reader and
+for comparison. **`docs/OGXM_V2_PROFILE.md` is the profile**: how our document
+maps onto v2, what travels outside its fields, and every way reading a file back
+differs from what was written. `docs/OGXM_FORMAT_SPEC.md` in the HedgeHog
+checkout is the v2 spec; `OGXM_FORMAT_SPEC_GAMMONVIEW.md` here now describes v1
+only.
 
-The thing that makes v2 work tractable is that **HedgeHog's own codec builds as
-a shared library with a C ABI**, so the rules can be asked rather than inferred
-from prose:
+**Nothing GammonView stores is dropped, and nothing outside v2 is invented.**
+What v2 has no field for travels in `ANNO` records keyed `x-gammonview-…` —
+the namespace the spec reserves for producers outside it (N6), which a
+conforming reader keeps and never interprets. That was a deliberate choice over
+a GVAN-style ancillary section or squatting on unassigned presence bits: the
+first is an extension by another name, and upstream hands presence bits out in
+order, so a squatted bit is a future collision. Three things needed it, each
+found by measurement rather than assumed:
+
+- **An illegal play.** v2 records one as a `set position` ply (dice, `illegal`,
+  the board produced) and allows **no** decision on that ply — the reference
+  writer silently drops one. So its whole analysis (checker, cube, luck) goes in
+  a ply-scope annotation, and so do the steps when our document held the play as
+  a dice ply. The same mechanism carries any checker decision that breaks a v2
+  invariant: XG interleaving bearoff-database plays among ply-evaluated ones
+  (A1 — `DECS` gets the list regrouped by level, the annotation XG's order), a
+  played move listed twice by the pre-`c7891a4` blot split (A4), a played move
+  judged at another level than the best (A5).
+- **PR-counting flags.** Re-deriving them on read disagreed with what is stored
+  on 129 BGBlitz decisions across the corpus (BGBlitz's own counting is
+  authoritative there) and 8 of ours, so the block annotation lists only the
+  exceptions to `basefill`'s rule — usually none.
+- **`site`.** v2's `site` is the platform's lowercase host name and scopes its
+  user ids; ours is free text from `[Site]` or XG's "location", sometimes a
+  platform, sometimes a city, and nothing tells which. It goes in an annotation
+  always — "annotation only for now"; a known-platform → host-name table can
+  fill v2's `site` later without losing the text.
+
+**Match-play equities are written as MWC** (v2's `cubeful match` currency),
+mapped through each ply's own score frame — the honest v2 unit, and the one any
+other reader understands. v2 stores 1e-6, so a normalized equity comes back
+exactly except at the most lopsided scores, worst case ±6e-4 at 2-away/25-away
+(span 0.00159); every value in the corpus round-trips exactly. The option of
+keeping normalized equity with the currency left unrecorded was declined: exact,
+but meaningless to everyone else.
+
+**Equity loss is derived where v2 derives it**: best minus played, when the
+played move is listed. Fresh analysis carries full precision, so that is exact;
+a document that already went through v1 (4-place values) moves by 1e-4 on ~5%
+of decisions, once.
+
+**Size.** The first cut was 9% *larger* than v1, because the block level was
+`analysis_info.eval_level` (`3ply` for `fast`) while most decisions sit at
+`2ply`, so nearly every decision and every luck record carried an override.
+v2's block level means "the default for every decision", so it is now the label
+most decisions share, with the block's own label in its annotation, and luck
+records state their depth (`checker_ply`, one byte) rather than a label: corpus
+total now **+2.8% raw, +6.9% deflated** against v1, for strictly more content
+(1e-6 precision, unclamped equities, recorded zero probabilities). The deflated
+cost is the 1e-6 MWC digits, which have no trailing zeros to compress.
+
+**HedgeHog's own codec builds as a shared library with a C ABI**, so the rules
+can be asked rather than inferred from prose:
 
 ```bash
 cd ~/projects/hedgehog-public && make libogxm      # -> build/libogxm.so
@@ -379,32 +431,34 @@ MIT checkout, found if present and skipped if not, exactly as GammonView treats
 its sibling repo. `LIBOGXM_PATH` overrides the search and is authoritative — set
 to something that does not resolve, it fails rather than falling back. A library
 built before v2 loads and then fails on the first v2 call, so the loader checks
-its symbols and says "rebuild" instead; a stale `.so` is the likely state of any
-checkout used for v1 work.
+its symbols and says "rebuild" instead.
 
-`tests/test_ogxm2_reference.py` is the ratchet. It runs each golden through the
-reference `v1_to_v2` — the frozen v1 reader, its JSON projection and the v2
-writer in composition (v2 spec 13.8) — against a **pinned** table of outcomes.
-A file that converts is one whose content already satisfies the v2 rules
-whatever its framing; a refusal names the rule to deal with. Never edit a row to
-make a run pass.
+**`tests/test_ogxm2_writer.py` is the gate.** Over every corpus match in every
+form, plus synthetic two-block and resignation documents, it checks that
+`read(write_v2(D))` equals `read(write_v1(D))` except where a **named rule**
+explains the difference (one sentence each in the profile's §4 — anything
+unexplained fails), that rewriting is byte-stable, and, with the library, that
+the reference loads each file, finds no rule broken, replays it to the end and
+re-encodes it to the **same bytes**. That last check is what caught the step
+order (v2 replays steps in stored order and requires every intermediate position
+legal — our `.mat` path put bar entries last) and the duplicate played move.
 
-Four of the five goldens convert clean. The one refusal, and a second shape
-found on the wider corpus, are the same subject: how an illegal play is recorded
-(`samples/README.md` keeps three distinct shapes). `5nqfGw9bWG3deTaU` — a
-golden, so pinned — appends a synthetic alternative for a play the engine cannot
-enumerate, flagged `played` and `illegal_move` and scored by
-`post_move_analytics`, a different estimator from the ranked plays, so it
-routinely sorts above all of them: that breaks A1 and A4/A5.
-`rK7pXm4TqLb9NzWd` records a ten-pip hop as the position it left (`action_id`
-31), which the reference replay reads as a turn-order break; it has no golden,
-so it is documented but not pinned. v2 states both cases outright — the ply
-carries an `illegal` flag, no alternative is `is_played`, and `equity_loss` is
-written rather than derived — so these are writer *mapping* decisions, not v1
-bugs to fix.
+`tests/test_ogxm2_reference.py` is the older ratchet: the reference `v1_to_v2`
+over each golden's content written as v1, against a **pinned** table. Never edit
+a row to make a run pass. The goldens themselves are v2 now.
 
-Measured on the goldens, v2 is **3.5–6.4% smaller** than the v1 we write, before
-any of the fields v1 has no room for.
+The two v1 parity suites, `test_gvab_writer` and `test_ogxm_conformance`,
+compare against libogxm's *v1* writer and projection, and skip — saying so —
+against a 2.x library, which writes and projects v2 only. They need a pre-v2
+build to run.
+
+**Not carried yet:** rewriting another producer's v2 file (appending our
+analysis) drops what our document cannot hold — its `CLCK`, `VIDO`, `SIGN`,
+`MSIG`, foreign `ANNO` records and `MTCH` fields beyond ours — and a v1 file's
+passthrough chunks are not carried into v2. Spec I7 asks a re-serialising reader
+to keep unknown content, so this is the next fidelity item, not a closed one.
+`.gva` (JSON) is still our document's JSON; making it v2's JSON projection is
+the planned second step.
 
 ## Checker play goes through `gvanalysis/checker_eval.py`
 

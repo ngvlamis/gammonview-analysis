@@ -1,7 +1,7 @@
 # @gammonview/gvformat
 
 The OGXM/GVA codec in pure JavaScript — read and write `.gvab` backgammon match
-files (and HedgeHog's OGXM v2 `.ogxm`, read into the same document), convert
+files (OGXM v2, HedgeHog's current format; v1 files are read too), convert
 `.xg` / `.bgf` / `.mat` / OpenGammon sources to `.gva` JSON, and encode or parse
 OGIDs. **No engine, no WebAssembly, no build step.** One runtime
 dependency (`pako`, for zlib).
@@ -34,8 +34,10 @@ import { read_gvab, write_gvab, convert_mat, convert_xg, convert_bgf, parse_ogid
 const ogxm = read_gvab(bytes);
 console.log(ogxm.match_length, ogxm.games.length);
 
-// rewriting is idempotent: one pass canonicalizes, and it is byte-stable
-// from then on. It does not preserve non-canonical slack in a foreign file.
+// write_gvab writes OGXM v2 (write_gvab_v1 is the old v1 writer, kept for
+// tests and comparison). Rewriting is idempotent: one pass canonicalizes, and
+// it is byte-stable from then on. It does not preserve non-canonical slack in a
+// foreign file.
 const canonical = write_gvab(read_gvab(bytes));
 write_gvab(read_gvab(canonical));   // === canonical
 

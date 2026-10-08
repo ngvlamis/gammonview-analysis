@@ -13,6 +13,47 @@ when the repository was opened; they are kept because they record why things
 are the way they are — particularly the breaking changes and the measurements
 behind several design decisions. Dates are the tag dates.
 
+## 1.6.0 — unreleased
+
+**`.gvab` is OGXM v2** *(format change)*
+
+`write_gvab` writes OGXM v2, HedgeHog's current format, in place of v1 with a
+`GVAN` chunk. Every file is plain v2: HedgeHog's reference codec loads each one
+in the test corpus, finds no rule broken, replays every game to the end and
+re-encodes it to the same bytes. `read_gvab` reads v1 and v2 alike, so every
+file and share link written before stays readable; `write_gvab_v1` keeps the
+old writer.
+
+Nothing GammonView stored is dropped. What v2 has no field for travels in `ANNO`
+records keyed `x-gammonview-…`, the namespace v2 reserves for producers outside
+the spec, which another reader keeps and ignores: the whole analysis of an
+illegal play (v2 records the play as a `set position` and allows no decision on
+it), a decision v2's invariants would refuse as stored (XG's interleaved
+database/ply lists, a played move listed twice, a played move judged at another
+level), the decisions whose PR counting differs from the derived rule, and the
+match's `site`. `docs/OGXM_V2_PROFILE.md` is the mapping.
+
+What a reader sees differently, each a named rule in
+`tests/test_ogxm2_writer.py`:
+
+- match-play equities are stored as MWC, v2's unit, converted through each
+  ply's score frame; they come back exactly except at the most lopsided scores
+  (at worst ±6e-4, 2-away/25-away);
+- where the played move is listed, `equity_loss` is best minus played, as v2
+  derives it — exact for fresh analysis, ±1e-4 for analysis that went through
+  v1's four places;
+- a play's steps are stored in an order that replays legally (bar entries
+  first), since v2 checks every intermediate position;
+- all-zero probabilities and equities beyond ±3 are kept, where v1 read the
+  first as "not recorded" and clamped the second;
+- each analysis block gains an `analysis_id`.
+
+Size: +2.8% raw and +6.9% deflated across the corpus, for strictly more
+content (1e-6 precision, the values v1 clamped or dropped).
+
+Not yet carried: rewriting another producer's v2 file drops its `CLCK`, `VIDO`,
+signatures, foreign annotations and `MTCH` fields our document does not hold.
+
 ## 1.5.1 — 2026-10-05
 
 **Analyzing a document keeps its White** *(fix)*
