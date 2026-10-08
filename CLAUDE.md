@@ -402,6 +402,16 @@ exactly except at the most lopsided scores, worst case ±6e-4 at 2-away/25-away
 keeping normalized equity with the currency left unrecorded was declined: exact,
 but meaningless to everyone else.
 
+**A source with its own table keeps it.** BGBlitz's MET is not ours (a point at
+7-away/7-away: 0.05954 against 0.0626), and a `.bgf` stores both the MWC and the
+normalized equity for every decision, as an exact linear map — so `convert_bgf`
+measures that map per score and cube (`analysis.mwc_frame`), the writer converts
+those plies through it, and the file holds BGBlitz's own MWCs with `met_id`
+`bgblitz`. **Key it on the real cube value**: BGF's own `eq.cube` stays 1 after a
+double, which is what first made the frames look inconsistent. Crawford
+positions have no cube record, and there `matchEquity` is the cubeful MWC. We do
+not ship BGBlitz's table, and don't need it: each file describes its own.
+
 **Equity loss is derived where v2 derives it**: best minus played, when the
 played move is listed. Fresh analysis carries full precision, so that is exact;
 a document that already went through v1 (4-place values) moves by 1e-4 on ~5%

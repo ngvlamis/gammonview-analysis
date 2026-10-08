@@ -64,6 +64,7 @@ One `ANAL` + `DECS` per analysis block, primary first.
 | `analysis_info.model_id`, `timestamp`, `duration_ms` | `model_id`, `started_at`, `duration_ms` |
 | `analysis_info.ply` | the block level's `checker_ply` |
 | `analysis_info.eval_level` | see Levels |
+| `analysis_info.met_id` | `met_id`. A match block without one is written as `kazaross-xg2`, the table we convert with |
 | (currency) | `cubeful match` (MWC) in a match, `cubeful money` in a money session |
 
 **Units.** A match block is written in MWC. Each equity is mapped through its
@@ -72,6 +73,21 @@ from the one MET we ship — and a difference (a loss, a luck) through the
 frame's span alone. The reader maps back the same way. v2 stores 1e-6, so a
 normalized equity returns exactly except at the most lopsided scores, where it
 can move by up to 6e-4 (2-away/25-away, the narrowest frame).
+
+**A source's own table.** BGBlitz normalizes with a match equity table that is
+not ours (7-away/7-away on a 1-cube: half-width 0.05954 against our 0.0626), so
+converting its equities through ours would store MWCs BGBlitz never computed.
+A `.bgf` carries both numbers for every decision — the MWC and its normalized
+form, an exact linear map of each other — so the converter measures BGBlitz's
+frame per score and cube and puts it on each analysed ply as
+`analysis.mwc_frame = [mid, half]` (the ply's own perspective: the MWC at
+normalized 0, and the MWC per unit of equity). A ply with a frame is converted
+through it instead of our table, the block's `met_id` is `bgblitz`, and the
+frames travel in the block annotation's `frame=` item. The file then holds
+BGBlitz's own MWCs, to within the document's 4-place equities (2.5e-5 at
+worst over the samples), and our reader gives back BGBlitz's normalized
+equities exactly. XG needs nothing of this: it stores normalized equities only,
+and its default table is ours.
 
 **Levels.** v2 states a level at three tiers — block, decision, alternative —
 each overriding only what differs (L1). Our labels (`2ply`, `truncated2`,
@@ -120,7 +136,7 @@ holds is split over `key`, `key~1`, `key~2`, ... and joined in that order.
 
 | Key | Scope | Value after `1:` |
 |---|---|---|
-| `x-gammonview-analysis/<analysis_id>` | match | `;`-separated items: `level=<label>` (the block's own level, when it is not the block preset; empty for none), `luck=<label>` (when the block has luck), `pr=<tokens>` (always present; it marks the block as ours) |
+| `x-gammonview-analysis/<analysis_id>` | match | `;`-separated items: `level=<label>` (the block's own level, when it is not the block preset; empty for none), `luck=<label>` (when the block has luck), `pr=<tokens>` (always present; it marks the block as ours), `frame=<entries>` (when plies carry a source frame) |
 | `x-gammonview-decisions/<analysis_id>` | ply | base64 of `DECS` records for this ply, in kind order. They stand in for `DECS`'s records of the same kind at that ply |
 | `x-gammonview-illegal-ply` | ply | the steps of the illegal play, `from/pips` joined by `,` (empty for a dance) |
 | `x-gammonview-site` | match | `site` |
@@ -129,6 +145,12 @@ holds is split over `key`, `key~1`, `key~2`, ... and joined in that order.
 
 Labels in `level=` and `luck=` are percent-encoded except for letters, digits
 and ` +-_./()`.
+
+**Frames.** `frame=` is `,`-separated entries `<ply_ref>:<mid>:<half>`, where
+`mid` is from White's perspective (so it holds still while the score and cube
+do), each number to 8 decimals with trailing zeros dropped. An entry holds for
+its ply and every later ply of the block until the next one; an entry with
+nothing after the `ply_ref` (`<ply_ref>:`) means our table from there on.
 
 **PR counting.** Whether a decision counts toward PR has no v2 field. On read,
 a block of ours derives it the way `basefill` derives it for a foreign block —
@@ -152,6 +174,8 @@ decisions where the document says otherwise, each as its `ply_ref` and a letter:
 | no-limit | a `cube_limit` that is not a power of two reads as no limit |
 | no-first-move | a game with no play has no first mover to derive |
 | luck-level | a block with no luck has no luck level |
+| met-id | a match block names its table: `kazaross-xg2` when the document named none |
+| mwc-frame | a source's frame (`mwc_frame`, §2) is carried by v2 only; v1 loses it |
 
 Each is a rule in `tests/test_ogxm2_writer.py`, which fails on any difference
 none of them explains.

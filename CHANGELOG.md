@@ -54,6 +54,28 @@ content (1e-6 precision, the values v1 clamped or dropped).
 Not yet carried: rewriting another producer's v2 file drops its `CLCK`, `VIDO`,
 signatures, foreign annotations and `MTCH` fields our document does not hold.
 
+**A `.bgf`'s MWCs are BGBlitz's own** *(fix)*
+
+BGBlitz's match equity table is not ours — 7-away/7-away on a 1-cube, a point
+is worth 0.05954 of the match to BGBlitz and 0.0626 to Kazaross-XG2 — so
+writing its equities as MWC through our table stored numbers BGBlitz never
+computed. A `.bgf` holds both the MWC and its normalized form for every
+decision, so `convert_bgf` now measures BGBlitz's frame per score and cube and
+puts it on each analysed ply (`analysis.mwc_frame`); the writer converts
+through it, names the block's table (`met_id`: `bgblitz`, else
+`kazaross-xg2`), and carries the frames in the block annotation. Over the
+samples every analysed BGBlitz ply has its frame, and every stored MWC — 7037
+checker alternatives, 2055 cube values, 1189 luck records — is within 2.5e-5
+of BGBlitz's own figure; reading back gives BGBlitz's normalized equities
+exactly.
+
+**A session's last game keeps its points** *(fix)*
+
+A BGBlitz money session can store its last game with no points won while the
+session's final score includes them (two of the samples: 6 points and 1). The
+game now takes its points from the final score, less what the winner started
+it with. The winner was already right.
+
 ## 1.5.1 — 2026-10-05
 
 **Analyzing a document keeps its White** *(fix)*
