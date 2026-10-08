@@ -92,6 +92,12 @@ def _load():
                                  ctypes.POINTER(ctypes.c_uint32)], ctypes.c_int),
         "ogxm_binary_to_json": ([_u8p, ctypes.c_uint32, ctypes.POINTER(ctypes.c_char_p),
                                  ctypes.POINTER(ctypes.c_uint32)], ctypes.c_int),
+        "ogxm_analysis_signing_payload": ([ctypes.c_char_p, ctypes.c_uint32, ctypes.c_uint32,
+                                           ctypes.POINTER(_u8p), ctypes.POINTER(ctypes.c_uint32)],
+                                          ctypes.c_int),
+        "ogxm_match_signing_payload": ([ctypes.c_char_p, ctypes.c_uint32, ctypes.c_uint32,
+                                        ctypes.POINTER(_u8p), ctypes.POINTER(ctypes.c_uint32)],
+                                       ctypes.c_int),
         "ogxm_v1_to_v2": ([_u8p, ctypes.c_uint32, ctypes.POINTER(_u8p),
                            ctypes.POINTER(ctypes.c_uint32), ctypes.POINTER(ctypes.c_int)],
                           ctypes.c_int),
@@ -159,6 +165,28 @@ def binary_to_json(data: bytes) -> dict:
     if rc != 0:
         raise ValueError(f"ogxm_binary_to_json refused the bytes (code {rc})")
     return json.loads(ctypes.string_at(s.value, n.value))
+
+
+def _signing_payload(fn: str, doc: dict, index: int) -> bytes:
+    lib = _load()
+    raw = json.dumps(doc).encode()
+    out, n = _u8p(), ctypes.c_uint32()
+    rc = getattr(lib, fn)(raw, len(raw), index, ctypes.byref(out), ctypes.byref(n))
+    if rc != 0:
+        raise ValueError(f"{fn} refused the document (code {rc})")
+    return bytes(ctypes.cast(out, _u8p)[:n.value])
+
+
+def analysis_signing_payload(doc: dict, index: int) -> bytes:
+    """The bytes analysis block ``index`` of a JSON document signs (spec 8.1.1):
+    the match's digest and the block's, over the v2 bytes the document writes.
+    A signature verifies exactly when these are the bytes it was made over."""
+    return _signing_payload("ogxm_analysis_signing_payload", doc, index)
+
+
+def match_signing_payload(doc: dict, index: int) -> bytes:
+    """The bytes ``match_signatures[index]`` signs (spec 8.6.1)."""
+    return _signing_payload("ogxm_match_signing_payload", doc, index)
 
 
 def v1_to_v2(data: bytes) -> tuple[bytes | None, str]:

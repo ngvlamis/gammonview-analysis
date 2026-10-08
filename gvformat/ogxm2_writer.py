@@ -55,6 +55,7 @@ from .export import _STARTING_BOARD_P1, _flip_board, _p1_to_absolute
 from .legality import is_play_legal
 from .reader import _absolute_to_p1, _apply_moves_p1, _derive_ogids
 from . import ogxm2 as R
+from . import ogxm2_passthrough as P
 
 MAX_STRING = 4096
 MAX_ALTS = 1024
@@ -281,6 +282,11 @@ class _Match:
         self.position_before: dict[int, tuple[list[int], bool]] = {}   # ref -> (board_p1, mover is White)
         self.annos: list[tuple[int, int, str, str]] = []
         self.pending_double_end = False
+        #: Per game, how many leading document plies v2 states as the game's
+        #: initial board instead (0 or 1).
+        self.game_start: list[int] = []
+        self.mtch_mandatory = b""
+        self.mtch_fields: dict[int, bytes] = {}
         self._encode_games(flagged_illegal)
 
     def _encode_games(self, flagged_illegal: set) -> None:
@@ -303,6 +309,7 @@ class _Match:
                 board = _absolute_to_p1(board_abs)
                 fields[3] = _board(board_abs)
 
+            self.game_start.append(start)
             winner = g.get("winner")
             if winner in (0, 1):
                 fields[0] = _varint(winner)
@@ -429,7 +436,9 @@ class _Match:
                 self.annos.append((SCOPE_MATCH, 0, R.GV_KEY_EVENT, R.GV_FORMAT + event))
         if doc.get("site"):
             self.annos.append((SCOPE_MATCH, 0, R.GV_KEY_SITE, R.GV_FORMAT + doc["site"]))
-        payload = _record(_varint(length) + _varint(0), fields)
+        self.mtch_mandatory = _varint(length) + _varint(0)
+        self.mtch_fields = fields
+        payload = _record(self.mtch_mandatory, fields)
         return payload, 12 in fields
 
 
@@ -777,8 +786,38 @@ def _chunked(key: str, value: str) -> list[tuple[str, str]]:
 # Public API
 # ---------------------------------------------------------------------------
 
-def write_ogxm2(ogxm: dict) -> bytes:
-    """Serialize our document to OGXM v2 bytes. Pure stdlib, no engine."""
+def _anno_record(scope: int, ref: int, key: str, value: str) -> bytes:
+    return _record(_varint(scope) + _varint(ref) + _str(value), {0: _str(key)})
+
+
+class _Block:
+    """One analysis block as the document canonically encodes it."""
+
+    def __init__(self, aid: bytes, anal: bytes, decs: bytes, annos: list):
+        self.aid = aid
+        self.aid_str = _uuid_str(aid)
+        self.anal = anal
+        self.decs = decs
+        self.annos = annos        # (scope, ref, key, value) this block adds to ANNO
+
+    def anno_bytes(self) -> bytes:
+        return b"".join(_anno_record(*a) for a in sorted(
+            self.annos, key=lambda t: (t[0], t[1], t[2].encode("utf-8"))))
+
+
+class _Parts:
+    """The document, encoded part by part: what ``ogxm2_passthrough``
+    fingerprints and what ``_assemble`` puts in a file."""
+
+    def __init__(self, doc: dict, match: _Match, mtch: bytes, uses_21: bool, blocks: list):
+        self.doc = doc
+        self.match = match
+        self.mtch = mtch
+        self.uses_21 = uses_21
+        self.blocks = blocks
+
+
+def _encode(ogxm: dict) -> _Parts:
     doc = ogxm
     if any(not p.get("ogid_before") for g in doc.get("games") or [] for p in g.get("plies") or []
            if p.get("action_id") is not None and p.get("action_id") not in _MARKERS):
@@ -794,11 +833,7 @@ def write_ogxm2(ogxm: dict) -> bytes:
     mtch, uses_21 = match.mtch()
     match_bytes = mtch + b"".join(match.games)
 
-    sections = bytearray()
-    sections += _section(b"MTCH", mtch, True)
-    for g in match.games:
-        sections += _section(b"GAME", g, True)
-
+    out: list[_Block] = []
     used_ids: set[bytes] = set()
     for k, (info, select) in enumerate(blocks):
         aid = _analysis_id(k, info, match_bytes)
@@ -855,26 +890,85 @@ def write_ogxm2(ogxm: dict) -> bytes:
         items.append("pr=" + ",".join(tokens))
         if frames:
             items.append("frame=" + ",".join(frames))
+        annos: list[tuple[int, int, str, str]] = []
         for key_, value in _chunked(R.GV_KEY_ANALYSIS + aid_str, R.GV_FORMAT + ";".join(items)):
-            match.annos.append((SCOPE_MATCH, 0, key_, value))
+            annos.append((SCOPE_MATCH, 0, key_, value))
         for ref, recs in extra.items():
             value = R.GV_FORMAT + base64.b64encode(b"".join(rec for _k, rec in recs)).decode("ascii")
             for key_, part in _chunked(R.GV_KEY_DECISIONS + aid_str, value):
-                match.annos.append((SCOPE_PLY, ref, key_, part))
+                annos.append((SCOPE_PLY, ref, key_, part))
+        out.append(_Block(aid, anal, decs_payload, annos))
+    return _Parts(doc, match, mtch, uses_21, out)
 
-        sections += _section(b"ANAL", anal, False)
-        sections += _section(b"DECS", decs_payload, False)
 
-    if match.annos:
-        annos = sorted(match.annos, key=lambda t: (t[0], t[1], t[2].encode("utf-8")))
-        payload = b"".join(_record(_varint(scope) + _varint(ref) + _str(value), {0: _str(key)})
-                           for scope, ref, key, value in annos)
-        sections += _section(b"ANNO", payload, False)
+def _assemble(parts: _Parts, plan: P.Plan) -> bytes:
+    """The file: the plan's parts in the order 2.4 requires, and ``CSUM``."""
+    match = parts.match
+    secs: list[tuple[str, bytes]] = []        # (anchor key, section)
+    secs.append(("MTCH", _section(b"MTCH", plan.mtch, True)))
+    for i, g in enumerate(plan.games):
+        secs.append((f"GAME:{i}", _section(b"GAME", g, True)))
+    for b, (anal, decs, sign, _annos) in zip(parts.blocks, plan.blocks):
+        key = f"BLOCK:{b.aid_str}"
+        secs.append((key, _section(b"ANAL", anal, False)))
+        secs.append((key, _section(b"DECS", decs, False)))
+        if sign is not None:
+            secs.append((key, _section(b"SIGN", sign, False)))
+    if plan.clck is not None:
+        secs.append(("CLCK", _section(b"CLCK", plan.clck, False)))
+    if plan.vido is not None:
+        secs.append(("VIDO", _section(b"VIDO", plan.vido, False)))
 
-    minor = 2 if match.pending_double_end else (1 if uses_21 else 0)
-    min_minor = 2 if match.pending_double_end else 0
+    entries: list[tuple[tuple, bytes]] = []
+    for r in plan.foreign_annos:
+        entries.append((P.anno_sort_key(r["scope"], r["ref"], r["analysis"], r["kind"], r["alt"],
+                                        r["key"], r["lang"], len(entries)), P.b64d(r["raw"])))
+    ours = list(match.annos) + [a for _an, _d, _s, annos in plan.blocks for a in annos]
+    for scope, ref, key, value in ours:
+        if plan.skip_site and key == R.GV_KEY_SITE and scope == SCOPE_MATCH:
+            continue
+        entries.append((P.anno_sort_key(scope, ref, None, None, None, key, None, len(entries)),
+                        _anno_record(scope, ref, key, value)))
+    if entries:
+        entries.sort(key=lambda e: e[0])
+        secs.append(("ANNO", _section(b"ANNO", b"".join(rec for _k, rec in entries), False)))
+    n_other = len(secs)
+    for i, m in enumerate(plan.msig):
+        secs.append((f"MSIG:{i}", _section(b"MSIG", m, False)))
+
+    # Unknown sections go back after the section they followed; where that one
+    # is gone, at the end of the body (before the signatures).
+    if plan.unknown:
+        keys = [k for k, _s in secs]
+        n_games = len(plan.games)
+        inserts: dict[int, list[bytes]] = {}
+        for stype, payload, after in plan.unknown:
+            k = after["k"]
+            want = ("head" if k == "head" else f"{k}:{after['i']}" if k in ("GAME", "MSIG")
+                    else f"BLOCK:{after['id']}" if k == "BLOCK" else k)
+            if k == "GAME" and after["i"] >= n_games:
+                want = f"GAME:{n_games - 1}" if n_games else "MTCH"
+            if want == "head":
+                at = 0
+            elif want in keys:
+                at = len(keys) - keys[::-1].index(want)
+            else:
+                at = n_other
+            inserts.setdefault(at, []).append(_section(stype, payload, False))
+        merged: list[bytes] = []
+        for i in range(len(secs) + 1):
+            merged += inserts.get(i, [])
+            if i < len(secs):
+                merged.append(secs[i][1])
+        body_sections = merged
+    else:
+        body_sections = [s for _k, s in secs]
+
+    minor = max(2 if match.pending_double_end else (1 if parts.uses_21 else 0), plan.minor_floor)
+    min_minor = max(2 if match.pending_double_end else 0, plan.min_minor_floor)
     body = bytearray(b"OGXM" + struct.pack("<HHHHI", 2, minor, 2, min_minor, 0))
-    body += sections
+    for s in body_sections:
+        body += s
     csum_at = len(body)
     csum_payload_len = len(_record(_varint(0) + _varint(4) + b"\0\0\0\0", {}))
     total = csum_at + 9 + csum_payload_len + 4
@@ -884,3 +978,13 @@ def write_ogxm2(ogxm: dict) -> bytes:
     body += b"END!"
     assert len(body) == total
     return bytes(body)
+
+
+def write_ogxm2(ogxm: dict) -> bytes:
+    """Serialize our document to OGXM v2 bytes. Pure stdlib, no engine.
+
+    A document read from another producer's v2 file carries
+    ``_ogxm2_passthrough``, and what it did not edit is written back as it
+    came (``ogxm2_passthrough``)."""
+    parts = _encode(ogxm)
+    return _assemble(parts, P.Plan(parts, parts.doc))

@@ -535,13 +535,25 @@ def _decode_decs(payload: bytes) -> list[dict]:
     return out
 
 
+def uuid_of(anal: bytes) -> str:
+    """The ``analysis_id`` of an ``ANAL`` payload, hyphenated."""
+    cur = _Cursor(anal, 0, len(anal))
+    length = cur.varint()
+    body = _Cursor(anal, cur.pos, cur.pos + length)
+    body.varint64()
+    return str(uuid.UUID(bytes=body.bytes(16)))
+
+
 def _decode_anno(payload: bytes) -> list[dict]:
-    """ANNO records, in file order (8.4). Drawings are stepped over."""
+    """ANNO records, in file order (8.4). Drawings are stepped over. Each
+    carries its own bytes as ``raw``, for ``ogxm2_passthrough``."""
     cur = _Cursor(payload, 0, len(payload))
     out = []
     while cur.pos < cur.end:
+        first = cur.pos
         body, has = cur.record()
-        r: dict = {"scope": body.varint(), "ref": body.varint(), "value": body.str()}
+        r: dict = {"scope": body.varint(), "ref": body.varint(), "value": body.str(),
+                   "raw": payload[first:cur.pos]}
         if has(0):
             r["key"] = body.str()
         if has(1):
@@ -549,7 +561,7 @@ def _decode_anno(payload: bytes) -> list[dict]:
         if has(2):
             r["alt_index"] = body.varint()
         if has(3):
-            body.str()                                 # lang
+            r["lang"] = body.str()
         if has(4):
             body.str()                                 # author
         if has(5):
@@ -1058,8 +1070,9 @@ def _v1_block(anal: dict, decisions: list[dict], ply_at: list, match_length: int
         label = next(iter(luck_levels))
         if label is not None:
             info["luck_eval_level"] = label
-    if mine:
-        info["analysis_id"] = anal["analysis_id"]
+    # Every block states its identifier, not only ours: a signature, and an
+    # annotation addressed to a decision, name the block by it.
+    info["analysis_id"] = anal["analysis_id"]
     return info, block_obj, bool(luck_levels)
 
 
@@ -1181,10 +1194,12 @@ def read_ogxm2(data: bytes, *, verify_crc: bool = True, derive_ogids: bool = Tru
 
     decoded = []
     base_blocks = []
+    ours_ids: set = set()
     for blk in blocks:
         aid = blk["anal"]["analysis_id"]
         ours = None
         if (0, GV_KEY_ANALYSIS + aid) in gv_match:
+            ours_ids.add(aid)
             items = dict(item.partition("=")[::2]
                          for item in gv_match[(0, GV_KEY_ANALYSIS + aid)].split(";") if item)
             extra = {}
@@ -1218,4 +1233,8 @@ def read_ogxm2(data: bytes, *, verify_crc: bool = True, derive_ogids: bool = Tru
     ogxm["games"] = games
     if base_blocks:
         ogxm["_base_analyses"] = base_blocks
+    # What the file holds that this document cannot: kept for the writer.
+    from .ogxm2_passthrough import attach
+    header = (struct.unpack_from("<H", data, 6)[0], struct.unpack_from("<H", data, 10)[0])
+    attach(ogxm, data, header, sections, annos, ours_ids)
     return ogxm

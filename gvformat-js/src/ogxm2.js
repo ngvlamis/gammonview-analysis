@@ -66,6 +66,7 @@ import {
   _cubePlyIsDecision,
 } from './basefill.js';
 import { DICE_TABLE } from './constants.js';
+import { attach } from './ogxm2_passthrough.js';
 
 // ---------------------------------------------------------------------------
 // Constants (spec section numbers in brackets)
@@ -475,17 +476,29 @@ function _decodeDecs(payload) {
   return out;
 }
 
-/** [8.4] ANNO records, in file order. Drawings are stepped over. */
+/** The `analysis_id` of an `ANAL` payload, hyphenated. */
+export function uuidOf(anal) {
+  const cur = new Cursor(anal, 0, anal.length);
+  const len = cur.varint();
+  const body = new Cursor(anal, cur.pos, cur.pos + len);
+  body.varint64();
+  return _uuidStr(body.bytes(16));
+}
+
+/** [8.4] ANNO records, in file order. Drawings are stepped over. Each carries
+ *  its own bytes as `raw`, for `ogxm2_passthrough`. */
 function _decodeAnno(payload) {
   const cur = new Cursor(payload, 0, payload.length);
   const out = [];
   while (cur.pos < cur.end) {
+    const first = cur.pos;
     const { body, has } = cur.record();
-    const r = { scope: body.varint(), ref: body.varint(), value: body.str() };
+    const r = { scope: body.varint(), ref: body.varint(), value: body.str(),
+      raw: payload.slice(first, cur.pos) };
     if (has(0)) r.key = body.str();
     if (has(1)) r.kind = body.varint();
     if (has(2)) r.alt_index = body.varint();
-    if (has(3)) body.str();                      // lang
+    if (has(3)) r.lang = body.str();
     if (has(4)) body.str();                      // author
     if (has(5)) body.varint64();                 // at
     if (has(6)) {
@@ -1038,7 +1051,9 @@ export function _v1Block(anal, decisions, plyAt, matchLength, ours = null) {
     const label = luckLevels.values().next().value;
     if (label !== null) info.luck_eval_level = label;
   }
-  if (mine) info.analysis_id = anal.analysis_id;
+  // Every block states its identifier, not only ours: a signature, and an
+  // annotation addressed to a decision, name the block by it.
+  info.analysis_id = anal.analysis_id;
   return [info, blockObj, luckLevels.size > 0];
 }
 
@@ -1170,11 +1185,13 @@ export function _readOgxm2(data, options) {
 
   const decoded = [];
   const baseBlocks = [];
+  const oursIds = new Set();
   for (const { anal, decisions } of blocks) {
     const aid = anal.analysis_id;
     let ours = null;
     const marked = _gvGet(gvMatch, 0, GV_KEY_ANALYSIS + aid);
     if (marked !== undefined) {
+      oursIds.add(aid);
       const items = new Map();
       for (const item of marked.split(';')) {
         if (!item) continue;
@@ -1210,6 +1227,8 @@ export function _readOgxm2(data, options) {
   }
   _attachBlocks(ogxm, decoded, plyByKey);
   if (baseBlocks.length) ogxm._base_analyses = baseBlocks;
+  // What the file holds that this document cannot: kept for the writer.
+  attach(ogxm, data, [view.getUint16(6, true), rmin], sections, annos, oursIds);
   return ogxm;
 }
 
@@ -1218,5 +1237,6 @@ export {
   CURRENCY_CUBEFUL_MONEY, CURRENCY_CUBEFUL_MATCH,
   GV_FORMAT, GV_KEY_ANALYSIS, GV_KEY_DECISIONS, GV_KEY_ILLEGAL_PLY,
   GV_KEY_SITE, GV_KEY_EVENT, GV_KEY_SCORE,
-  _decodeAnal, _decodeDecs, _scoreWalk,
+  _decodeAnal, _decodeDecs, _scoreWalk, _walkSections, Cursor, KNOWN_SECTIONS,
+  SCOPE_MATCH, SCOPE_PLY,
 };

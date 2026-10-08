@@ -180,11 +180,60 @@ decisions where the document says otherwise, each as its `ply_ref` and a letter:
 Each is a rule in `tests/test_ogxm2_writer.py`, which fails on any difference
 none of them explains.
 
-## 5. What is not carried yet
+## 5. Another producer's file: what is kept (spec I7)
 
-A v2 file from another producer is read into our document, which does not hold
-everything v2 can say: its `CLCK`, `VIDO`, `SIGN`, `MSIG` and other producers'
-`ANNO` records, and `MTCH` fields beyond those in §1 (the event's stage and
-round, the players' profiles, ...). Rewriting such a file — appending our
-analysis to it — drops them. Likewise a v1 file's `SIGN`, `CLCK` and `VIDO`
-chunks, which `write_gvab_v1` carries through, are not carried into v2.
+Our document models a match and its analyses. A v2 file from another producer
+holds more: `CLCK`, `VIDO`, `SIGN`, `MSIG`, its own `ANNO` records, `MTCH`
+fields beyond §1 (stage, round, profiles, `player_seat`, ...), unknown
+presence-bit tails on records, decisions of unknown kind and unknown ancillary
+sections. Rewriting such a file after appending our analysis keeps all of it.
+
+**How.** `read_ogxm2` attaches `_ogxm2_passthrough` to the document: the source
+header's minor versions, the original `MTCH`, `GAME`, `ANAL`, `DECS` and `SIGN`
+payloads, `CLCK`, `VIDO` and every `MSIG`, each `ANNO` record the reader does not
+consume (anything but our `x-gammonview-…` keys), and each unknown section with
+the known section it followed. Bytes are base64, so the record survives `.gva`
+JSON, and `append_analysis` and `analyze_file` carry it like any other key. A
+file the writer reproduces exactly gets none, so our own files are unaffected.
+
+**Fingerprints.** Each stored part carries the SHA-256 of *our writer's
+canonical encoding of that part*, taken from the document when it was read. The
+writer encodes the document again; a part whose canonical bytes still hash to
+the stored value has not been edited, and the original bytes are written instead.
+This matters because `SIGN` and `MSIG` digest the bytes as stored (8.1.1, 8.6.1):
+re-encoding an unedited part can differ from the source in bytes alone, and a
+signature over it would stop verifying for no reason. Comparing fingerprints
+rather than keeping an "edited" flag means no code path has to remember to
+clear one.
+
+**Three cases**, by what the document changed:
+
+| Edit | Kept verbatim | Dropped | Why |
+|---|---|---|---|
+| none, or blocks added or removed | everything, including `SIGN` and `MSIG` | removed blocks (and annotations addressed to them) | neither signature covers analysis blocks beyond their own |
+| `MTCH` (a name, the event, ...) | games, foreign blocks (`match_digest` recomputed), `CLCK`, `VIDO`, annotations, unknown sections; every `MTCH` field the document does not model, and its unknown tail | `MSIG`, `SIGN` | both digest `MTCH` |
+| a `GAME` (a move) | unchanged games, unknown sections, match- and game-scope annotations | `CLCK`, `VIDO`, foreign blocks' bytes (re-encoded from the document, unsigned), ply-, decision- and alternative-scope annotations | plies are renumbered or reinterpreted, so anything addressed by ply no longer means what it did |
+
+An edited analysis block is re-encoded and loses its `SIGN`; its siblings keep
+theirs. Annotations addressed to a decision survive only while their block is
+written verbatim.
+
+**Details.** The header's minors are never lower than the source's. `ANNO` is
+one section holding the foreign records and ours, merged in the order 8.4.1
+requires. A foreign block written verbatim gets no `x-gammonview-analysis`
+annotation, so it reads back as foreign, as it first did; `site` is not
+re-annotated when the source's `MTCH` already states it. Every block now states
+its `analysis_id` in the document, not only ours, since a signature and an
+annotation name the block by it. An unknown *critical* section is still a hard
+error.
+
+**A v1 file's chunks** (`SIGN`, `CLCK`, `VIDO`, carried as `_unknown_chunks`) are
+written as v2 the way the reference's `v1_to_v2` converts them, byte for byte
+(tested against it). `CLCK` and `VIDO` are decoded and re-encoded canonically
+(8.2, 8.3), and dropped if invalid. `SIGN` becomes a v2 `SIGN` with the same
+signature; it cannot verify (v1 and v2 sign different payloads), so a verifier
+reports it invalid, which is true. Other unknown v1 chunks are dropped.
+
+**Not covered.** A document whose passthrough record cannot be parsed is written
+as if it had none. Editing a foreign field the document does not expose (say
+`stage`) is not possible; it stays as it was.

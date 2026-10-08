@@ -75,7 +75,7 @@ GV_ONLY = {
 }
 
 #: Internal to our reader, never part of the format.
-OURS_INTERNAL = {"_unknown_chunks", "_base_analyses", "analyses", "analyses_info"}
+OURS_INTERNAL = {"_unknown_chunks", "_ogxm2_passthrough", "_base_analyses", "analyses", "analyses_info"}
 
 _passed = 0
 _failed = 0

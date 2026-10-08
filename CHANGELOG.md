@@ -51,8 +51,18 @@ What a reader sees differently, each a named rule in
 Size: +2.8% raw and +6.9% deflated across the corpus, for strictly more
 content (1e-6 precision, the values v1 clamped or dropped).
 
-Not yet carried: rewriting another producer's v2 file drops its `CLCK`, `VIDO`,
-signatures, foreign annotations and `MTCH` fields our document does not hold.
+**Another producer's v2 file keeps its content when rewritten** *(spec I7)*
+
+Reading a v2 file now records the source's own `CLCK`, `VIDO`, `SIGN`, `MSIG`,
+foreign `ANNO` records, unknown sections and fields in `_ogxm2_passthrough`, and
+`write_gvab` writes each part back verbatim until the document edits it
+(decided by a SHA-256 fingerprint of our canonical encoding of the part, so an
+unedited signature keeps verifying). Appending our analysis to a HedgeHog file
+leaves every one of its sections byte-identical; editing the match drops the
+signatures that cover it, and editing a move also drops the clock, video and
+ply-addressed annotations. A v1 file's `SIGN`, `CLCK` and `VIDO` chunks are now
+written as v2, as the reference's `v1_to_v2` does. Every block now reports its
+`analysis_id`. `@gammonview/gvformat` mirrors it, with a synchronous SHA-256.
 
 **A `.bgf`'s MWCs are BGBlitz's own** *(fix)*
 

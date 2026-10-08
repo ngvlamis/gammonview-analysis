@@ -114,18 +114,18 @@ These differences are all in the profile's §4. The ones a viewer could notice:
 - Analysis is kept at 1e-6, where v1 kept 4 decimal places, and values v1
   clamped are now stored unclamped.
 
+## Rewriting someone else's v2 file
+
+In 1.6 appending analysis to a file another producer wrote keeps its clock,
+video, signatures, annotations, unknown fields and sections (spec I7); an
+unedited part is written back byte for byte, so a signature stays valid exactly
+when it was. Editing the match drops the signatures that cover it, and editing a
+move also drops the clock, video and ply-addressed annotations. The document
+carries a private `_ogxm2_passthrough` key for this (also in `.gva`); leave it
+alone. `docs/OGXM_V2_PROFILE.md` §5 has the rules.
+
 ## Not in 1.6 (known gaps)
 
-- **Rewriting someone else's v2 file loses what we don't model.** This matters
-  once GammonView appends analysis to a file another producer wrote (HedgeHog,
-  or OpenGammon if it ever ships v2). The lost content is:
-  - its clock (`CLCK`) and video (`VIDO`) sections;
-  - its signatures (`SIGN`, `MSIG`);
-  - its own annotations;
-  - any match fields we don't model.
-
-  Spec rule I7 requires a rewriter to keep these. This is the next item on the
-  codec side.
 - **`.gva` is still our own JSON.** Switching it to v2's JSON projection is the
   planned second step. GammonView's `.gva` handling will need its own handoff
   then.

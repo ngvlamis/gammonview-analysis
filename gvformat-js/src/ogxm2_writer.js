@@ -51,6 +51,9 @@ import {
   GV_KEY_SITE, GV_KEY_EVENT, GV_KEY_SCORE,
   _decodeAnal, _decodeDecs, _scoreWalk, _v1Block, frameFromWire, _parseFrames,
 } from './ogxm2.js';
+import {
+  Plan, annoSortKey, cmpSortKeys, b64d,
+} from './ogxm2_passthrough.js';
 
 const MAX_STRING = 4096;
 const MAX_ALTS = 1024;
@@ -395,6 +398,9 @@ class _Match {
     this.position_before = new Map();  // ref -> [board_p1, mover is White]
     this.annos = [];                   // [scope, ref, key, value]
     this.pending_double_end = false;
+    this.game_start = [];              // leading document plies v2 states as the initial board (0 or 1)
+    this.mtch_mandatory = new Uint8Array(0);
+    this.mtch_fields = {};
     this._encodeGames(flaggedIllegal);
   }
 
@@ -420,6 +426,7 @@ class _Match {
         }
       }
 
+      this.game_start.push(start);
       const winner = g.winner;
       if (winner === 0 || winner === 1) {
         fields[0] = _varint(winner);
@@ -559,7 +566,9 @@ class _Match {
       }
     }
     if (doc.site) this.annos.push([SCOPE_MATCH, 0, GV_KEY_SITE, GV_FORMAT + doc.site]);
-    const payload = _record(_cat(_varint(length), _varint(0)), fields);
+    this.mtch_mandatory = _cat(_varint(length), _varint(0));
+    this.mtch_fields = fields;
+    const payload = _record(this.mtch_mandatory, fields);
     return [payload, _has(fields, 12)];
   }
 }
@@ -942,8 +951,40 @@ function _cmpBytes(a, b) {
 // Public API
 // ---------------------------------------------------------------------------
 
-/** Serialize our document to OGXM v2 bytes. Pure JS, no engine. */
-export function write_ogxm2(ogxm) {
+function _annoRecord(scope, ref, key, value) {
+  return _record(_cat(_varint(scope), _varint(ref), _str(value)), { 0: _str(key) });
+}
+
+/** One analysis block as the document canonically encodes it. */
+class _Block {
+  constructor(aid, anal, decs, annos) {
+    this.aid = aid;
+    this.aid_str = _uuidStr(aid);
+    this.anal = anal;
+    this.decs = decs;
+    this.annos = annos;                // [scope, ref, key, value] this block adds to ANNO
+  }
+
+  anno_bytes() {
+    const sorted = this.annos.map((t) => ({ t, kb: _enc.encode(t[2]) }));
+    sorted.sort((x, y) => x.t[0] - y.t[0] || x.t[1] - y.t[1] || _cmpBytes(x.kb, y.kb));
+    return _cat(...sorted.map(({ t }) => _annoRecord(...t)));
+  }
+}
+
+/** The document, encoded part by part: what `ogxm2_passthrough` fingerprints
+ *  and what `_assemble` puts in a file. */
+class _Parts {
+  constructor(doc, match, mtch, uses21, blocks) {
+    this.doc = doc;
+    this.match = match;
+    this.mtch = mtch;
+    this.uses_21 = uses21;
+    this.blocks = blocks;
+  }
+}
+
+export function _encode(ogxm) {
   let doc = ogxm;
   if ((doc.games || []).some((g) => (g.plies || []).some(
     (p) => p.action_id !== null && p.action_id !== undefined
@@ -967,10 +1008,7 @@ export function write_ogxm2(ogxm) {
   const [mtch, uses21] = match.mtch();
   const matchBytes = _cat(mtch, ...match.games);
 
-  const sections = [];
-  sections.push(_section('MTCH', mtch, true));
-  for (const g of match.games) sections.push(_section('GAME', g, true));
-
+  const out = [];
   const usedIds = new Set();
   blocks.forEach(([info, select], k) => {
     const aid = _analysisId(k, info, matchBytes);
@@ -1023,32 +1061,88 @@ export function write_ogxm2(ogxm) {
     }
     items.push(`pr=${tokens.join(',')}`);
     if (frames.length) items.push(`frame=${frames.join(',')}`);
+    const annos = [];
     for (const [key, value] of _chunked(GV_KEY_ANALYSIS + aidStr, GV_FORMAT + items.join(';'))) {
-      match.annos.push([SCOPE_MATCH, 0, key, value]);
+      annos.push([SCOPE_MATCH, 0, key, value]);
     }
     for (const [ref, recs] of extra) {
       const value = GV_FORMAT + _b64encode(_cat(...recs.map((r) => r[1])));
       for (const [key, part] of _chunked(GV_KEY_DECISIONS + aidStr, value)) {
-        match.annos.push([SCOPE_PLY, ref, key, part]);
+        annos.push([SCOPE_PLY, ref, key, part]);
       }
     }
-
-    sections.push(_section('ANAL', anal, false));
-    sections.push(_section('DECS', decsPayload, false));
+    out.push(new _Block(aid, anal, decsPayload, annos));
   });
+  return new _Parts(doc, match, mtch, uses21, out);
+}
 
-  if (match.annos.length) {
-    const annos = match.annos.map((t) => ({ t, kb: _enc.encode(t[2]) }));
-    annos.sort((x, y) => x.t[0] - y.t[0] || x.t[1] - y.t[1] || _cmpBytes(x.kb, y.kb));
-    const payload = _cat(...annos.map(({ t: [scope, ref, key, value] }) => _record(
-      _cat(_varint(scope), _varint(ref), _str(value)), { 0: _str(key) })));
-    sections.push(_section('ANNO', payload, false));
+/** The file: the plan's parts in the order 2.4 requires, and `CSUM`. */
+export function _assemble(parts, plan) {
+  const match = parts.match;
+  const secs = [];                              // [anchor key, section]
+  secs.push(['MTCH', _section('MTCH', plan.mtch, true)]);
+  plan.games.forEach((g, i) => secs.push([`GAME:${i}`, _section('GAME', g, true)]));
+  parts.blocks.forEach((b, k) => {
+    const [anal, decs, sign] = plan.blocks[k];
+    const key = `BLOCK:${b.aid_str}`;
+    secs.push([key, _section('ANAL', anal, false)]);
+    secs.push([key, _section('DECS', decs, false)]);
+    if (sign !== null) secs.push([key, _section('SIGN', sign, false)]);
+  });
+  if (plan.clck !== null) secs.push(['CLCK', _section('CLCK', plan.clck, false)]);
+  if (plan.vido !== null) secs.push(['VIDO', _section('VIDO', plan.vido, false)]);
+
+  const entries = [];
+  for (const r of plan.foreign_annos) {
+    entries.push([annoSortKey(r.scope, r.ref, r.analysis, r.kind, r.alt, r.key, r.lang, entries.length),
+      b64d(r.raw)]);
+  }
+  const ours = [...match.annos];
+  for (const blk of plan.blocks) ours.push(...blk[3]);
+  for (const [scope, ref, key, value] of ours) {
+    if (plan.skip_site && key === GV_KEY_SITE && scope === SCOPE_MATCH) continue;
+    entries.push([annoSortKey(scope, ref, null, null, null, key, null, entries.length),
+      _annoRecord(scope, ref, key, value)]);
+  }
+  if (entries.length) {
+    entries.sort((x, y) => cmpSortKeys(x[0], y[0]));
+    secs.push(['ANNO', _section('ANNO', _cat(...entries.map((e) => e[1])), false)]);
+  }
+  const nOther = secs.length;
+  plan.msig.forEach((m, i) => secs.push([`MSIG:${i}`, _section('MSIG', m, false)]));
+
+  // Unknown sections go back after the section they followed; where that one is
+  // gone, at the end of the body (before the signatures).
+  let bodySections;
+  if (plan.unknown.length) {
+    const keys = secs.map((s) => s[0]);
+    const nGames = plan.games.length;
+    const inserts = new Map();
+    for (const [stype, payload, after] of plan.unknown) {
+      const k = after.k;
+      let want = k === 'head' ? 'head' : (k === 'GAME' || k === 'MSIG') ? `${k}:${after.i}`
+        : k === 'BLOCK' ? `BLOCK:${after.id}` : k;
+      if (k === 'GAME' && after.i >= nGames) want = nGames ? `GAME:${nGames - 1}` : 'MTCH';
+      let at;
+      if (want === 'head') at = 0;
+      else if (keys.includes(want)) at = keys.lastIndexOf(want) + 1;
+      else at = nOther;
+      if (!inserts.has(at)) inserts.set(at, []);
+      inserts.get(at).push(_section(stype, payload, false));
+    }
+    bodySections = [];
+    for (let i = 0; i <= secs.length; i++) {
+      if (inserts.has(i)) bodySections.push(...inserts.get(i));
+      if (i < secs.length) bodySections.push(secs[i][1]);
+    }
+  } else {
+    bodySections = secs.map((s) => s[1]);
   }
 
-  const minor = match.pending_double_end ? 2 : (uses21 ? 1 : 0);
-  const minMinor = match.pending_double_end ? 2 : 0;
+  const minor = Math.max(match.pending_double_end ? 2 : (parts.uses_21 ? 1 : 0), plan.minor_floor);
+  const minMinor = Math.max(match.pending_double_end ? 2 : 0, plan.min_minor_floor);
   const head = _cat(_enc.encode('OGXM'), _u16(2), _u16(minor), _u16(2), _u16(minMinor), _u32(0));
-  const body = _cat(head, ...sections);
+  const body = _cat(head, ...bodySections);
   const csumAt = body.length;
   const csumPayloadLen = _record(_cat(_varint(0), _varint(4), [0, 0, 0, 0]), {}).length;
   const total = csumAt + 9 + csumPayloadLen + 4;
@@ -1060,3 +1154,15 @@ export function write_ogxm2(ogxm) {
   if (out.length !== total) throw new Error('OGXM v2 writer: file size mismatch');
   return out;
 }
+
+/** Serialize our document to OGXM v2 bytes. Pure JS, no engine.
+ *
+ *  A document read from another producer's v2 file carries
+ *  `_ogxm2_passthrough`, and what it did not edit is written back as it came
+ *  (`ogxm2_passthrough`). */
+export function write_ogxm2(ogxm) {
+  const parts = _encode(ogxm);
+  return _assemble(parts, new Plan(parts, parts.doc));
+}
+
+export { _varint, _record, _str, _uuidBytes, _uuidStr, _cmpBytes };
