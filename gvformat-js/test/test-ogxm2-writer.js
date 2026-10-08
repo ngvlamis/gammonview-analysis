@@ -14,6 +14,11 @@
 //       what the Python writer made of it (fixtures/ogxm2/writer-sha256.json,
 //       from tests/gen_js_v2_fixtures.py).
 //   (c) A rewrite is byte-stable: write(read(b)) == b.
+//   (d) samples/bgf/*.bgf, converted by the JS converter and written as v2, hash
+//       to what Python's converter and writer made of them
+//       (fixtures/ogxm2/bgf-writer-sha256.json) -- BGBlitz's own match equity
+//       frame travels from the converter through the writer, and so do the two
+//       points of a session's last game.
 
 import { readFileSync, readdirSync } from 'node:fs';
 import { createHash } from 'node:crypto';
@@ -22,6 +27,7 @@ import { fileURLToPath } from 'node:url';
 import { deepStrictEqual } from 'node:assert';
 import { write_gvab } from '../src/binary.js';
 import { readGvab } from '../src/reader.js';
+import { convertBgf } from '../src/bgf2gva.js';
 
 let passed = 0, failed = 0;
 function assert(cond, msg) {
@@ -69,6 +75,28 @@ for (const name of samples) {
   assert(out.length === want.length && sha === want.sha256,
     `${name}: v2 bytes equal the Python writer's (length ${out.length}, sha256 ${sha.slice(0, 12)})`);
   assert(bytesEqual(write_gvab(readGvab(out)), out), `${name}: rewriting the v2 file is byte-stable`);
+}
+
+// (d) the BGBlitz samples, converted and written by JS
+const pinnedBgf = JSON.parse(readFileSync(join(here, 'fixtures', 'ogxm2', 'bgf-writer-sha256.json'), 'utf8'));
+const bgfDir = join(repo, 'samples', 'bgf');
+const bgfs = readdirSync(bgfDir).filter((f) => f.endsWith('.bgf')).sort();
+assert(bgfs.length > 0, 'found samples/bgf/*.bgf');
+for (const name of bgfs) {
+  const doc = await convertBgf(toU8(readFileSync(join(bgfDir, name))));
+  const out = write_gvab(doc);
+  const want = pinnedBgf[name];
+  assert(want !== undefined, `${name}: has a pinned Python hash`);
+  if (want === undefined) continue;
+  const sha = createHash('sha256').update(out).digest('hex');
+  assert(out.length === want.length && sha === want.sha256,
+    `${name}: converted and written as v2, bytes equal Python's (length ${out.length}, sha256 ${sha.slice(0, 12)})`);
+  assert(bytesEqual(write_gvab(readGvab(out)), out), `${name}: rewriting the v2 file is byte-stable`);
+  if (doc.match_length > 0) {
+    const framed = doc.games.flatMap((g) => g.plies).filter((p) => p.analysis);
+    assert(framed.length > 0 && framed.every((p) => p.analysis.mwc_frame), `${name}: every analysed ply carries a frame`);
+    assert(doc.analysis_info.met_id === 'bgblitz', `${name}: the block names BGBlitz's table`);
+  }
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

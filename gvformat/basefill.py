@@ -126,15 +126,18 @@ def _normalizer(ply: dict):
     return None if frame is None else frame[0]
 
 
-def mwc_frame(ply: dict):
+def mwc_frame(ply: dict, frame=None):
     """The same map as ``_normalizer``, paired with its slope alone for a
     *difference* of two MWCs (an equity loss, a luck), which converts by the
     span and never by the midpoint: ``(to_equity, to_delta)``, or None.
 
+    ``frame`` is a source's own ``[mid, half]`` for this ply (BGBlitz's, say,
+    whose match equity table is not ours); given, it stands in for the table.
+
     Public for ``ogxm2.py``, whose blocks state their currency outright and so
     convert every value in them, not only the three cube values.
     """
-    anchors = _frame_anchors(ply)
+    anchors = _frame_anchors(ply, frame)
     if anchors is None:
         return None
     mid, span = anchors
@@ -148,19 +151,21 @@ def mwc_frame(ply: dict):
     return to_equity, to_delta
 
 
-def mwc_frame_inverse(ply: dict):
+def mwc_frame_inverse(ply: dict, frame=None):
     """``mwc_frame`` run backwards, for a writer: ``(from_equity, from_delta)``
     mapping normalized equity onto this ply's MWC, or None where ``mwc_frame``
     has no frame either. Unrounded -- the writer quantizes."""
-    anchors = _frame_anchors(ply)
+    anchors = _frame_anchors(ply, frame)
     if anchors is None:
         return None
     mid, span = anchors
     return (lambda eq: mid + eq * span / 2), (lambda d: d * span / 2)
 
 
-def _frame_anchors(ply: dict) -> tuple[float, float] | None:
-    """``(mid, span)`` of the MWC interval this ply's equities normalize over."""
+def frame_key(ply: dict) -> tuple[int, int, int, bool] | None:
+    """``(away1, away2, cube_value, is_crawford)`` of the frame this ply's
+    equities normalize over, in the doubler's (a mover's own) perspective --
+    the one ``mwc_frame`` uses -- or None where there is no match-play frame."""
     ctx = _parse_ogid_context(ply.get("ogid_before"))
     if ctx is None:
         return None
@@ -169,17 +174,38 @@ def _frame_anchors(ply: dict) -> tuple[float, float] | None:
         return None  # money play: already equity
     away_w = match_length - score_w
     away_b = match_length - score_b
-    answering = ply.get("action_id") in _TAKE_PASS_ACTIONS
-    doubler_is_white = ply.get("color") != 1 if answering else ply.get("color") == 1
-    away1 = away_w if doubler_is_white else away_b
-    away2 = away_b if doubler_is_white else away_w
+    if frame_perspective_is_white(ply):
+        away1, away2 = away_w, away_b
+    else:
+        away1, away2 = away_b, away_w
     if away1 <= 0 or away2 <= 0:
         return None
-    mwc_win, mwc_lose = mwc_anchors(away1, away2, cube_value, is_crawford)
-    span = mwc_win - mwc_lose
+    return away1, away2, cube_value, is_crawford
+
+
+def frame_perspective_is_white(ply: dict) -> bool:
+    """Is the frame's owner White? The doubler's, so on a take or a pass the
+    opponent of the ply's own colour."""
+    answering = ply.get("action_id") in _TAKE_PASS_ACTIONS
+    return ply.get("color") != 1 if answering else ply.get("color") == 1
+
+
+def _frame_anchors(ply: dict, frame=None) -> tuple[float, float] | None:
+    """``(mid, span)`` of the MWC interval this ply's equities normalize over.
+    A source's ``frame`` (``[mid, half]``) replaces the table's anchors."""
+    key = frame_key(ply)
+    if key is None:
+        return None
+    if frame is not None:
+        mid, half = frame
+        span = 2 * half
+    else:
+        mwc_win, mwc_lose = mwc_anchors(*key)
+        span = mwc_win - mwc_lose
+        mid = (mwc_win + mwc_lose) / 2
     if span == 0:
         return None
-    return (mwc_win + mwc_lose) / 2, span
+    return mid, span
 
 
 def _cube_values(sub: dict | None) -> tuple[float, float, float] | None:

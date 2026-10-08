@@ -15,6 +15,10 @@ reader keeps and never interprets:
 ``x-gammonview-analysis/<analysis_id>`` (match scope, one per block)
     Marks the block as ours and lists the decisions whose PR-counting flag
     differs from the rule the reader derives it by (``ogxm2.default_flags``).
+    It also carries ``frame=`` when a source normalized by a match equity table
+    that is not ours (BGBlitz's): ``<ply_ref>:<mid_white>:<half>`` entries, each
+    in force from its ply until the next, stating the MWC frame (``mwc_frame``
+    on the document's analyses) so the file holds the source's own MWCs.
 ``x-gammonview-decisions/<analysis_id>`` (ply scope)
     Decision records the block holds for a ply that the ``DECS`` stream cannot
     take as they are: everything on an illegal play (v2 allows no decision on
@@ -38,13 +42,14 @@ from __future__ import annotations
 
 import base64
 import copy
+import math
 import re
 import struct
 import uuid
 import zlib
 from urllib.parse import quote
 
-from .basefill import mwc_frame_inverse
+from .basefill import frame_key, frame_perspective_is_white, mwc_frame_inverse
 from .binary import DICE_TABLE, _round_c
 from .export import _STARTING_BOARD_P1, _flip_board, _p1_to_absolute
 from .legality import is_play_legal
@@ -476,12 +481,36 @@ def _analysis_id(index: int, info: dict, match_bytes: bytes) -> bytes:
     return bytes(raw)
 
 
+def _fmt8(x: float) -> str:
+    """Eight places, trailing zeros dropped (``0.5``, ``1``): the form a
+    ``frame=`` number takes, spelled so the JavaScript mirror matches."""
+    s = f"{x:.8f}".rstrip("0").rstrip(".")
+    return "0" if s == "-0" else s
+
+
+def _source_frame(ply: dict, analysis: dict):
+    """``(mid_white, half)`` as ``frame=`` spells them for this ply's analysis,
+    or None when it states no usable source frame."""
+    f = analysis.get("mwc_frame")
+    if not isinstance(f, (list, tuple)) or len(f) != 2 or frame_key(ply) is None:
+        return None
+    try:
+        mid, half = float(f[0]), float(f[1])
+    except (TypeError, ValueError):
+        return None
+    if not (math.isfinite(mid) and math.isfinite(half) and half > 0):
+        return None
+    mid, half = round(mid, 8), round(half, 8)
+    return _fmt8(mid if frame_perspective_is_white(ply) else 1 - mid), _fmt8(half)
+
+
 class _Converter:
     """Normalized equity -> the block's currency, in one ply's frame."""
 
-    def __init__(self, ply: dict, mwc: bool):
+    def __init__(self, ply: dict, mwc: bool, source=None):
         if mwc:
-            inv = mwc_frame_inverse(ply)
+            inv = mwc_frame_inverse(ply, None if source is None else R.frame_from_wire(
+                *source, frame_perspective_is_white(ply)))
             if inv is None:
                 raise ValueError("a match-play decision with no score frame cannot be written as MWC")
             self.eq, self.delta = inv
@@ -637,11 +666,14 @@ def _common_label(match: "_Match", select) -> str | None:
 
 
 def _block_records(match: _Match, select, block_level: dict, luck_label: str | None):
-    """``(decs, extra)``: the records ``DECS`` holds, sorted, and the per-ply
-    records only the annotation can hold."""
+    """``(decs, extra, frames)``: the records ``DECS`` holds, sorted, the
+    per-ply records only the annotation can hold, and the ``frame=`` entries
+    for plies whose source frame is not ours."""
     mwc = match.match_length > 0
     decs: list[tuple[int, int, bytes]] = []
     extra: dict[int, list[tuple[int, bytes]]] = {}
+    frames: list[str] = []
+    in_force = None
     plies = match.ply_at
     for idx, (key, p) in enumerate(plies):
         a = select(p)
@@ -649,7 +681,11 @@ def _block_records(match: _Match, select, block_level: dict, luck_label: str | N
             continue
         ref = match.ref_of[key]
         action = int(p.get("action_id") if p.get("action_id") is not None else 30)
-        conv = _Converter(p, mwc)
+        source = _source_frame(p, a) if mwc else None
+        if source != in_force:
+            frames.append(f"{ref}:" if source is None else f"{ref}:{source[0]}:{source[1]}")
+            in_force = source
+        conv = _Converter(p, mwc, source)
         illegal = ref in match.illegal
         recs: list[tuple[int, bytes, bool]] = []      # (kind, bytes, main-capable)
 
@@ -707,7 +743,7 @@ def _block_records(match: _Match, select, block_level: dict, luck_label: str | N
     decs.sort(key=lambda t: (t[0], t[1]))
     for ref in extra:
         extra[ref].sort(key=lambda t: t[0])
-    return decs, extra
+    return decs, extra, frames
 
 
 def _flag_exceptions(doc_obj_by_key: dict, decoded_by_key: dict) -> list[str]:
@@ -777,7 +813,7 @@ def write_ogxm2(ogxm: dict) -> bytes:
         if info.get("ply"):
             block_level["checker_ply"] = int(info["ply"])
         luck_label = info.get("luck_eval_level") or "1ply"
-        decs, extra = _block_records(match, select, block_level, luck_label)
+        decs, extra, frames = _block_records(match, select, block_level, luck_label)
 
         anal_fields: dict[int, bytes] = {}
         if block_level:
@@ -786,6 +822,9 @@ def write_ogxm2(ogxm: dict) -> bytes:
             anal_fields[5] = _str(info["model_id"])
         anal_fields[9] = _varint(R.CURRENCY_CUBEFUL_MATCH if match.match_length > 0
                                  else R.CURRENCY_CUBEFUL_MONEY)
+        met_id = info.get("met_id") or ("kazaross-xg2" if match.match_length > 0 else None)
+        if met_id:
+            anal_fields[11] = _str(met_id)
         if info.get("timestamp"):
             anal_fields[14] = _varint(int(info["timestamp"]) * 1000)
         if info.get("duration_ms"):
@@ -801,7 +840,8 @@ def write_ogxm2(ogxm: dict) -> bytes:
                      for ref, recs in extra.items()}
         _info, decoded, _luck = R._v1_block(
             anal_dec, R._decode_decs(decs_payload), match.ply_at, match.match_length,
-            ours={"extra": extra_dec, "exceptions": set(), "illegal": match.illegal})
+            ours={"extra": extra_dec, "exceptions": set(), "illegal": match.illegal,
+                  "frames": R._parse_frames(",".join(frames))})
         want = {(match.ref_of[key], key): select(p) for key, p in match.ply_at
                 if isinstance(select(p), dict)}
         tokens = _flag_exceptions(want, decoded)
@@ -813,6 +853,8 @@ def write_ogxm2(ogxm: dict) -> bytes:
                 k == R.KIND_ROLL for recs in extra.values() for k, _b in recs):
             items.append("luck=" + quote(luck_label, safe=_SAFE))
         items.append("pr=" + ",".join(tokens))
+        if frames:
+            items.append("frame=" + ",".join(frames))
         for key_, value in _chunked(R.GV_KEY_ANALYSIS + aid_str, R.GV_FORMAT + ";".join(items)):
             match.annos.append((SCOPE_MATCH, 0, key_, value))
         for ref, recs in extra.items():

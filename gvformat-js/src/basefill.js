@@ -112,11 +112,13 @@ function _normalizer(ply) {
 /**
  * The same map as `_normalizer`, plus its slope alone for a *difference* of two
  * MWCs (an equity loss, a luck) -- which converts by the span and never by the
- * midpoint. Exported for `ogxm2.js`, whose blocks state their currency outright
+ * midpoint. `frame` is a source's own `[mid, half]` for this ply (BGBlitz's,
+ * say, whose match equity table is not ours); given, it stands in for the
+ * table. Exported for `ogxm2.js`, whose blocks state their currency outright
  * and so convert every value in them, not only the three cube values.
  */
-export function mwcFrame(ply) {
-  const anchors = _frameAnchors(ply);
+export function mwcFrame(ply, frame = null) {
+  const anchors = _frameAnchors(ply, frame);
   if (anchors === null) return null;
   const [mid, span] = anchors;
   return {
@@ -130,8 +132,8 @@ export function mwcFrame(ply) {
  * normalized equity onto this ply's MWC, or null where `mwcFrame` has no frame
  * either. Unrounded -- the writer quantizes.
  */
-export function mwcFrameInverse(ply) {
-  const anchors = _frameAnchors(ply);
+export function mwcFrameInverse(ply, frame = null) {
+  const anchors = _frameAnchors(ply, frame);
   if (anchors === null) return null;
   const [mid, span] = anchors;
   return {
@@ -140,22 +142,47 @@ export function mwcFrameInverse(ply) {
   };
 }
 
-/** `[mid, span]` of the MWC interval this ply's equities normalize over. */
-function _frameAnchors(ply) {
+/**
+ * `[away1, away2, cubeValue, isCrawford]` of the frame this ply's equities
+ * normalize over, in the doubler's (a mover's own) perspective -- the one
+ * `mwcFrame` uses -- or null where there is no match-play frame.
+ */
+export function frameKey(ply) {
   const ctx = _parseOgidContext(ply.ogid_before);
   if (ctx == null) return null;
   if (ctx.matchLength <= 0) return null; // money play: already equity
   const awayW = ctx.matchLength - ctx.scoreW;
   const awayB = ctx.matchLength - ctx.scoreB;
-  const answering = _TAKE_PASS_ACTIONS.has(ply.action_id);
-  const doublerIsWhite = answering ? ply.color !== 1 : ply.color === 1;
-  const away1 = doublerIsWhite ? awayW : awayB;
-  const away2 = doublerIsWhite ? awayB : awayW;
+  const white = framePerspectiveIsWhite(ply);
+  const away1 = white ? awayW : awayB;
+  const away2 = white ? awayB : awayW;
   if (away1 <= 0 || away2 <= 0) return null;
-  const [mwcWin, mwcLose] = mwcAnchors(away1, away2, ctx.cubeValue, ctx.isCrawford);
-  const span = mwcWin - mwcLose;
+  return [away1, away2, ctx.cubeValue, ctx.isCrawford];
+}
+
+/** Is the frame's owner White? The doubler's, so on a take or a pass the
+ *  opponent of the ply's own colour. */
+export function framePerspectiveIsWhite(ply) {
+  const answering = _TAKE_PASS_ACTIONS.has(ply.action_id);
+  return answering ? ply.color !== 1 : ply.color === 1;
+}
+
+/** `[mid, span]` of the MWC interval this ply's equities normalize over. A
+ *  source's `frame` (`[mid, half]`) replaces the table's anchors. */
+function _frameAnchors(ply, frame = null) {
+  const key = frameKey(ply);
+  if (key === null) return null;
+  let mid, span;
+  if (frame != null) {
+    mid = frame[0];
+    span = 2 * frame[1];
+  } else {
+    const [mwcWin, mwcLose] = mwcAnchors(key[0], key[1], key[2], key[3]);
+    span = mwcWin - mwcLose;
+    mid = (mwcWin + mwcLose) / 2;
+  }
   if (span === 0) return null;
-  return [(mwcWin + mwcLose) / 2, span];
+  return [mid, span];
 }
 
 /** The three cube values a payload carries, if it carries them. */

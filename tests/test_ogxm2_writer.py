@@ -38,6 +38,7 @@ from gvformat import (  # noqa: E402
     append_analysis, convert_bgf, convert_mat, convert_xg, read_gvab, write_gvab, write_gvab_v1,
 )
 from gvformat import ogxm2 as R  # noqa: E402
+from gvformat.bgf import decode_smile, read_bgf  # noqa: E402
 
 _SAMPLES = _REPO_ROOT / "samples"
 _GOLDEN = _REPO_ROOT / "tests" / "golden"
@@ -132,6 +133,10 @@ def _rule(path: list, key: str, v1, v2, ctx: dict) -> str | None:
         return "no-first-move"                     # a game with no play to take it from
     if key == "luck_eval_level" and v2 is None and not ctx.get("has_luck"):
         return "luck-level"                        # v1's default, on a block with no luck
+    if key == "met_id" and v1 is None and isinstance(v2, str):
+        return "met-id"                            # the table a block's equities come from, v2's ANAL
+    if key == "mwc_frame" and v1 is None and isinstance(v2, list):
+        return "mwc-frame"                         # a source's own MWC frame, in the block annotation
     return None
 
 
@@ -205,6 +210,124 @@ def _ply_blocks(p1: dict, p2: dict):
 
 
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# BGBlitz's own frame
+# ---------------------------------------------------------------------------
+
+def _bgf_frame_checks() -> None:
+    """The v2 file of a BGBlitz match holds BGBlitz's own MWCs, not ours."""
+    print("\n--- 5. BGBlitz's own match equity frame ---")
+    total = covered = 0
+    missed: list = []
+    worst = 0.0          # largest deviation, in units of the tolerance
+    worst_abs = 0.0
+    compared = 0
+    luck_compared = 0
+    for f in sorted((_SAMPLES / "bgf").glob("*.bgf")):
+        doc = convert_bgf(f)
+        if not doc["match_length"]:
+            continue
+        data = write_gvab(doc)
+        back = read_gvab(data)
+
+        # Coverage: every analysed ply has a frame.
+        for gi, g in enumerate(doc["games"]):
+            for pi, p in enumerate(g["plies"]):
+                if isinstance(p.get("analysis"), dict):
+                    total += 1
+                    if "mwc_frame" in p["analysis"]:
+                        covered += 1
+                    else:
+                        missed.append((f.name, gi, pi, p["action_id"]))
+        check(doc["analysis_info"].get("met_id") == "bgblitz"
+              and back["analysis_info"].get("met_id") == "bgblitz",
+              f"5. {f.name}: the block names BGBlitz's table")
+
+        # Read-back: the document's own normalized equities, and its frames.
+        same = True
+        for g1, g2 in zip(doc["games"], back["games"]):
+            for p1, p2 in zip(g1["plies"], g2["plies"]):
+                a1, a2 = p1.get("analysis") or {}, p2.get("analysis") or {}
+                if a1.get("mwc_frame") != a2.get("mwc_frame") or a1.get("luck") != a2.get("luck"):
+                    same = False
+                if [x["equity"] for x in a1.get("alternatives") or []] != [
+                        x["equity"] for x in a2.get("alternatives") or []]:
+                    same = False
+                for key in ("cube_decision", "missed_double"):
+                    c1, c2 = a1.get(key), a2.get(key)
+                    if isinstance(c1, dict) and any(
+                            c1.get(k) != (c2 or {}).get(k) for k in (
+                                "no_double_equity", "double_take_equity", "double_pass_equity")):
+                        same = False
+                for k in ("no_double_equity", "double_take_equity", "double_pass_equity"):
+                    if k in a1 and a1[k] != a2.get(k):
+                        same = False
+        check(same, f"5. {f.name}: read back, equities, luck and frames equal the document's")
+
+        # The stored MWC of every checker alternative against BGBlitz's cubeful MWC.
+        decs = []
+        for stype, _pos, payload in R._walk_sections(data, len(data)):
+            if stype == b"DECS":
+                decs = R._decode_decs(payload)
+        by_ref = {d["ply_ref"]: d for d in decs if d["kind"] == R.KIND_CHECKER}
+        luck_by_ref = {d["ply_ref"]: d["luck"] for d in decs if d["kind"] == R.KIND_ROLL}
+        header, smile = read_bgf(f)
+        raw = decode_smile(smile)
+        refs = [(gi, pi, p) for gi, g in enumerate(doc["games"]) for pi, p in enumerate(g["plies"])]
+        ref_of = {(gi, pi): i for i, (gi, pi, _p) in enumerate(refs)}
+        bad = 0
+        for gi, (g, rg) in enumerate(zip(doc["games"], raw["games"])):
+            checkers = [pi for pi, p in enumerate(g["plies"]) if p["action_id"] <= 20 or p["action_id"] == 31]
+            records = [m for m in rg["moves"] if m.get("from", [-1])[0] != -1]
+            if len(checkers) != len(records):
+                bad += 1
+                continue
+            for pi, m in zip(checkers, records):
+                a = g["plies"][pi].get("analysis") or {}
+                half = a["mwc_frame"][1] if "mwc_frame" in a else None
+                ref = ref_of[(gi, pi)]
+                if half is not None and ref in luck_by_ref and (m.get("luck") or {}).get("luckPlain") is not None:
+                    dev = abs(luck_by_ref[ref] - float(m["luck"]["luckPlain"]))
+                    luck_compared += 1
+                    if dev > 0.5e-4 * half + 2e-6:
+                        bad += 1
+                d = by_ref.get(ref)
+                mas = m.get("moveAnalysis") or []
+                if d is None or half is None or len(d.get("alternatives") or []) != len(mas):
+                    continue
+                for alt, ma in zip(d["alternatives"], mas):
+                    eq = ma.get("eq") or {}
+                    if not eq.get("hasEMG", True):
+                        continue
+                    cd = eq.get("cubeDecision")
+                    want = float(cd["eqCubeFul"] if cd else eq["matchEquity"])
+                    dev = abs(alt["equity"] - want)
+                    tol = 0.5e-4 * half + 2e-6
+                    compared += 1
+                    worst = max(worst, dev / tol)
+                    worst_abs = max(worst_abs, dev)
+                    if dev > tol:
+                        bad += 1
+        check(bad == 0, f"5. {f.name}: stored MWCs are BGBlitz's own ({bad} off)")
+
+    pct = 100.0 * covered / total if total else 0.0
+    print(f"coverage: {covered}/{total} analysed BGBlitz plies carry a frame ({pct:.1f}%)")
+    if missed:
+        print(f"  without: {missed[:20]}")
+    print(f"alternatives compared: {compared}; luck: {luck_compared}; max deviation "
+          f"{worst_abs:.2e} MWC ({worst:.2f} of the tolerance)")
+    check(total > 0 and covered == total, "5. every analysed BGBlitz match-play ply carries a frame")
+    check(compared > 500, f"5. checker alternatives were compared ({compared})")
+
+    # Points awarded in the last game of a session.
+    for name, white_wins, points in (("B4_SrGcsKAQmoTyHlgJCbM", False, 6), ("Sz-2PgKnvb6aFls69-qFXg", True, 1)):
+        f = _SAMPLES / "bgf" / f"{name}.bgf"
+        if f.exists():
+            last = convert_bgf(f)["games"][-1]
+            check(last["points_won"] == points and last["winner"] == (0 if white_wins else 1),
+                  f"5. {name}: the last game is worth {points} (got {last['points_won']})")
+
 
 def main() -> int:
     try:
@@ -298,6 +421,8 @@ def main() -> int:
     stated["white_score"] = max(0, stated["white_score"] - 1)
     check(read_gvab(write_gvab(stated))["white_score"] == stated["white_score"],
           "4. a stated score the games do not add up to is kept")
+
+    _bgf_frame_checks()
 
     print(f"\n{_checks - len(_failures)}/{_checks} checks passed.")
     if _failures:

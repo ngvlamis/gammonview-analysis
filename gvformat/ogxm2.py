@@ -55,7 +55,8 @@ import zlib
 from urllib.parse import unquote
 
 from .basefill import (
-    _checker_is_decision, _cube_ply_is_decision, _trivial_cube, complete_base_block, mwc_frame,
+    _checker_is_decision, _cube_ply_is_decision, _trivial_cube, complete_base_block,
+    frame_perspective_is_white, mwc_frame,
 )
 from .binary import DICE_TABLE
 from .reader import (
@@ -446,7 +447,7 @@ def _decode_anal(payload: bytes) -> dict:
     if has(10):
         body.u16()                                     # cube_efficiency
     if has(11):
-        body.str()                                     # met_id
+        a["met_id"] = body.str()
     if has(12):
         body.str()                                     # tables
     if has(13):
@@ -934,12 +935,45 @@ def _apply_exceptions(analysis: dict, letters: set) -> None:
             analysis["illegal_move"] = True
 
 
+def frame_from_wire(mid_white: str, half: str, white: bool) -> list[float]:
+    """A source ``[mid, half]`` from the strings ``x-gammonview-analysis``'s
+    ``frame=`` item holds, in the perspective of a ply whose frame owner is
+    White (or not). Rounded to the eight places the item carries, so a
+    document that states a frame and one read back from it agree exactly."""
+    mid = float(mid_white)
+    return [round(mid if white else 1 - mid, 8), round(float(half), 8)]
+
+
+def _parse_frames(value: str) -> list[tuple[int, tuple[str, str] | None]]:
+    """``frame=``: ``<ply_ref>:<mid_white>:<half>`` entries, each in force from
+    its ply until the next; ``<ply_ref>:`` ends a run with no source frame."""
+    out = []
+    for entry in value.split(","):
+        if not entry:
+            continue
+        ref, _, rest = entry.partition(":")
+        mid, _, half = rest.partition(":")
+        out.append((int(ref), (mid, half) if mid else None))
+    return sorted(out, key=lambda e: e[0])
+
+
+def _frame_in_force(frames: list, ref: int):
+    """The ``(mid_white, half)`` in force at ``ref``, or None."""
+    state = None
+    for at, st in frames:
+        if at > ref:
+            break
+        state = st
+    return state
+
+
 def _v1_block(anal: dict, decisions: list[dict], ply_at: list, match_length: int,
               ours: dict | None = None):
     """One v2 analysis block in v1's shape. ``ours`` is set for a block our
     writer made: ``{"extra": {ply_ref: [records]}, "exceptions": {tokens},
-    "illegal": {ply_refs}}`` -- the annotation's decision records, which stand
-    in for ``DECS``'s at their ply and kind, and the flags to flip."""
+    "illegal": {ply_refs}, "frames": [...]}`` -- the annotation's decision
+    records, which stand in for ``DECS``'s at their ply and kind, the flags to
+    flip, and the source frames its values were converted through."""
     block_level = _resolve({}, anal.get("level"))
     block_mwc = match_length > 0 and anal.get("currency") == CURRENCY_CUBEFUL_MATCH
     block_obj: dict = {}
@@ -963,8 +997,12 @@ def _v1_block(anal: dict, decisions: list[dict], ply_at: list, match_length: int
         mwc = (match_length > 0 and currency == CURRENCY_CUBEFUL_MATCH
                if kind == KIND_CUBE else block_mwc)
         # A ply with no frame cannot be converted; its decision is dropped
-        # rather than shown in the wrong unit.
-        frame = mwc_frame(ply) if mwc else _IDENTITY
+        # rather than shown in the wrong unit. A block that states the source's
+        # own frame for the ply converts through that, not through our table.
+        wire = _frame_in_force(ours["frames"], d["ply_ref"]) if mine and mwc else None
+        source = (frame_from_wire(*wire, frame_perspective_is_white(ply))
+                  if wire is not None else None)
+        frame = mwc_frame(ply, source) if mwc else _IDENTITY
         if frame is None:
             continue
 
@@ -995,6 +1033,9 @@ def _v1_block(anal: dict, decisions: list[dict], ply_at: list, match_length: int
             ref = ref_of[key]
             default_flags(ply_at[ref][1], obj, ref in ours["illegal"])
             _apply_exceptions(obj, flips.get(ref, set()))
+            wire = _frame_in_force(ours["frames"], ref) if block_mwc else None
+            if wire is not None:
+                obj["mwc_frame"] = frame_from_wire(*wire, frame_perspective_is_white(ply_at[ref][1]))
 
     info: dict = {"ply": block_level.get("checker_ply") or 0}
     if mine:
@@ -1008,6 +1049,8 @@ def _v1_block(anal: dict, decisions: list[dict], ply_at: list, match_length: int
     elif block_level.get("rollout") is not None:
         info["eval_level"] = "rollout"
     info["model_id"] = _model_id(anal)
+    if anal.get("met_id"):
+        info["met_id"] = anal["met_id"]
     info["timestamp"] = anal["started_at"] // 1000 if "started_at" in anal else 0
     if anal.get("duration_ms"):
         info["duration_ms"] = anal["duration_ms"]
@@ -1161,6 +1204,7 @@ def read_ogxm2(data: bytes, *, verify_crc: bool = True, derive_ogids: bool = Tru
                 ours["level"] = unquote(items["level"]) or None
             if "luck" in items:
                 ours["luck"] = unquote(items["luck"])
+            ours["frames"] = _parse_frames(items.get("frame", ""))
         info, block_obj, has_luck = _v1_block(
             blk["anal"], blk["decisions"], ply_at, ogxm["match_length"], ours)
         if block_obj and ours is None:

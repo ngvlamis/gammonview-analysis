@@ -28,6 +28,7 @@ import sys
 import zlib
 from pathlib import Path
 
+from .basefill import frame_key
 from .binary import RESIGN_ACTIONS
 from .export import (
     _canonical_orientation, _flip_board, _notation_to_steps,
@@ -959,6 +960,98 @@ def _embedded_cube_analysis(
 
 
 # ---------------------------------------------------------------------------
+# BGBlitz's own match-equity frame
+# ---------------------------------------------------------------------------
+#
+# BGBlitz normalizes with a match equity table that is not ours (7-away/7-away
+# at cube 1: half-width 0.05954 against 0.0626). Its equities are stored
+# normalized, and what v2 stores is MWC, so converting them through our table
+# would write MWCs BGBlitz never computed. The file carries enough to recover
+# its frame -- ``eqCubeFul`` is BGBlitz's cubeful MWC, and every alternative's
+# ``emg`` is an exact affine image of it -- so the frame is measured here and
+# travels on each ply's analysis as ``mwc_frame = [mid, half]``: the mover's
+# MWC at normalized 0, and the half-width (MWC per unit of equity).
+
+#: Two alternatives this far apart in emg pin the affine map down; closer ones
+#: leave it dominated by rounding.
+_FRAME_MIN_SPREAD = 1e-3
+
+
+def _alternatives_frame(move_analysis: list[dict]) -> tuple[float, float] | None:
+    """``(mid, half)`` from the candidates' ``emg`` against ``eqCubeFul``. With
+    a dead cube (Crawford) there is no cube record, and the cubeless
+    ``matchEquity`` is the cubeful one."""
+    pts = []
+    for ma in move_analysis:
+        eq = ma.get("eq") or {}
+        if not eq.get("hasEMG", True):
+            continue
+        cd = eq.get("cubeDecision")
+        full = _flt(cd.get("eqCubeFul") if cd else eq.get("matchEquity"))
+        emg = _flt(eq.get("emg"))
+        if full <= _SENTINEL / 2 or emg <= _SENTINEL / 2:
+            continue
+        pts.append((emg, full))
+    if len(pts) < 2:
+        return None
+    # The widest pair, which is the best conditioned.
+    lo = min(pts)
+    hi = max(pts)
+    if hi[0] - lo[0] <= _FRAME_MIN_SPREAD:
+        return None
+    half = (hi[1] - lo[1]) / (hi[0] - lo[0])
+    if abs(half) < 1e-9:
+        return None
+    return hi[1] - hi[0] * half, half
+
+
+def _cube_frame(eq_obj: dict) -> tuple[float, float] | None:
+    """``(mid, half)`` from a live cube's record: its cubeless ``matchEquity``
+    and normalized ``emg`` against the double/pass MWC -- the calibration
+    ``_cube_decision_analysis`` and ``_embedded_cube_analysis`` make."""
+    cd = eq_obj.get("cubeDecision") or {}
+    if _flt(cd.get("eqNoDouble")) <= _SENTINEL / 2:
+        return None
+    dp = _flt(cd.get("eqDoublePass"))
+    emg = _flt(eq_obj.get("emg"))
+    meq = _flt(eq_obj.get("matchEquity"))
+    if dp <= _SENTINEL / 2 or abs(1.0 - emg) < 1e-9:
+        return None
+    half = (dp - meq) / (1.0 - emg)
+    if abs(half) < 1e-9:
+        return None
+    return dp - half, half
+
+
+def _attach_frames(
+    plies: list[dict], alt_sources: list[tuple[dict, list]],
+    cube_sources: list[tuple[dict, dict]],
+) -> None:
+    """Set ``analysis["mwc_frame"]`` on every analysed ply BGBlitz's own frame
+    is known for. The frame depends on both players' aways, the real cube value
+    and the Crawford flag, which is ``basefill.frame_key`` read off the ply, in
+    the perspective the v2 writer and reader will use for it. A key two sources
+    disagree on keeps the first (they agree to ~1e-5 in practice); one with no
+    source gets no field, and the writer falls back to our table."""
+    table: dict = {}
+    for ply, found in ([(p, _alternatives_frame(ma)) for p, ma in alt_sources]
+                       + [(p, _cube_frame(eq)) for p, eq in cube_sources]):
+        key = frame_key(ply)
+        if found is None or key is None:
+            continue
+        table.setdefault(key, found)
+    # The other player's frame at the same stake: the mirror image.
+    for (a, b, c, cr), (mid, half) in list(table.items()):
+        table.setdefault((b, a, c, cr), (1.0 - mid, half))
+    for ply in plies:
+        analysis = ply.get("analysis")
+        key = frame_key(ply) if isinstance(analysis, dict) else None
+        if key in table:
+            mid, half = table[key]
+            analysis["mwc_frame"] = [round(mid, 8), round(half, 8)]
+
+
+# ---------------------------------------------------------------------------
 # Notation from BGF move arrays
 # ---------------------------------------------------------------------------
 
@@ -1034,6 +1127,9 @@ def convert_bgf(source: "Path | str | bytes") -> dict:
 
     all_games = data.get("games", [])
     games_out: list[dict] = []
+    # What BGBlitz's own match-equity frame is measured from (match play).
+    alt_sources: list[tuple[dict, list]] = []
+    cube_sources: list[tuple[dict, dict]] = []
 
     for gi, g in enumerate(all_games):
         score_green = int(g.get("scoreGreen", 0))
@@ -1126,6 +1222,7 @@ def convert_bgf(source: "Path | str | bytes") -> dict:
                 if analysis:
                     ply["analysis"] = analysis
                 plies.append(ply)
+                cube_sources.append((ply, eq_full))
 
                 pending_nd_equity = analysis.get("no_double_equity") if analysis else None
 
@@ -1369,6 +1466,9 @@ def convert_bgf(source: "Path | str | bytes") -> dict:
                 plies.append(set_position_ply(
                     is_white, d1, d2, _canon_board(board), ogid_before, ogid_after,
                     analysis))
+                alt_sources.append((plies[-1], move_analysis))
+                if chk_state and cd_chk.get("hasDoubled") is None:
+                    cube_sources.append((plies[-1], eq_obj_full))
                 idx += 1
                 continue
 
@@ -1384,6 +1484,9 @@ def convert_bgf(source: "Path | str | bytes") -> dict:
             if analysis:
                 ply["analysis"] = analysis
             plies.append(ply)
+            alt_sources.append((ply, move_analysis))
+            if chk_state and cd_chk.get("hasDoubled") is None:
+                cube_sources.append((ply, eq_obj_full))
 
             idx += 1
 
@@ -1397,6 +1500,14 @@ def convert_bgf(source: "Path | str | bytes") -> dict:
         else:
             final_green = int(data.get("finalGreen", matchlen))
             winner_name = name_green if final_green > score_green else name_red
+            # The last game of a session can record no points won although the
+            # session's final score includes them. The award is the winner's
+            # final score less what they started the game with.
+            if won_pts == 0 and not g.get("wasResignation"):
+                if winner_name == name_green:
+                    won_pts = max(0, final_green - score_green)
+                else:
+                    won_pts = max(0, int(data.get("finalRed", 0)) - score_red)
 
         winner_is_white = winner_name == player_white
 
@@ -1505,6 +1616,17 @@ def convert_bgf(source: "Path | str | bytes") -> dict:
         except Exception:
             pass
 
+    analysis_info: dict = {
+        "ply": max(1, max_ply),
+        "eval_level": f"{max(1, max_ply)}ply",
+        "model_id": "bgblitz",
+        "timestamp": timestamp,
+    }
+    if matchlen:
+        # Its own table, so the frames below are what v2's MWCs are made from.
+        analysis_info["met_id"] = "bgblitz"
+        _attach_frames([p for gm in games_out for p in gm["plies"]], alt_sources, cube_sources)
+
     ogxm: dict = {
         "match_length": matchlen,
         "player_white": player_white,
@@ -1520,12 +1642,7 @@ def convert_bgf(source: "Path | str | bytes") -> dict:
         "cube_limit": int(data.get("cubeLimit", 64)),
         "event": event_str,
         "site": site_str,
-        "analysis_info": {
-            "ply": max(1, max_ply),
-            "eval_level": f"{max(1, max_ply)}ply",
-            "model_id": "bgblitz",
-            "timestamp": timestamp,
-        },
+        "analysis_info": analysis_info,
         "games": games_out,
     }
     return ogxm

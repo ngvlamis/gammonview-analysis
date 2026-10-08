@@ -62,7 +62,8 @@ import {
 } from './reader.js';
 import { _crc32, _b64decode } from './binary.js';
 import {
-  completeBaseBlock, mwcFrame, trivialCube, _checkerIsDecision, _cubePlyIsDecision,
+  completeBaseBlock, framePerspectiveIsWhite, mwcFrame, trivialCube, _checkerIsDecision,
+  _cubePlyIsDecision,
 } from './basefill.js';
 import { DICE_TABLE } from './constants.js';
 
@@ -404,7 +405,7 @@ function _decodeAnal(payload) {
   // The rest (cube efficiency, MET, tables, dials, start/end times, duration,
   // sources) is provenance, except the times, read below.
   if (has(10)) body.u16();
-  if (has(11)) body.str();
+  if (has(11)) a.met_id = body.str();
   if (has(12)) body.str();
   if (has(13)) body.record();                    // dials
   if (has(14)) a.started_at = body.varint64();
@@ -897,11 +898,48 @@ function _applyExceptions(analysis, letters) {
 }
 
 /**
+ * A source `[mid, half]` from the strings `x-gammonview-analysis`'s `frame=`
+ * item holds, in the perspective of a ply whose frame owner is White (or not).
+ * Rounded to the eight places the item carries, so a document that states a
+ * frame and one read back from it agree exactly.
+ */
+export function frameFromWire(midWhite, half, white) {
+  const mid = Number(midWhite);
+  return [Number((white ? mid : 1 - mid).toFixed(8)), Number(Number(half).toFixed(8))];
+}
+
+/**
+ * `frame=`: `<ply_ref>:<mid_white>:<half>` entries, each in force from its ply
+ * until the next; `<ply_ref>:` ends a run with no source frame. Returns
+ * `[[ref, [mid_white, half] | null], ...]` sorted by ref.
+ */
+export function _parseFrames(value) {
+  const out = [];
+  for (const entry of value.split(',')) {
+    if (!entry) continue;
+    const [ref, ...rest] = entry.split(':');
+    const mid = rest[0] || '';
+    out.push([parseInt(ref, 10), mid ? [mid, rest[1] || ''] : null]);
+  }
+  return out.sort((x, y) => x[0] - y[0]);
+}
+
+/** The `[mid_white, half]` in force at `ref`, or null. */
+function _frameInForce(frames, ref) {
+  let state = null;
+  for (const [at, st] of frames) {
+    if (at > ref) break;
+    state = st;
+  }
+  return state;
+}
+
+/**
  * One v2 analysis block -> `[analysisInfo, Map<"gi,pi", analysis>, hasLuck]`.
  * `ours` is set for a block our writer made: `{extra: Map<ply_ref, records>,
- * exceptions: Set<token>, illegal: Set<ply_ref>}` -- the annotation's decision
- * records, which stand in for `DECS`'s at their ply and kind, and the flags to
- * flip.
+ * exceptions: Set<token>, illegal: Set<ply_ref>, frames}` -- the annotation's
+ * decision records, which stand in for `DECS`'s at their ply and kind, the
+ * flags to flip, and the source frames its values were converted through.
  *
  * @param {object[]} plyAt  ply_ref -> {key, ply} (ply already carries its OGIDs)
  */
@@ -930,8 +968,13 @@ export function _v1Block(anal, decisions, plyAt, matchLength, ours = null) {
     const mwc = d.kind === KIND_CUBE
       ? matchLength > 0 && currency === CURRENCY_CUBEFUL_MATCH : blockMwc;
     // A ply with no frame (one past a replay failure) cannot be converted; its
-    // decision is dropped rather than shown in the wrong unit.
-    const frame = mwc ? mwcFrame(ply) : _identity;
+    // decision is dropped rather than shown in the wrong unit. A block that
+    // states the source's own frame for the ply converts through that, not
+    // through our table.
+    const wire = mine && mwc ? _frameInForce(ours.frames, d.ply_ref) : null;
+    const source = wire !== null
+      ? frameFromWire(wire[0], wire[1], framePerspectiveIsWhite(ply)) : null;
+    const frame = mwc ? mwcFrame(ply, source) : _identity;
     if (frame === null) continue;
 
     const action = ply.action_id;
@@ -970,6 +1013,10 @@ export function _v1Block(anal, decisions, plyAt, matchLength, ours = null) {
       const ref = refOf.get(key);
       defaultFlags(plyAt[ref].ply, obj, ours.illegal.has(ref));
       _applyExceptions(obj, flips.get(ref) || new Set());
+      const wire = blockMwc ? _frameInForce(ours.frames, ref) : null;
+      if (wire !== null) {
+        obj.mwc_frame = frameFromWire(wire[0], wire[1], framePerspectiveIsWhite(plyAt[ref].ply));
+      }
     }
   }
 
@@ -984,6 +1031,7 @@ export function _v1Block(anal, decisions, plyAt, matchLength, ours = null) {
     info.eval_level = 'rollout';
   }
   info.model_id = _modelId(anal);
+  if (anal.met_id) info.met_id = anal.met_id;
   info.timestamp = anal.started_at !== undefined ? Number(anal.started_at / 1000n) : 0;
   if (anal.duration_ms) info.duration_ms = anal.duration_ms;
   if (luckLevels.size === 1) {
@@ -1151,6 +1199,7 @@ export function _readOgxm2(data, options) {
       };
       if (items.has('level')) ours.level = _unquote(items.get('level')) || null;
       if (items.has('luck')) ours.luck = _unquote(items.get('luck'));
+      ours.frames = _parseFrames(items.get('frame') || '');
     }
     const [info, blockObj, hasLuck] = _v1Block(anal, decisions, plyAt, ogxm.match_length, ours);
     if (blockObj.size && ours === null) {

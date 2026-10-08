@@ -16,6 +16,7 @@ import {
 import { RESIGN_ACTIONS } from "./constants.js";
 import { isPlayLegal } from "./legality.js";
 import { canonicalNotation, fromBgfAbsFrame } from "./notation.js";
+import { frameKey } from "./basefill.js";
 
 // ---------------------------------------------------------------------------
 // Local helper
@@ -26,7 +27,7 @@ function _probsToEval(probs) {
   const equity = win + gwin + bgwin - gloss - bgloss;
   return {
     win, gammon_win: gwin, bg_win: bgwin,
-    gammon_loss: gloss, bg_loss: bgloss, equity: Math.round(equity * 10000) / 10000,
+    gammon_loss: gloss, bg_loss: bgloss, equity: round4(equity),
   };
 }
 
@@ -286,7 +287,18 @@ function stateResponse(state) {
   return null;
 }
 
-function round4(v) { return Math.round(v * 1e4) / 1e4; }
+// Python's `round(v, 4)`: correctly rounded on the double's exact value, where
+// `Math.round(v * 1e4)` rounds the product (0.61905 * 1e4 is 6190.5, though the
+// double is a hair under 0.61905), and ties to even. The only exact ties are odd
+// multiples of 1/32.
+function round4(v) {
+  const k = v * 32;
+  if (Number.isInteger(k) && Math.abs(k) % 2 === 1) {
+    const lo = Math.floor(v * 1e4);
+    return (lo % 2 === 0 ? lo : lo + 1) / 1e4;
+  }
+  return Number(v.toFixed(4));
+}
 
 // Cube decision so clear it should not count toward PR. Mirrors
 // gvanalysis.game_eval._trivial_cube / gvformat.xg.trivialCube.
@@ -813,6 +825,97 @@ export function embeddedCubeAnalysis(cdChk, eqObj, isMoneyGame, plyLevelStr, cou
 }
 
 // ---------------------------------------------------------------------------
+// BGBlitz's own match-equity frame
+// ---------------------------------------------------------------------------
+//
+// BGBlitz normalizes with a match equity table that is not ours (7-away/7-away
+// at cube 1: half-width 0.05954 against 0.0626). Its equities are stored
+// normalized, and what v2 stores is MWC, so converting them through our table
+// would write MWCs BGBlitz never computed. The file carries enough to recover
+// its frame -- `eqCubeFul` is BGBlitz's cubeful MWC, and every alternative's
+// `emg` is an exact affine image of it -- so the frame is measured here and
+// travels on each ply's analysis as `mwc_frame = [mid, half]`: the mover's MWC
+// at normalized 0, and the half-width (MWC per unit of equity).
+
+// Two alternatives this far apart in emg pin the affine map down; closer ones
+// leave it dominated by rounding.
+const FRAME_MIN_SPREAD = 1e-3;
+
+// `(mid, half)` from the candidates' `emg` against `eqCubeFul`. With a dead cube
+// (Crawford) there is no cube record, and the cubeless `matchEquity` is the
+// cubeful one.
+function alternativesFrame(moveAnalysis) {
+  const pts = [];
+  for (const ma of moveAnalysis) {
+    const eq = ma.eq || {};
+    if (!(eq.hasEMG ?? true)) continue;
+    const cd = eq.cubeDecision;
+    const full = flt(cd && Object.keys(cd).length ? cd.eqCubeFul : eq.matchEquity);
+    const emg = flt(eq.emg);
+    if (full <= SENTINEL / 2 || emg <= SENTINEL / 2) continue;
+    pts.push([emg, full]);
+  }
+  if (pts.length < 2) return null;
+  // The widest pair, which is the best conditioned.
+  pts.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  const lo = pts[0];
+  const hi = pts[pts.length - 1];
+  if (hi[0] - lo[0] <= FRAME_MIN_SPREAD) return null;
+  const half = (hi[1] - lo[1]) / (hi[0] - lo[0]);
+  if (Math.abs(half) < 1e-9) return null;
+  return [hi[1] - hi[0] * half, half];
+}
+
+// `(mid, half)` from a live cube's record: its cubeless `matchEquity` and
+// normalized `emg` against the double/pass MWC -- the calibration
+// `cubeDecisionAnalysis` and `embeddedCubeAnalysis` make.
+function cubeFrame(eqObj) {
+  const cd = eqObj.cubeDecision || {};
+  if (flt(cd.eqNoDouble) <= SENTINEL / 2) return null;
+  const dp = flt(cd.eqDoublePass);
+  const emg = flt(eqObj.emg);
+  const meq = flt(eqObj.matchEquity);
+  if (dp <= SENTINEL / 2 || Math.abs(1.0 - emg) < 1e-9) return null;
+  const half = (dp - meq) / (1.0 - emg);
+  if (Math.abs(half) < 1e-9) return null;
+  return [dp - half, half];
+}
+
+// Set `analysis.mwc_frame` on every analysed ply BGBlitz's own frame is known
+// for. The frame depends on both players' aways, the real cube value and the
+// Crawford flag, which is `frameKey` read off the ply, in the perspective the
+// v2 writer and reader will use for it. A key two sources disagree on keeps the
+// first (sources agree to ~1e-5 in practice); one with no source gets no field,
+// and the writer falls back to our table.
+function attachFrames(plies, altSources, cubeSources) {
+  const table = new Map();
+  const found = [
+    ...altSources.map(([p, ma]) => [p, alternativesFrame(ma)]),
+    ...cubeSources.map(([p, eq]) => [p, cubeFrame(eq)]),
+  ];
+  for (const [ply, fr] of found) {
+    const key = frameKey(ply);
+    if (fr === null || key === null) continue;
+    const k = key.join(",");
+    if (!table.has(k)) table.set(k, fr);
+  }
+  // The other player's frame at the same stake: the mirror image.
+  for (const [k, [mid, half]] of [...table]) {
+    const [a, b, c, cr] = k.split(",");
+    const mk = [b, a, c, cr].join(",");
+    if (!table.has(mk)) table.set(mk, [1.0 - mid, half]);
+  }
+  for (const ply of plies) {
+    const analysis = ply.analysis;
+    const key = analysis && typeof analysis === "object" ? frameKey(ply) : null;
+    const fr = key === null ? undefined : table.get(key.join(","));
+    if (fr !== undefined) {
+      analysis.mwc_frame = [Number(fr[0].toFixed(8)), Number(fr[1].toFixed(8))];
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Main converter
 // ---------------------------------------------------------------------------
 
@@ -860,6 +963,9 @@ export async function convertBgf(fileInput) {
 
   const allGames = data.games || [];
   const gamesOut = [];
+  // What BGBlitz's own match-equity frame is measured from (match play).
+  const altSources = [];
+  const cubeSources = [];
 
   for (let gi = 0; gi < allGames.length; gi++) {
     const g = allGames[gi];
@@ -947,6 +1053,7 @@ export async function convertBgf(fileInput) {
         };
         if (analysis) ply.analysis = analysis;
         plies.push(ply);
+        cubeSources.push([ply, eqFull]);
 
         pendingNdEquity = analysis ? analysis.no_double_equity : null;
 
@@ -1181,6 +1288,10 @@ export async function convertBgf(fileInput) {
       if (fitted === null) {
         plies.push(setPositionPly(
           isWhite, d1, d2, canonBoard(board), ogidBefore, ogidAfter, analysis));
+        altSources.push([plies[plies.length - 1], moveAnalysis]);
+        if (chkState && cdChk.hasDoubled == null) {
+          cubeSources.push([plies[plies.length - 1], eqObjFull]);
+        }
         idx++;
         continue;
       }
@@ -1195,12 +1306,14 @@ export async function convertBgf(fileInput) {
       };
       if (analysis) ply.analysis = analysis;
       plies.push(ply);
+      altSources.push([ply, moveAnalysis]);
+      if (chkState && cdChk.hasDoubled == null) cubeSources.push([ply, eqObjFull]);
 
       idx++;
     }
 
     // Game result
-    const wonPts = Number(g.wonPoints || 0);
+    let wonPts = Number(g.wonPoints || 0);
 
     // Determine winner
     let winnerName;
@@ -1214,6 +1327,14 @@ export async function convertBgf(fileInput) {
       // key itself is absent requires `??`, not `||`.
       const finalGreen = Number(data.finalGreen ?? matchlen);
       winnerName = finalGreen > scoreGreen ? nameGreen : nameRed;
+      // The last game of a session can record no points won although the
+      // session's final score includes them. The award is the winner's final
+      // score less what they started the game with.
+      if (wonPts === 0 && !g.wasResignation) {
+        wonPts = winnerName === nameGreen
+          ? Math.max(0, finalGreen - scoreGreen)
+          : Math.max(0, Number(data.finalRed ?? 0) - scoreRed);
+      }
     }
 
     const winnerIsWhite = winnerName === playerWhite;
@@ -1314,6 +1435,18 @@ export async function convertBgf(fileInput) {
     }
   }
 
+  const analysisInfo = {
+    ply: Math.max(1, maxPly),
+    eval_level: `${Math.max(1, maxPly)}ply`,
+    model_id: "bgblitz",
+    timestamp,
+  };
+  if (matchlen) {
+    // Its own table, so the frames below are what v2's MWCs are made from.
+    analysisInfo.met_id = "bgblitz";
+    attachFrames(gamesOut.flatMap((gm) => gm.plies), altSources, cubeSources);
+  }
+
   return {
     match_length: matchlen,
     player_white: playerWhite,
@@ -1329,12 +1462,7 @@ export async function convertBgf(fileInput) {
     cube_limit: Number(data.cubeLimit ?? 64),
     event: eventStr,
     site: siteStr,
-    analysis_info: {
-      ply: Math.max(1, maxPly),
-      eval_level: `${Math.max(1, maxPly)}ply`,
-      model_id: "bgblitz",
-      timestamp,
-    },
+    analysis_info: analysisInfo,
     games: gamesOut,
   };
 }

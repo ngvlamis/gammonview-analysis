@@ -16,6 +16,10 @@
 // `x-gammonview-analysis/<analysis_id>` (match scope, one per block)
 //     Marks the block as ours and lists the decisions whose PR-counting flag
 //     differs from the rule the reader derives it by (`defaultFlags`).
+//     It also carries `frame=` when a source normalized by a match equity table
+//     that is not ours (BGBlitz's): `<ply_ref>:<mid_white>:<half>` entries, each
+//     in force from its ply until the next, stating the MWC frame (`mwc_frame`
+//     on the document's analyses) so the file holds the source's own MWCs.
 // `x-gammonview-decisions/<analysis_id>` (ply scope)
 //     Decision records the block holds for a ply that the `DECS` stream cannot
 //     take as they are: everything on an illegal play (v2 allows no decision on
@@ -34,7 +38,7 @@
 // how the reader converts it back. A money block is cubeful money, written as
 // is.
 
-import { mwcFrameInverse } from './basefill.js';
+import { frameKey, framePerspectiveIsWhite, mwcFrameInverse } from './basefill.js';
 import { DICE_TABLE } from './constants.js';
 import { _round_c, _crc32, _b64encode } from './binary.js';
 import { _STARTING_BOARD_P1, _flipBoard, _p1ToAbsolute } from './export.js';
@@ -45,7 +49,7 @@ import {
   CURRENCY_CUBEFUL_MONEY, CURRENCY_CUBEFUL_MATCH,
   GV_FORMAT, GV_KEY_ANALYSIS, GV_KEY_DECISIONS, GV_KEY_ILLEGAL_PLY,
   GV_KEY_SITE, GV_KEY_EVENT, GV_KEY_SCORE,
-  _decodeAnal, _decodeDecs, _scoreWalk, _v1Block,
+  _decodeAnal, _decodeDecs, _scoreWalk, _v1Block, frameFromWire, _parseFrames,
 } from './ogxm2.js';
 
 const MAX_STRING = 4096;
@@ -607,11 +611,39 @@ function _analysisId(index, info, matchBytes) {
   return raw;
 }
 
+/** Eight places, trailing zeros dropped (`0.5`, `1`): the form a `frame=`
+ *  number takes, spelled so the Python original matches. */
+function _fmt8(x) {
+  let s = x.toFixed(8);
+  s = s.replace(/0+$/, '').replace(/\.$/, '');
+  return s === '-0' ? '0' : s;
+}
+
+/** `Number(x.toFixed(8))`: Python's `round(x, 8)`. */
+function _round8(x) {
+  return Number(x.toFixed(8));
+}
+
+/** `[mid_white, half]` as `frame=` spells them for this ply's analysis, or
+ *  null when it states no usable source frame. */
+function _sourceFrame(ply, analysis) {
+  const f = analysis.mwc_frame;
+  if (!Array.isArray(f) || f.length !== 2 || frameKey(ply) === null) return null;
+  let mid = Number(f[0]);
+  let half = Number(f[1]);
+  if (typeof f[0] === 'boolean' || typeof f[1] === 'boolean') return null;
+  if (!(Number.isFinite(mid) && Number.isFinite(half) && half > 0)) return null;
+  mid = _round8(mid);
+  half = _round8(half);
+  return [_fmt8(framePerspectiveIsWhite(ply) ? mid : 1 - mid), _fmt8(half)];
+}
+
 /** Normalized equity -> the block's currency, in one ply's frame. */
 class _Converter {
-  constructor(ply, mwc) {
+  constructor(ply, mwc, source = null) {
     if (mwc) {
-      const inv = mwcFrameInverse(ply);
+      const inv = mwcFrameInverse(
+        ply, source === null ? null : frameFromWire(source[0], source[1], framePerspectiveIsWhite(ply)));
       if (inv === null) {
         throw new Error('a match-play decision with no score frame cannot be written as MWC');
       }
@@ -783,12 +815,15 @@ function _commonLabel(match, select) {
   return counts.size ? bestLabel : null;
 }
 
-/** `[decs, extra]`: the records `DECS` holds, sorted, and the per-ply records
- *  only the annotation can hold. */
+/** `[decs, extra, frames]`: the records `DECS` holds, sorted, the per-ply
+ *  records only the annotation can hold, and the `frame=` entries for plies
+ *  whose source frame is not ours. */
 function _blockRecords(match, select, blockLevel, luckLabel) {
   const mwc = match.match_length > 0;
   const decs = [];                      // [ref, kind, bytes]
   const extra = new Map();              // ref -> [[kind, bytes]]
+  const frames = [];
+  let inForce = null;
   const plies = match.ply_at;
   const addExtra = (ref, kind, rec) => {
     if (!extra.has(ref)) extra.set(ref, []);
@@ -799,7 +834,12 @@ function _blockRecords(match, select, blockLevel, luckLabel) {
     if (a === null || a === undefined || typeof a !== 'object') return;
     const ref = match.ref_of.get(key);
     const action = _int(p.action_id !== null && p.action_id !== undefined ? p.action_id : 30);
-    const conv = new _Converter(p, mwc);
+    const source = mwc ? _sourceFrame(p, a) : null;
+    if ((source === null ? '' : source.join(':')) !== (inForce === null ? '' : inForce.join(':'))) {
+      frames.push(source === null ? `${ref}:` : `${ref}:${source[0]}:${source[1]}`);
+      inForce = source;
+    }
+    const conv = new _Converter(p, mwc, source);
     const illegal = match.illegal.has(ref);
     const recs = [];                    // [kind, bytes, main-capable]
 
@@ -857,7 +897,7 @@ function _blockRecords(match, select, blockLevel, luckLabel) {
   });
   decs.sort((x, y) => x[0] - y[0] || x[1] - y[1]);
   for (const recs of extra.values()) recs.sort((x, y) => x[0] - y[0]);
-  return [decs, extra];
+  return [decs, extra, frames];
 }
 
 /** Tokens for every flag where the document disagrees with the reader's
@@ -942,12 +982,14 @@ export function write_ogxm2(ogxm) {
     if (common) blockLevel.preset = common;
     if (info.ply) blockLevel.checker_ply = _int(info.ply);
     const luckLabel = info.luck_eval_level || '1ply';
-    const [decs, extra] = _blockRecords(match, select, blockLevel, luckLabel);
+    const [decs, extra, frames] = _blockRecords(match, select, blockLevel, luckLabel);
 
     const analFields = {};
     if (Object.keys(blockLevel).length) analFields[2] = _levelBytes(blockLevel);
     if (info.model_id) analFields[5] = _str(info.model_id);
     analFields[9] = _varint(match.match_length > 0 ? CURRENCY_CUBEFUL_MATCH : CURRENCY_CUBEFUL_MONEY);
+    const metId = info.met_id || (match.match_length > 0 ? 'kazaross-xg2' : null);
+    if (metId) analFields[11] = _str(metId);
     if (info.timestamp) analFields[14] = _varint(_int(info.timestamp) * 1000);
     if (info.duration_ms) analFields[16] = _varint(_int(info.duration_ms));
     const anal = _record(aid, analFields);
@@ -960,7 +1002,8 @@ export function write_ogxm2(ogxm) {
     for (const [ref, recs] of extra) extraDec.set(ref, _decodeDecs(_cat(...recs.map((r) => r[1]))));
     const [, decoded] = _v1Block(
       analDec, _decodeDecs(decsPayload), match.ply_at, match.match_length,
-      { extra: extraDec, exceptions: new Set(), illegal: match.illegal });
+      { extra: extraDec, exceptions: new Set(), illegal: match.illegal,
+        frames: _parseFrames(frames.join(',')) });
     const want = [];
     for (const { key, ply: p } of match.ply_at) {
       const s = select(p);
@@ -979,6 +1022,7 @@ export function write_ogxm2(ogxm) {
       items.push(`luck=${_quote(luckLabel, _SAFE)}`);
     }
     items.push(`pr=${tokens.join(',')}`);
+    if (frames.length) items.push(`frame=${frames.join(',')}`);
     for (const [key, value] of _chunked(GV_KEY_ANALYSIS + aidStr, GV_FORMAT + items.join(';'))) {
       match.annos.push([SCOPE_MATCH, 0, key, value]);
     }

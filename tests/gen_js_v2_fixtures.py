@@ -6,7 +6,9 @@
 ``gvformat-js/test/test-ogxm2-writer.js`` reads every ``samples/gv/*.gvab``
 (v1), writes it with the JavaScript ``write_gvab`` (v2), and checks the bytes
 against the SHA-256 recorded here -- the two writers must agree byte for byte,
-because a file is the same file whichever side of GammonView wrote it.
+because a file is the same file whichever side of GammonView wrote it. The same
+for every ``samples/bgf/*.bgf``, converted by each language's own converter
+(BGBlitz's match equity frame travels from the converter through the writer).
 
 Rerun after a change to either writer, and commit the result with it:
     uv run python tests/gen_js_v2_fixtures.py
@@ -22,9 +24,10 @@ from pathlib import Path
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_REPO_ROOT))
 
-from gvformat import read_gvab, write_gvab  # noqa: E402
+from gvformat import convert_bgf, read_gvab, write_gvab  # noqa: E402
 
 OUT = _REPO_ROOT / "gvformat-js" / "test" / "fixtures" / "ogxm2" / "writer-sha256.json"
+OUT_BGF = _REPO_ROOT / "gvformat-js" / "test" / "fixtures" / "ogxm2" / "bgf-writer-sha256.json"
 
 
 def main() -> int:
@@ -34,6 +37,13 @@ def main() -> int:
         pinned[f.name] = {"sha256": hashlib.sha256(data).hexdigest(), "length": len(data)}
     OUT.write_text(json.dumps(pinned, indent=2, sort_keys=True) + "\n")
     print(f"wrote {OUT.relative_to(_REPO_ROOT)} ({len(pinned)} files)")
+
+    bgf = {}
+    for f in sorted((_REPO_ROOT / "samples" / "bgf").glob("*.bgf")):
+        data = write_gvab(convert_bgf(f))
+        bgf[f.name] = {"sha256": hashlib.sha256(data).hexdigest(), "length": len(data)}
+    OUT_BGF.write_text(json.dumps(bgf, indent=2, sort_keys=True) + "\n")
+    print(f"wrote {OUT_BGF.relative_to(_REPO_ROOT)} ({len(bgf)} files)")
     return 0
 
 
