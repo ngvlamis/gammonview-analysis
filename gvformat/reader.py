@@ -785,6 +785,15 @@ def _read_gvab(data: bytes, *, verify_crc: bool, derive_ogids: bool) -> dict:
     magic, _vmaj, _vmin, rmaj, rmin, file_size, _hflags = struct.unpack_from("<IHHHHII", data, 0)
     if magic != OGXM_MAGIC:
         raise GvabError(f"bad magic 0x{magic:08X} (expected 0x{OGXM_MAGIC:08X})")
+    # OGXM v2 is a different container under the same magic -- a 16-byte
+    # header, varint-framed records, plies addressed by one ordinal -- so it is
+    # decoded separately and handed back in the shape this function returns.
+    # HedgeHog writes nothing else since its 2.0 release. Dispatched before the
+    # min_reader check below, which a v2 file fails by design (its min reader
+    # major is 2, precisely so that v1 readers refuse it cleanly).
+    if _vmaj >= 2:
+        from .ogxm2 import read_ogxm2
+        return read_ogxm2(data, verify_crc=verify_crc, derive_ogids=derive_ogids)
     # min_reader_* is the file's own statement of the spec version it needs.
     # Honouring it is the point of the field: a file using a later layout must
     # fail as a clean version mismatch, not be parsed optimistically into
@@ -964,6 +973,25 @@ def _read_gvab(data: bytes, *, verify_crc: bool, derive_ogids: bool) -> dict:
             base_blocks.append(len(blocks))
         blocks.append((analysis_info, block_obj))
 
+    _attach_blocks(ogxm, games, blocks, ply_by_key)
+
+    ogxm["games"] = games
+    if unknown:
+        ogxm["_unknown_chunks"] = unknown
+    if base_blocks:
+        ogxm["_base_analyses"] = base_blocks
+
+    return ogxm
+
+
+def _attach_blocks(ogxm: dict, games: list[dict], blocks: list, ply_by_key: dict) -> None:
+    """Hang decoded analysis blocks on the plies they describe.
+
+    ``blocks`` is ``(analysis_info, {(game_index, ply_index): analysis})`` per
+    block, primary first. Shared with ``ogxm2.py``, which builds the same pairs
+    from a v2 file, so the two versions cannot disagree about the shape that
+    comes out.
+    """
     if len(blocks) == 1:
         info, block_obj = blocks[0]
         for key, obj in block_obj.items():
@@ -997,14 +1025,6 @@ def _read_gvab(data: bytes, *, verify_crc: bool, derive_ogids: bool) -> dict:
             for k in ("ogid_before", "ogid_after"):
                 if k in ply:
                     ply[k] = ply.pop(k)
-
-    ogxm["games"] = games
-    if unknown:
-        ogxm["_unknown_chunks"] = unknown
-    if base_blocks:
-        ogxm["_base_analyses"] = base_blocks
-
-    return ogxm
 
 
 def canonicalize(ogxm: dict) -> dict:

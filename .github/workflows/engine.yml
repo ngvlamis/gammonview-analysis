@@ -1,4 +1,4 @@
-# The engine-backed half of the suite: the thirteen names in run_all.py's
+# The engine-backed half of the suite: the names in run_all.py's
 # ENGINE_BACKED set. They need the `[engine]` extra -- bgsage, a large compiled
 # wheel, plus pyyaml -- and they analyze a whole match, so they cost minutes
 # where ci.yml costs seconds. That is the only reason they are split out; it is

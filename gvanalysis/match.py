@@ -1,7 +1,12 @@
 # SPDX-License-Identifier: MIT
 # Copyright (C) 2026 Nicholas Vlamis
 
-"""Analyze a Jellyfish/GNUbg .mat match file and compute PR using Sage's evaluation.
+"""Analyze a match file and compute PR using Sage's evaluation.
+
+Takes any format `gvanalysis.loader` reads: an eXtreme Gammon `.xg`, a BGBlitz
+`.bgf`, a Jellyfish/GNUbg `.mat`, or OGXM in either form (`.gva`/`.ogxm` JSON,
+`.gvab` binary). A source that carries its own analysis keeps it -- ours is
+appended as a second block.
 
 Sage evaluates each checker play and cube decision at the configured level.
 PR = sum(equity errors) / decision count * 500
@@ -14,6 +19,7 @@ Decision filters (XG-compatible):
 
 Usage:
     uv run python gvan_match.py match.mat                       # writes match.gva
+    uv run python gvan_match.py match.xg                        # .xg/.bgf too, analysis kept
     uv run python gvan_match.py match.mat -o out.gva
     uv run python gvan_match.py match.mat --gvab                # match.gvab instead
     uv run python gvan_match.py match.mat --gvab -o out.gvab    # names the .gvab
@@ -673,13 +679,13 @@ def analyze_ogxm(
 
 
 def analyze_mat(input_path: "Path | str", **kwargs) -> dict:
-    """Back-compat convenience: load any supported input (``.mat`` / ``.gva`` /
-    ``.ogxm`` / ``.gvab``, optionally ``.gz``) and return the internal analyzed
-    ``data`` dict (``analyze_ogxm``'s output).
+    """Back-compat convenience: load any supported input (``.xg`` / ``.bgf`` /
+    ``.mat`` / ``.gva`` / ``.ogxm`` / ``.gvab``, optionally ``.gz``) and return
+    the internal analyzed ``data`` dict (``analyze_ogxm``'s output).
 
     Named for the historical ``.mat``-only entry point and still accepts a
     ``.mat``; the input is converted to OGXM (``load_ogxm``) before analysis, so
-    every format now works. To preserve an OGXM's existing analysis blocks in
+    every format now works. To preserve an input's existing analysis blocks in
     the output, use ``analyze_file`` (or ``append_analysis`` on the result)
     instead -- this returns only the fresh analysis.
     """
@@ -693,11 +699,12 @@ def analyze_file(input_path: "Path | str", **kwargs) -> dict:
     The full server/CLI path: ``load_ogxm`` -> ``analyze_ogxm`` ->
     ``to_ogxm_json`` -> ``append_analysis``. When the input carries no analysis
     the result is a single-analysis OGXM identical to analyzing it directly;
-    when it already carries one or more, ours becomes an additional block.
+    when it already carries one or more -- an ``.xg``, a ``.bgf``, or an
+    already-analyzed OGXM -- ours becomes an additional block.
     """
     base = load_ogxm(input_path)
     data = analyze_ogxm(base, **kwargs)
-    return append_analysis(base, to_ogxm_json(data))
+    return append_analysis(base, to_ogxm_json(data, keep_orientation=True))
 
 
 def main() -> None:
@@ -710,9 +717,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "input_file", nargs="?", type=Path,
-        help="Match file to analyze: .mat, .gva/.ogxm (OGXM JSON), or .gvab "
-             "(OGXM binary), optionally .gz. An OGXM input keeps any analysis "
-             "it already carries; ours is appended.",
+        help="Match file to analyze: .xg, .bgf, .mat, .gva/.ogxm (OGXM JSON), "
+             "or .gvab (OGXM binary), optionally .gz. An input that carries its "
+             "own analysis keeps it; ours is appended.",
     )
     parser.add_argument(
         "-o", "--output", dest="output_file", type=Path, default=None,

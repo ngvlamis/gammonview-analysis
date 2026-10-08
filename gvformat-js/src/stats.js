@@ -33,6 +33,16 @@ import { mwcAnchors } from './met.js';
 
 const _MAX_CHECKER_ACTION_ID = 20;
 
+// A set-position ply (action 31) that carries dice is a *restated play*: an
+// illegal play no dice ply could encode, written as the board it produced (see
+// `setPositionPly` in export.js). The dice are what tell it from the
+// set-position ply that opens an exported position, which states where a game
+// starts and is not a play at all. A restated play is a checker ply for every
+// purpose here -- its roll's luck counts, and its `illegal_move` flag counts --
+// which is what keeps a match's luck and illegal-move totals from depending on
+// whether the play's longest hop happened to fit three bits.
+const _ACTION_SET_POSITION = 31;
+
 const _CUBE_ACTION_IDS = new Set([21, 22, 23]);
 
 const _COLOR_NAME = { 1: "white", 0: "black" };
@@ -243,7 +253,9 @@ function _accumulate_ply(ply, totals, illegal_counter) {
     return;
   }
 
-  if (action_id == null || action_id > _MAX_CHECKER_ACTION_ID) return;
+  const isRestatedPlay = action_id === _ACTION_SET_POSITION && ply.d1 != null;
+  if (action_id == null
+      || (action_id > _MAX_CHECKER_ACTION_ID && !isRestatedPlay)) return;
 
   if (analysis.decision) {
     const eqLoss = analysis.equity_loss || 0.0;

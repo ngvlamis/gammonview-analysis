@@ -62,7 +62,7 @@ two equities behind it (`preroll`/`postroll`) are not themselves stored.
 |---|---|
 | `moves[].luck` | Read directly: `analysis.luck` (stored) |
 | `moves[].luck_mwc` | `luck * (mwc_win − mwc_loss) / 2`, using this ply's `(away1, away2, cube_value, is_crawford)` via [MWC Conversion](#mwc-conversion) — engine-free (a *change* in equity converts to a change in MWC via half the win/loss slope, since `eq2mwc` is affine). Implemented in `gvformat/stats.py` (`_eq_delta_to_mwc`), whose `total_luck_mwc` reproduces the analyzer's engine-computed totals to 1/10000 quantization. |
-| `summary.player1_total_luck` | Sum `analysis.luck` over checker plies (`action_id` 0–20) where `color==1` and `luck` is present |
+| `summary.player1_total_luck` | Sum `analysis.luck` over checker plies (`action_id` 0–20, plus a restated play — a set-position ply carrying dice, see below) where `color==1` and `luck` is present |
 | `summary.player2_total_luck` | Same for `color==0` |
 | `summary.player1_total_luck_mwc` | Sum `luck_mwc` over same plies (money games: no anchors, so this total is absent) |
 | `summary.player1_luck_rolls` | Count checker plies where `color==1` and `luck` is present |
@@ -123,6 +123,7 @@ A ply's checker-move `analysis` (and each standalone cube ply's `analysis`) carr
 ### What counts as a decision
 
 - **Checker-move ply** (`action_id` 0–20): counts iff `analysis.decision == true`.
+- **Restated play** (`action_id` 31 *with* dice): an illegal play no checker ply could encode, written as the board it produced (see `set_position` in `OGXM_JSON_SPEC_GAMMONVIEW.md`). Read it as a checker-move ply — its `luck` counts toward the luck totals and its `illegal_move` toward the illegal-move count — and it never counts as a decision, because `analysis.decision` on an illegal play is `false`. A set-position ply *without* dice states where a game starts and is not a play at all.
 - **Cube decision**: a *standalone* cube ply (`action_id` 21 = double, 22 = take, 23 = pass) counts iff `analysis.decision == true`. This is not the only source of cube decisions — a player who *holds* correctly (doesn't double, and not doubling was optimal) never gets a standalone action_id-21 ply; instead the resulting cube analysis is embedded as `cube_decision` on the checker ply that follows (mutually exclusive with `missed_double` — see the Checker Analysis section of `OGXM_JSON_SPEC_GAMMONVIEW.md`). Cube decisions are the union of:
   1. Standalone `action_id` 21/22/23 plies where `analysis.decision == true`.
   2. Embedded `cube_decision` sub-objects (on a checker ply's `analysis`) where `cube_decision.decision == true`.

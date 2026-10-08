@@ -37,8 +37,12 @@
 
 import { mwcAnchors } from './met.js';
 
-// Checker plays sit at action ids 0-20; 21-23 are the cube.
+// Checker plays sit at action ids 0-20; 21-23 are the cube. Action 31 joins the
+// first group when it carries analysis: that is a restated play, an illegal one
+// no dice ply could encode (see `setPositionPly` in export.js and
+// `_ACTION_SET_POSITION` in stats.js).
 const _MAX_CHECKER_ACTION_ID = 20;
+const _ACTION_SET_POSITION = 31;
 const _TAKE_PASS_ACTIONS = new Set([22, 23]);
 
 // Mirrors gvformat.xg._CHECKER_SPREAD_EPS / xg2gva's CHECKER_SPREAD_EPS.
@@ -101,6 +105,17 @@ function _parseOgidContext(ogid) {
  * answering the cube, not the one who offered it.
  */
 function _normalizer(ply) {
+  const frame = mwcFrame(ply);
+  return frame === null ? null : frame.toEquity;
+}
+
+/**
+ * The same map as `_normalizer`, plus its slope alone for a *difference* of two
+ * MWCs (an equity loss, a luck) -- which converts by the span and never by the
+ * midpoint. Exported for `ogxm2.js`, whose blocks state their currency outright
+ * and so convert every value in them, not only the three cube values.
+ */
+export function mwcFrame(ply) {
   const ctx = _parseOgidContext(ply.ogid_before);
   if (ctx == null) return null;
   if (ctx.matchLength <= 0) return null; // money play: already equity
@@ -115,7 +130,10 @@ function _normalizer(ply) {
   const span = mwcWin - mwcLose;
   if (span === 0) return null;
   const mid = (mwcWin + mwcLose) / 2;
-  return (mwc) => Math.round((2 * (mwc - mid) / span) * 10000) / 10000;
+  return {
+    toEquity: (mwc) => Math.round((2 * (mwc - mid) / span) * 10000) / 10000,
+    toDelta: (mwc) => Math.round((2 * mwc / span) * 10000) / 10000,
+  };
 }
 
 /** The three cube values a payload carries, if it carries them. */
@@ -205,10 +223,16 @@ function _cubePlyIsDecision(ply, analysis) {
  * @param {Map<string, object>} blockObj  "gameIndex,plyIndex" -> analysis
  * @param {Map<string, object>} plyByKey  the same keys -> the ply itself
  * @param {object} analysisInfo           the block's own header, also completed
+ * @param {object} [options]
+ * @param {boolean} [options.convertUnits=true]  false when the caller has
+ *   already put the block on the normalized scale -- an OGXM v2 block names its
+ *   currency, so `ogxm2.js` converts from that rather than from this module's
+ *   inference, and converting twice would be wrong.
  */
-export function completeBaseBlock(blockObj, plyByKey, analysisInfo) {
+export function completeBaseBlock(blockObj, plyByKey, analysisInfo, options) {
+  const { convertUnits = true } = options || {};
   const plyDepths = new Set();
-  const mwc = _valuesAreMwc(blockObj);
+  const mwc = convertUnits && _valuesAreMwc(blockObj);
 
   for (const [key, analysis] of blockObj) {
     const ply = plyByKey.get(key);
@@ -223,7 +247,15 @@ export function completeBaseBlock(blockObj, plyByKey, analysisInfo) {
       _normalizeCube(analysis.missed_double, toEquity);
     }
 
-    if (ply.action_id != null && ply.action_id <= _MAX_CHECKER_ACTION_ID) {
+    // A set-position ply with dice is a play that broke the rules, restated as
+    // the board it produced -- that is the only thing a producer writes one for,
+    // so the flag the base format cannot carry is derivable here, and it is what
+    // keeps the play out of the decision count below.
+    if (ply.action_id === _ACTION_SET_POSITION && ply.d1 != null) {
+      analysis.illegal_move = true;
+    }
+    if (ply.action_id != null && (ply.action_id <= _MAX_CHECKER_ACTION_ID
+                                  || ply.action_id === _ACTION_SET_POSITION)) {
       analysis.decision = _checkerIsDecision(analysis);
     } else if (analysis.no_double_equity != null) {
       analysis.decision = _cubePlyIsDecision(ply, analysis);

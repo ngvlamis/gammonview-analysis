@@ -51,6 +51,7 @@ _TESTS_DIR = Path(__file__).resolve().parent
 #: touching bgsage. Don't "fix" that by removing it from this set; make the yaml
 #: import lazy first, then it can move.
 ENGINE_BACKED = frozenset({
+    "test_analysis_orientation.py",
     "test_analyze_position.py",
     "test_count_illegal.py",
     "test_cube_tiers.py",
@@ -63,6 +64,7 @@ ENGINE_BACKED = frozenset({
     "test_ogxm_stats.py",
     "test_read_gvab.py",
     "test_reconstruct_mat.py",
+    "test_restated_play_analysis.py",
     "test_screened_checker.py",
 })
 

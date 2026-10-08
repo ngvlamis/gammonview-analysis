@@ -783,7 +783,11 @@ def _gather_evals(games: list[dict], select) -> tuple[list[dict], list[dict]]:
             analysis = select(ply)
             if not isinstance(analysis, dict):
                 continue
-            if 0 <= action_id <= 20:
+            # A set-position ply carrying analysis is an illegal play no dice ply
+            # could hold (``export.set_position_ply``), so its analysis is a
+            # checker analysis like any other -- an EVAL entry is keyed by
+            # (game, ply) index and never looks at the ply's action.
+            if 0 <= action_id <= 20 or action_id == ACTION_SET_POSITION:
                 checker_evals.append(_build_checker_eval(game_index, pi, analysis))
                 # missed_double and cube_decision are mutually exclusive per ply
                 # (mirrors ogxm_json.cpp's if/else): both map to base CUBE

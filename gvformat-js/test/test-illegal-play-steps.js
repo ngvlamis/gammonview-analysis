@@ -38,6 +38,7 @@ import { parseOgid } from '../src/ogid.js';
 import { boardProblems } from '../src/legality.js';
 import { write_gvab } from '../src/binary.js';
 import { readGvab, _absoluteToP1, _applyMovesP1 } from '../src/reader.js';
+import { compute_aggregates } from '../src/stats.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SAMPLES_DIR = path.join(__dirname, '..', '..', 'samples');
@@ -368,8 +369,23 @@ for (const m of REAL_MATCHES) {
     assert(canonicalNotation(moverBoardOf(ply.ogid_before, ply.color),
       moverBoardOf(ply.ogid_after, ply.color), ply.d1, ply.d2) === m.notation,
       `${name} states a board ${m.notation} reads back out of`);
-    assert(!ply.analysis,
-      `${name} carries no analysis on it -- the known cost of the encoding`);
+    // The steps are the only thing the encoding costs. A .mat carries no
+    // analysis to begin with; an .xg does, and it rides along -- the same
+    // analysis the play would have carried had its longest hop fitted three
+    // bits, flagged illegal so it stays out of PR.
+    const analysis = ply.analysis;
+    if (name === 'the .mat') {
+      assert(!analysis,
+        `${name} has no analysis to carry (it is an unanalyzed source)`);
+    } else {
+      assert(!!analysis, `${name} carries its analysis on the restated play`);
+      assert(!!analysis?.illegal_move && !analysis?.decision,
+        `${name} flags it illegal and counts it as no decision`);
+      assert((analysis?.alternatives ?? []).length > 1,
+        `${name} keeps the plays that were available instead`);
+      assert(analysis != null && 'luck' in analysis,
+        `${name} keeps the roll's luck, which the play cannot change`);
+    }
     const next = doc.games[gi].plies[pi + 1];
     assert(checkers(next.ogid_before) === checkers(ply.ogid_after),
       `${name} has the next play carry on from the board it stated`);
@@ -388,6 +404,31 @@ for (const m of REAL_MATCHES) {
     && roundTripped.ogid_before === xgPly.ogid_before
     && roundTripped.ogid_after === xgPly.ogid_after,
     'and a saved match brings that ply back with its boards intact');
+  // An EVAL entry is keyed by (game, ply) index and never reads the ply's
+  // action, so the analysis survives the binary too -- bar the quantization
+  // every ply's does.
+  const rtAnalysis = roundTripped.analysis ?? {};
+  assert(rtAnalysis.illegal_move === true && rtAnalysis.decision === false
+    && (rtAnalysis.alternatives ?? []).length === xgPly.analysis.alternatives.length
+    && Math.abs((rtAnalysis.luck ?? 0) - xgPly.analysis.luck) < 5e-4,
+    'with its analysis, its alternatives and its luck');
+
+  // ...and the aggregates read it as the checker ply it stands in for. Measured
+  // as a difference, so the rest of the match cancels out.
+  const side = xgPly.color ? 'white' : 'black';
+  const withIt = compute_aggregates(pair[1][1]);
+  const stripped = structuredClone(pair[1][1]);
+  delete stripped.games[m.game].plies[m.ply].analysis;
+  const without = compute_aggregates(stripped);
+  assert(withIt.match.illegal_moves - without.match.illegal_moves === 1,
+    'the illegal-move count sees it');
+  assert(Math.abs((withIt.match[side].total_luck - without.match[side].total_luck)
+    - xgPly.analysis.luck) < 1e-3,
+    "the luck totals take its roll, which happened whatever was played");
+  assert(withIt.match[side].total_decisions === without.match[side].total_decisions
+    && Math.abs(withIt.match[side].total_error
+      - without.match[side].total_error) < 1e-9,
+    'and PR does not: the player did not choose among these moves');
 }
 
 console.log();

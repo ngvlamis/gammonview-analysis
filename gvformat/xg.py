@@ -317,9 +317,17 @@ def _parse_footer_match(data: bytes) -> dict:
     }
 
 
-def read_xg(path: Path) -> list[dict]:
-    """Read an XG file and return a list of parsed records."""
-    raw = path.read_bytes()
+def read_xg(source: "Path | str | bytes") -> list[dict]:
+    """Read an XG file -- a path, or the bytes themselves -- and return a list of
+    parsed records.
+
+    Bytes are accepted because a caller does not always hold a file: a server is
+    handed an upload, and ``gvanalysis.loader`` has already decompressed a
+    ``.xg.gz`` before it knows what it is reading. The JS mirror
+    (``convertXg``) is bytes-only for the same reason.
+    """
+    raw = (bytes(source) if isinstance(source, (bytes, bytearray, memoryview))
+           else Path(source).read_bytes())
 
     # Validate magic
     magic = struct.unpack_from("<I", raw, 0)[0]
@@ -801,12 +809,13 @@ def _emit_double_response(
 # Main converter
 # ---------------------------------------------------------------------------
 
-def convert_xg(xg_path: Path) -> dict:
-    """Convert an eXtreme Gammon ``.xg`` file to OGXM JSON.
+def convert_xg(source: "Path | str | bytes") -> dict:
+    """Convert an eXtreme Gammon ``.xg`` file -- a path, or its bytes -- to OGXM
+    JSON.
 
     Returns a dict conforming to ``OGXM_JSON_SPEC_GAMMONVIEW.md``.
     """
-    records = read_xg(xg_path)
+    records = read_xg(source)
 
     header_match = next((r[1] for r in records if r[0] == "header_match"), None)
     if header_match is None:
@@ -1287,12 +1296,17 @@ def convert_xg(xg_path: Path) -> dict:
                         # Truncating it would corrupt every board after this
                         # one, so state the resulting position outright -- what
                         # action 31 is for (the spec notes its optional dice are
-                        # exactly this case). The play is not scored; it broke
-                        # the rules. It is still *shown*, read back out of the
-                        # board diff, which is the only way a backwards hop
-                        # displays.
+                        # exactly this case). The play is still *shown*, read
+                        # back out of the board diff, which is the only way a
+                        # backwards hop displays -- and XG's judgement of it
+                        # rides along, exactly as it does on the illegal plays
+                        # that happen to fit a dice ply (see
+                        # ``set_position_ply``). It stays out of PR through
+                        # ``illegal_move``/``decision``, not through being
+                        # dropped.
                         ply: dict = set_position_ply(
-                            is_white, d1, d2, board_after, ogid_before, ogid_after)
+                            is_white, d1, d2, board_after, ogid_before,
+                            ogid_after, analysis)
                     else:
                         ply = {
                             "color": 1 if is_white else 0,

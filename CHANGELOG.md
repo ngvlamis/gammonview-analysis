@@ -13,6 +13,175 @@ when the repository was opened; they are kept because they record why things
 are the way they are — particularly the breaking changes and the measurements
 behind several design decisions. Dates are the tag dates.
 
+## 1.5.1 — 2026-10-05
+
+**Analyzing a document keeps its White** *(fix)*
+
+`analyze_file` appends its analysis onto the document it was given, and
+`append_analysis` requires both to name the same White. `to_ogxm_json` always
+chose White alphabetically, so a document whose White did not sort first was
+analyzed to the last decision and then refused with `orientation mismatch`.
+Every converter we own orients alphabetically, which hid it; a HedgeHog
+`.ogxm` names White by its own seats, so an unanalyzed one sent to the server
+failed at the end of the run. `to_ogxm_json(..., keep_orientation=True)` takes
+White from the analyzed document, and `analyze_file` passes it.
+`tests/test_analysis_orientation.py`. Python only; no npm release.
+
+## 1.5.0 — 2026-10-05
+
+**`read_gvab` reads OGXM v2** *(feature)*
+
+HedgeHog writes v2 and nothing else since its 2.0 release, so every `.ogxm`
+downloaded from hedgehog-bg.com failed a v1 reader's version check. v2 keeps
+the magic and changes the container: a 16-byte header, varint-framed records
+with presence masks, plies addressed by one match-wide `ply_ref`, one `DECS`
+section per analysis block. `read_gvab` / `readGvab` dispatch on the major
+version to `gvformat/ogxm2.py` / `gvformat-js/src/ogxm2.js`, which return the
+document a v1 file holding the same match would give, so nothing downstream
+learns there was a second version, and saving writes v1 `.gvab` as before. The
+two ports produce identical documents on every fixture.
+
+What v1 reading did not need:
+
+- **Units.** A v2 block names its currency, and HedgeHog's match analyses are
+  `cubeful_match`: every equity in them, each candidate's included, is an MWC.
+  Each is mapped onto the normalized scale through its own ply's frame
+  (`mwc_frame` / `mwcFrame`, now public in `basefill`, whose unit inference is
+  switched off for these blocks so nothing converts twice). On a real 9-point
+  match the converted errors sum back to HedgeHog's own MWC totals within 6e-5.
+- **Luck.** v2 records it per roll (`ROLL`), and it is read as an `.xg`'s or a
+  `.bgf`'s is, with `luck_eval_level` from the rolls' level. Held against
+  bgsage's own luck pass on the same match: correlation 0.993, mean difference
+  0.016 a roll. Only a block with no rolls is listed in `_base_analyses`.
+- **Refusals.** What the v1 document cannot replay (beavers, raccoons, a cube
+  set by hand, a settlement, a starting score, a variant) is refused with a
+  message for the player rather than shown on the wrong board. A game from a
+  set-up position becomes a leading set-position ply, the way our own exports
+  state one.
+
+Signatures, annotations, the clock and the video are not carried. The fixtures
+(`gvformat-js/test/fixtures/ogxm2/`, shared by both suites) were written by
+HedgeHog's own reference writer, and their expected positions are its reader's
+replay, not ours.
+
+## 1.4.0 — 2026-10-02
+
+**A restated play keeps its analysis** *(fix)*
+
+The fourth of the set-position ply's loose ends, and the first that was never a
+corruption: the play replayed correctly, it just arrived with nothing said about
+it. All three converters dropped the ply's `analysis` when the play
+had to be stated as the board it produced, so an illegal play showed its error,
+its alternatives and its luck when its longest hop happened to fit `pips`' three
+bits, and showed a bare row when it did not. In the match this was reported on,
+the same player makes three illegal plays: a 6-2 played `13/6` and a 6-1 played
+`16/14 13/7` were analyzed on screen, and a 6-1 played `12/4` — eight pips in one
+hop — was not.
+
+Nothing in a checker analysis needs the steps. The alternatives name the plays
+that *were* available, `luck` belongs to the roll, and the played candidate of an
+illegal play already carries no steps of its own (1.3.0's
+`fit_alternative_steps`). So `set_position_ply` / `setPositionPly` now take the
+analysis and carry it through, and `xg.py`, `bgf.py` and `export.py` — with their
+three JavaScript mirrors — hand it over. The play stays out of PR the way it
+always did, through `illegal_move` and `decision: false`, not through being
+thrown away.
+
+The rest of the format layer follows the same rule: a set-position ply *carrying
+dice* is a restated play and reads as a checker ply.
+
+- `binary.py` / `binary.js`: an EVAL entry is keyed by (game, ply) index and
+  never looked at the ply's action, so action 31 joins the checker branch and the
+  analysis — alternatives, luck, and any embedded cube decision — survives a
+  `.gvab` round trip.
+- `stats.py` / `stats.js`: its roll's luck reaches the luck totals and its
+  `illegal_move` the illegal-move count, so neither total depends on how the play
+  had to be encoded. It still counts as no decision.
+- `basefill.py` / `basefill.js`: a base-format block has no `illegal_move` flag
+  to read, but a set-position ply with dice is one by construction, so the flag is
+  derived — which is what keeps a foreign file's restated play out of its decision
+  count.
+
+`test_illegal_play_steps` and its JS mirror now assert the analysis is carried,
+survives the binary, and reaches the aggregates as luck and an illegal move but
+not as a decision. The spec pages gained the rule (`OGXM_JSON_SPEC_GAMMONVIEW.md`
+under `set_position`, `OGXM_COMPUTED_FIELDS.md` under what counts as a decision).
+
+**…and our own analyzer judges one too** *(fix)*
+
+The other half: carrying a source's analysis is no use where there is none, and
+`gvanalysis` raised no decision for a restated play, so an analyzed `.mat` had a
+hole exactly where the imported `.xg` had an evaluation. It is a turn like any
+other — the player was on roll, faced the cube and played something — so
+`ogxm_reconstructor` now reconstructs it as a checker decision with the stated
+board standing in for the play. `game_eval` then finds no legal move that reaches
+that board and takes its illegal-play path, which is exactly what the ply records:
+the error sized against the best legal play, the alternatives, the roll's luck,
+`illegal_move` set, and no decision counted.
+
+**It could not have worked before, and that is the part worth reading.**
+`analyze_file` on either corpus match with a restated play raised
+`analysis/ply count mismatch` and returned nothing at all. The exporter re-derives
+a ply's steps from a board diff, and a diff cannot always be split back into the
+hops that made it — `hQ8sVn2LbTdF4wRm`'s 4-4 bear-off matches as a single 11-pip
+span, which no step can hold, so a perfectly *legal* play was restated as a set
+position and the analysis stopped lining up with the document it was made from.
+The reconstructor now hands the ply's own steps over (`move_steps` on the
+decision and the log entry, preferred by `_convert_checker_ply` /
+`_convertCheckerPly`): they came *out* of a ply record, so they fit one, and they
+are the play as recorded rather than a reading of it.
+
+`merge._is_decision` / `_isDecision` pairs a restated play up like any other
+decision ply, which it can now that both documents reach one by the same route.
+
+One smaller loss went with it: the played candidate of an illegal play was
+written with an empty notation, because only the `.mat` *reader* supplies a
+source notation and the OGXM path has none. It now falls back to the play as the
+two boards describe it, so the candidate names itself and — where a step list can
+hold it — draws itself. That is the one golden that moved
+(`5nqfGw9bWG3deTaU`, whose played alternative gained the two steps the ply itself
+already carried); the other four are untouched.
+
+New test: `test_restated_play_analysis` (engine-backed, ~30s) — both matches
+analyzed from their `.mat`, and one re-analyzed as the converted `.gvab` a server
+is handed, where XG's judgement of the play and ours end up side by side on it.
+
+**`gvan-match` takes an `.xg` or a `.bgf`** *(feature, and a fix underneath it)*
+
+Found while reproducing the above: handing the analyzer the very `.xg` the bug was
+reported on produced a cheerful empty analysis of a zero-game match. `load_ogxm`
+read `.mat`, `.gva`/`.ogxm` and `.gvab`, and *guessed* anything else was `.mat`
+text — and a `.mat` parser finds no games in an XG file, so the one input shape a
+user is most likely to have was the one that failed silently. `gvformat` has
+shipped `convert_xg` and `convert_bgf` all along, neither needs the engine, and
+the loader simply never called them.
+
+So it calls them. `gvan-match`, `gvan-batch`, `analyze_file`, `analyze_mat` and
+`analyze_match` now take `.xg` and `.bgf` directly, with the source's own analysis
+preserved and ours appended — an `.xg` in, XG's judgement and ours side by side
+out, with no conversion step in between. `read_xg` / `read_bgf` and
+`convert_xg` / `convert_bgf` accept **bytes as well as a path**, which is what the
+loader holds (it has already decompressed a `.gz` before it knows the format) and
+what a server is handed; the JS mirrors have always been bytes-only for that
+reason.
+
+And dispatch no longer guesses. It reads the file's own opening bytes first —
+`OGXM`, XG's `RGMH`, a `.bgf`'s one-line JSON header — so a mislabeled or
+extension-less file is read as what it is, and falls back to the extension only
+where the content cannot say. What nothing identifies now raises, naming every
+format that would have worked, rather than being run through the `.mat` parser.
+A `.mat` that yields no games raises too: it has no file signature, so "it
+parsed" proves nothing, and that is the last point at which a text file that is
+not a match can be told apart from one.
+
+`gvan-batch` expands a directory by `loader.INPUT_EXTENSIONS` now, so its list
+cannot fall behind the loader's again.
+
+New test: `test_loader_formats` (no engine, instant) — all five formats loading
+as the converter each one reaches, gzipped and not, mislabeled and
+extension-less, and the four inputs that must raise instead of returning an empty
+match.
+
 ## 1.3.0 — 2026-09-29
 
 **A hop longer than 7 pips is no longer written as a different move** *(fix)*

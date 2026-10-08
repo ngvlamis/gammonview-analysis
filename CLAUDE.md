@@ -16,7 +16,10 @@ section.
   GammonView client-side JS mirrors. All source-format → OGXM converters live
   here, since none needs the engine: `convert_xg` (`.xg`), `convert_bgf`
   (`.bgf`), and `convert_mat` (`.mat`, plus `mat_to_ogxm(text)` for callers
-  holding the text — the JS `convertMat` mirrors that one).
+  holding the text — the JS `convertMat` mirrors that one). `convert_xg` /
+  `convert_bgf` (and `read_xg` / `read_bgf`) take **a path or the bytes**, since
+  a server is handed an upload and `load_ogxm` has already decompressed a `.gz`
+  before it knows what it holds; the JS mirrors are bytes-only for that reason.
 - **`gvanalysis`** — the bgsage-powered analysis (`analyze_ogxm`/`analyze_file`,
   position analysis, the `analyze_match` one-call). Depends on `gvformat` + bgsage
   (the `[engine]` extra). Deps flow one way: `gvanalysis` → `gvformat`, never back.
@@ -57,10 +60,11 @@ section.
   line — either one silently routes the scope away from npmjs. (The retired
   server's details are in the author's local notes, which are not tracked here.)
 
-**OGXM is the pipeline's internal representation.** Every input — `.mat`,
-`.gva`/`.ogxm` (OGXM JSON), or `.gvab` (OGXM binary) — is loaded to an OGXM dict
-(`gvanalysis.loader.load_ogxm`; a `.mat` is converted first via
-`gvformat.mat_to_ogxm`, with no analysis), its plies are turned back into engine decisions
+**OGXM is the pipeline's internal representation.** Every input — `.xg`,
+`.bgf`, `.mat`, `.gva`/`.ogxm` (OGXM JSON), or `.gvab` (OGXM binary) — is loaded
+to an OGXM dict (`gvanalysis.loader.load_ogxm`, which dispatches to `gvformat`'s
+converters — a `.mat` through `mat_to_ogxm`, with no analysis; an `.xg`/`.bgf`
+with the source's own), its plies are turned back into engine decisions
 (`ogxm_reconstructor`), analyzed (`analyze_ogxm`), and the result is **appended**
 as a new analysis block (`gvformat.append_analysis`) — any analysis the input
 already carried is preserved (OGXM allows up to 16 blocks: `analyses_info` +
@@ -75,7 +79,7 @@ Server one-liner (dropped match → `.gvab` bytes for the client):
 ```python
 from gvanalysis import analyze_match      # mat_to_gvab is the old name, still exported
 data = analyze_match("match.mat", preset="world_class", jobs=0)   # analyzed .gvab bytes
-# also accepts .gva/.ogxm/.gvab; an input's existing analysis is kept, ours appended
+# also accepts .xg/.bgf/.gva/.ogxm/.gvab; an input's existing analysis is kept, ours appended
 ```
 
 **Pass `jobs=0` from a server.** The API defaults to `jobs=1` (serial) while the
@@ -177,10 +181,16 @@ in step when a flag changes; the rationale belongs only here.
   and a pending double (`game_state == "D"`) is flipped onto the doubler.
 
 - **`gvan-match`** (`gvanalysis/match.py`, `analyze_file`) — Analyze a match file
-  (`.mat`, `.gva`/`.ogxm`, or `.gvab`; optionally `.gz`) and compute per-move PR.
-  An OGXM input's existing analysis blocks are preserved and ours is appended.
+  (`.xg`, `.bgf`, `.mat`, `.gva`/`.ogxm`, or `.gvab`; optionally `.gz`) and
+  compute per-move PR. An input's existing analysis blocks are preserved and
+  ours is appended, so an `.xg` comes back carrying XG's judgement and ours.
+  Format detection is content-first (`gvanalysis/loader.py`): three of the five
+  name themselves in their opening bytes, so a mislabeled file still reads as
+  what it is, and a file nothing identifies raises instead of being guessed at —
+  guessing meant parsing an `.xg` as `.mat` text and returning an empty match.
   ```bash
   uv run gvan-match match.mat --preset fast                        # writes match.gva beside input
+  uv run gvan-match match.xg --preset fast                         # .xg/.bgf too; source analysis kept
   uv run gvan-match match.gvab --preset world_class --gvab         # analyze OGXM binary, append analysis
   uv run gvan-match match.gva --preset fast                        # append to an OGXM JSON (in place)
   uv run gvan-match match.mat --gvab                               # .gvab instead of .gva
@@ -320,10 +330,13 @@ in step when a flag changes; the rationale belongs only here.
   than `truncated2`, because that is the whole of what went wrong.
 
 - **`gvan-batch`** (`gvanalysis/batch.py`) — Batch-analyze many match files
-  (`.mat`/`.gva`/`.ogxm`/`.gvab`), writing one output per input. A thin wrapper
+  (every format `load_ogxm` reads — it expands a directory by
+  `loader.INPUT_EXTENSIONS`, so the two cannot fall out of step), writing one
+  output per input. A thin wrapper
   over `analyze_file(..., quiet=True)`, so all engine logic stays in `match.py`.
   ```bash
   uv run gvan-batch matches/*.mat                    # .gva beside each input
+  uv run gvan-batch matches/*.xg                     # .xg/.bgf too
   uv run gvan-batch matches/ --preset world_class    # a dir -> its match files
   uv run gvan-batch matches/*.mat --gvab             # .gvab instead of .gva
   uv run gvan-batch a.mat b.gvab --out-dir out/ --force
@@ -336,7 +349,7 @@ in step when a flag changes; the rationale belongs only here.
   can't drift. An OGXM input's existing analysis is preserved (ours appended).
   Passes through `--preset`, `--jobs`, `--threads`, `--all-moves` and
   `--count-illegal`. A
-  directory argument expands to its top-level `.mat`/`.gva`/`.ogxm`/`.gvab`;
+  directory argument expands to its top-level match files;
   existing outputs are skipped unless `--force` (so a `.gva`/`.gvab` input whose
   output name equals it is skipped by default); a bad file is reported and the
   batch continues, exiting `1` if any failed. Analyzers are rebuilt per file

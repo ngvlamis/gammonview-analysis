@@ -3,16 +3,17 @@
 
 """Batch-analyze many match files, writing one .gva (or .gvab) per input.
 
-Thin driver over `gvanalysis.match.analyze_file`: each input (`.mat`, `.gva`/
-`.ogxm`, or `.gvab` -- OGXM is the internal representation, so `.mat` is
-converted first) is analyzed quietly and written beside it with the extension
-swapped to `.gva` (canonical OGXM JSON) or, with --gvab/--binary, `.gvab` (the
-compact binary encoding). An OGXM input's existing analysis blocks are
+Thin driver over `gvanalysis.match.analyze_file`: each input (`.xg`, `.bgf`,
+`.mat`, `.gva`/`.ogxm`, or `.gvab` -- OGXM is the internal representation, so a
+source format is converted first) is analyzed quietly and written beside it with
+the extension swapped to `.gva` (canonical OGXM JSON) or, with --gvab/--binary,
+`.gvab` (the compact binary encoding). An input's existing analysis blocks are
 preserved and ours is appended. The terminal shows only a progress bar; per-file
 analysis output is suppressed.
 
 Usage:
     uv run gvan-batch matches/*.mat
+    uv run gvan-batch matches/*.xg                            # .xg/.bgf too
     uv run gvan-batch matches/ --preset world_class          # a dir = its matches
     uv run gvan-batch matches/*.mat --gvab                    # write .gvab instead
     uv run gvan-batch a.mat b.gvab --out-dir out/ --preset fast
@@ -26,13 +27,10 @@ import sys
 import time
 from pathlib import Path
 
+from .loader import INPUT_EXTENSIONS
 from .match import analyze_file
 from gvformat import write_gvab, read_gvab
 from .presets import DEFAULT_PRESET, PRESETS
-
-#: Input extensions a directory argument expands to (OGXM in any form + mat).
-_INPUT_EXTS = (".mat", ".gva", ".ogxm", ".gvab")
-
 
 class _FileBar:
     """In-place file-count progress bar on stderr (a no-op off a TTY).
@@ -87,17 +85,22 @@ class _FileBar:
 def _collect_inputs(paths: list[Path]) -> list[Path]:
     """Expand the given paths into a de-duplicated, sorted list of match files.
 
-    A directory contributes its top-level match files (`.mat`/`.gva`/`.ogxm`/
-    `.gvab`, non-recursive); a file is taken as given. Shell globs are already
+    A directory contributes its top-level match files (every extension the
+    loader reads -- `loader.INPUT_EXTENSIONS`, so this cannot fall behind it;
+    non-recursive); a file is taken as given. Shell globs are already
     expanded by the shell before we see them, so only directory expansion
     happens here.
+
+    Note that two inputs of one match in different formats (`m.xg` and `m.mat`)
+    name the same output, so the second is skipped as already written -- or,
+    with --force, overwrites the first.
     """
     out: list[Path] = []
     seen: set[Path] = set()
     for p in paths:
         if p.is_dir():
             candidates = sorted(c for c in p.iterdir()
-                                if c.is_file() and c.suffix.lower() in _INPUT_EXTS)
+                                if c.is_file() and c.suffix.lower() in INPUT_EXTENSIONS)
         else:
             candidates = [p]
         for c in candidates:
@@ -128,7 +131,8 @@ def main() -> None:
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument(
         "inputs", nargs="+", type=Path,
-        help="match files (.mat/.gva/.ogxm/.gvab), or directories of them, to analyze",
+        help="match files (.xg/.bgf/.mat/.gva/.ogxm/.gvab), or directories of "
+             "them, to analyze",
     )
     parser.add_argument(
         "--gvab", "--binary", action="store_true", dest="gvab",
@@ -171,7 +175,9 @@ def main() -> None:
 
     files = _collect_inputs(args.inputs)
     if not files:
-        parser.error("no match files (.mat/.gva/.ogxm/.gvab) found in the given inputs")
+        parser.error("no match files ("
+                     + "/".join(e.lstrip(".") for e in INPUT_EXTENSIONS)
+                     + ") found in the given inputs")
 
     if args.out_dir is not None:
         args.out_dir.mkdir(parents=True, exist_ok=True)

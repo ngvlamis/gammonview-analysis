@@ -122,6 +122,16 @@ from .met import mwc_anchors
 #: cube/game/match/resign ply, not a checker-move ply.
 _MAX_CHECKER_ACTION_ID = 20
 
+#: A set-position ply (action 31) that carries dice is a *restated play*: an
+#: illegal play no dice ply could encode, written as the board it produced
+#: (``export.set_position_ply``). The dice are what tell it from the
+#: set-position ply that opens an exported position, which states where a game
+#: starts and is not a play at all. A restated play is a checker ply for every
+#: purpose here -- its roll's luck counts, and its ``illegal_move`` flag counts
+#: -- which is what keeps a match's luck and illegal-move totals from depending
+#: on whether the play's longest hop happened to fit three bits.
+_ACTION_SET_POSITION = 31
+
 #: Standalone cube-decision ply action ids: 21 = double, 22 = take, 23 = pass.
 _CUBE_ACTION_IDS = frozenset({21, 22, 23})
 
@@ -336,10 +346,13 @@ def _accumulate_ply(ply: dict, totals: dict, illegal_counter: list) -> None:
                 t.has_mwc = True
         return
 
-    if action_id is None or action_id > _MAX_CHECKER_ACTION_ID:
+    is_restated_play = (action_id == _ACTION_SET_POSITION
+                        and ply.get("d1") is not None)
+    if (action_id is None
+            or (action_id > _MAX_CHECKER_ACTION_ID and not is_restated_play)):
         return  # game-over/match-over/final/resign/forfeit ply: not a PR/luck decision
 
-    # Checker-move ply.
+    # Checker-move ply (or a restated play -- see _ACTION_SET_POSITION).
     if analysis.get("decision"):
         eq_loss = analysis.get("equity_loss") or 0.0
         t.error += eq_loss

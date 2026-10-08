@@ -16,12 +16,13 @@ BGF step splitters inferring the wrong intermediate point — were both found by
 board shape that no hand-picked match happened to contain. This is why the corpus
 is chosen for coverage rather than trimmed to a minimum.
 
-**Almost everything here is portable.** Eight tests read these files and seven
+**Almost everything here is portable.** Ten tests read these files and eight
 import no engine at all: parsing, byte round-trips and board replay are pure
-stdlib and land identically on any machine. `test_illegal_play_steps` is the
-eighth, and only its closing section reaches bgsage — to check that an
+stdlib and land identically on any machine. Two reach bgsage:
+`test_illegal_play_steps`, and only in its closing section — to check that an
 impossible board comes back as an error naming the ply rather than as a
-segfault. That is worth separating from
+segfault — and `test_restated_play_analysis`, which analyzes two of these
+matches outright. That is worth separating from
 `tests/golden/`, which is engine output and does *not* travel — see
 [Goldens are not part of this corpus](#goldens-are-not-part-of-this-corpus).
 
@@ -33,10 +34,14 @@ whether a corpus change broke a requirement.
 
 | Directory | Files | Read by |
 |---|---|---|
-| `mat/` | 13 `.mat` | `test_ogxm_pipeline`, `test_count_illegal`, `test_illegal_play_steps`, and every engine test via `tests/fixtures.py` |
-| `xg/` | 13 `.xg` | `test_xg_move_steps`, `test_alternative_move_steps`, `test_xg_eval_levels`, `test_xg_zero_win_eval`, `test_illegal_play_steps` |
-| `bgf/` | 11 `.bgf` | `test_bgf_move_steps` |
-| `gv/` | 11 `.gvab` + 1 `.gva` | `test_share_link`, `test_chunk_passthrough` |
+| `mat/` | 13 `.mat` | `test_ogxm_pipeline`, `test_count_illegal`, `test_illegal_play_steps`, `test_restated_play_analysis`, `test_loader_formats`, and every engine test via `tests/fixtures.py` |
+| `xg/` | 13 `.xg` | `test_xg_move_steps`, `test_alternative_move_steps`, `test_xg_eval_levels`, `test_xg_zero_win_eval`, `test_illegal_play_steps`, `test_restated_play_analysis`, `test_loader_formats` |
+| `bgf/` | 11 `.bgf` | `test_bgf_move_steps`, `test_loader_formats` |
+| `gv/` | 11 `.gvab` + 1 `.gva` | `test_share_link`, `test_chunk_passthrough`, `test_loader_formats` |
+
+`test_loader_formats` is in every row by design: it reads one match in all four
+source forms to check that `gvanalysis.loader` dispatches each to the converter
+it belongs to.
 
 The counts differ by a column because a match is added in whatever forms it
 arrived in. `hQ8sVn2LbTdF4wRm` and `rK7pXm4TqLb9NzWd` have no `.bgf` (BGBlitz
@@ -174,16 +179,16 @@ noticing; a loud skip naming `MATCH` is the better failure.
   It too is here **twice**, a `.mat` and an `.xg` of the same match, for the same
   reason: notation on one side, XG's stored candidate position on the other, and
   both land on the same board. Everything said above about curating a
-  set-position ply — no steps to replay, no analysis on it — applies here
-  unchanged.
+  set-position ply applies here unchanged.
 
-  Two consequences to know before curating it. A set-position ply **states** its
-  board instead of moving to it, so it has no steps to replay and every
-  whole-file replay check has to skip `action_id == 31` — `audit_corpus.py` and
-  `test_xg_move_steps` both do. And it carries **no analysis**, because the
-  format allows a checker evaluation only on a decision ply (0–23); the
-  evaluations XG recorded for that play are dropped on import, deliberately, and
-  its PR is unaffected because the ply was already outside the count.
+  One consequence to know before curating either of them. A set-position ply
+  **states** its board instead of moving to it, so it has no steps to replay and
+  every whole-file replay check has to skip `action_id == 31` —
+  `audit_corpus.py` and `test_xg_move_steps` both do. Its *analysis* needs no
+  such exception: a restated play carries the source's evaluation like any other
+  checker ply (1.4.0), so the `.xg` of each of these two has alternatives and
+  luck on `action_id == 31` and the `.mat` has none, having never had any. PR is
+  unaffected either way — an illegal play is outside the count.
 
 Losing any one of them costs a requirement no other file supplies.
 

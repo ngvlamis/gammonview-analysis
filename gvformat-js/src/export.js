@@ -558,10 +558,23 @@ export function fitAlternativeSteps(steps, notation, moverIsWhite, d1, d2) {
 // The third rung of `fitMoveSteps`. No checker ply can carry the play and
 // truncating it would corrupt every board after this one, so state the
 // resulting position outright -- what action 31 is for (the spec notes its
-// optional dice are exactly this case). The play itself is lost; it broke the
-// rules, so there is no move to score.
-export function setPositionPly(moverIsWhite, d1, d2, boardAfterP1, ogidBefore, ogidAfter) {
-  return {
+// optional dice are exactly this case). The play's *steps* are lost; the play
+// is read back out of the board diff.
+//
+// `analysis` is the ply's checker analysis, carried through unchanged. A
+// restated play is still a play -- the same play the source judged -- and the
+// encoding it needed is no reason to drop what the source said about it.
+// Nothing about the analysis depends on the steps: the alternatives name the
+// plays that were available, and an illegal play's own candidate already
+// carries no steps (`fitAlternativeSteps`). It stays out of PR and decision
+// counting the same way it would on a dice ply -- through
+// `analysis.illegal_move` and `decision: false`, not through being thrown away.
+// Until Oct 2026 it *was* thrown away, so the same illegal play showed its
+// error and its alternatives in one game and nothing at all in the next,
+// decided by whether its longest hop happened to fit three bits.
+export function setPositionPly(moverIsWhite, d1, d2, boardAfterP1, ogidBefore, ogidAfter,
+                               analysis = null) {
+  const ply = {
     color: moverIsWhite ? 1 : 0,
     action_id: 31,
     d1,
@@ -570,6 +583,8 @@ export function setPositionPly(moverIsWhite, d1, d2, boardAfterP1, ogidBefore, o
     ogid_before: ogidBefore,
     ogid_after: ogidAfter,
   };
+  if (analysis) ply.analysis = analysis;
+  return ply;
 }
 
 // ---------------------------------------------------------------------------
@@ -847,21 +862,42 @@ function _convertCheckerPly(entry, playerWhite, scoreWhite, scoreBlack,
     matchLength, crawford, moveId: turn.moveId,
   });
 
-  // This path derives steps from a board diff, so it has no notation of its
-  // own -- the .mat converter threads the source's through on the entry (see
+  // An entry that arrives with the source's own steps needs none of the ladder
+  // below: they came *out* of a ply record, so they fit one, and they are the
+  // play as recorded rather than a reading of it. It matters because a board diff
+  // cannot always be split back into the hops that made it -- a 4-4 bear-off can
+  // match as a single 11-pip span, and re-deriving one would restate a legal play
+  // as a set position and stop the analysis lining up with the document it came
+  // from.
+  //
+  // Nothing in this package sets `move_steps` yet: the producer is Python's
+  // `gvanalysis.ogxm_reconstructor`, which rebuilds decisions from an OGXM
+  // document and so has the plies to hand. It is mirrored here because the two
+  // exporters must stay the same function -- a caller that reconstructs
+  // decisions in JS gets the same answer -- and because `mat2gva.js` threading a
+  // notation through is the same idea one rung down.
+  //
+  // Otherwise this path derives steps from a board diff, so it has no notation of
+  // its own -- the .mat converter threads the source's through on the entry (see
   // mat2gva.js) precisely so the middle rung is reachable here.
   //
   // The diff is also asked directly whether any checker moved backwards, and
   // not only through the notation: an entry that arrives without one still has
   // to reach the set-position rung rather than lose the hop silently.
-  const steps = boardDiffHasNonForwardHop(boardBefore, boardAfter, isWhite)
-    ? null
-    : fitMoveSteps(
-      _computeMoveSteps(boardBefore, boardAfter, isWhite, d1, d2),
-      entry.notation || entry.player_move, isWhite, d1, d2,
-    );
+  const sourceSteps = entry.move_steps;
+  const steps = (sourceSteps && sourceSteps.length)
+    ? sourceSteps.map((st) => ({ ...st }))
+    : (boardDiffHasNonForwardHop(boardBefore, boardAfter, isWhite)
+      ? null
+      : fitMoveSteps(
+        _computeMoveSteps(boardBefore, boardAfter, isWhite, d1, d2),
+        entry.notation || entry.player_move, isWhite, d1, d2,
+      ));
+  const analysis = _checkerAnalysis(entry, isWhite, d1, d2, basePly,
+    isWhite ? boardBefore : _flipBoard(boardBefore));
+
   if (steps === null) {
-    return setPositionPly(isWhite, d1, d2, boardAfter, ogidBefore, ogidAfter);
+    return setPositionPly(isWhite, d1, d2, boardAfter, ogidBefore, ogidAfter, analysis);
   }
 
   const ply = {
@@ -872,8 +908,6 @@ function _convertCheckerPly(entry, playerWhite, scoreWhite, scoreBlack,
     ogid_before: ogidBefore,
     ogid_after: ogidAfter,
   };
-  const analysis = _checkerAnalysis(entry, isWhite, d1, d2, basePly,
-    isWhite ? boardBefore : _flipBoard(boardBefore));
   if (analysis != null) ply.analysis = analysis;
   return ply;
 }

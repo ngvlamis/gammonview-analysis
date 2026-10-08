@@ -1,6 +1,6 @@
 {
   "name": "@gammonview/gvformat",
-  "version": "1.3.0",
+  "version": "1.5.0",
   "type": "module",
   "exports": {
     ".": "./src/index.js",
@@ -28,7 +28,7 @@
   ],
   "scripts": {
     "prepublishOnly": "npm test",
-    "test": "node test/test-ogid.js && node test/test-roundtrip.js && node test/test-merge.js && node test/test-stats.js && node test/test-met.js && node test/test-xg-cube.js && node test/test-bgf-alternatives.js && node test/test-bgf-move-steps.js && node test/test-bgf-embedded-cube.js && node test/test-xg-move-steps.js && node test/test-xg-eval-levels.js && node test/test-xg-zero-win-eval.js && node test/test-alternative-move-steps.js && node test/test-legality.js && node test/test-illegal-play-steps.js && node test/test-illegal-move.js && node test/test-share.js && node test/test-place.js && node test/test-mat.js && node test/test-og.js && node test/test-equity-loss.js && node test/test-basefill.js && node test/test-chunk-passthrough.js && node test/test-robustness.js"
+    "test": "node test/test-ogid.js && node test/test-roundtrip.js && node test/test-merge.js && node test/test-stats.js && node test/test-met.js && node test/test-xg-cube.js && node test/test-bgf-alternatives.js && node test/test-bgf-move-steps.js && node test/test-bgf-embedded-cube.js && node test/test-xg-move-steps.js && node test/test-xg-eval-levels.js && node test/test-xg-zero-win-eval.js && node test/test-alternative-move-steps.js && node test/test-legality.js && node test/test-illegal-play-steps.js && node test/test-illegal-move.js && node test/test-share.js && node test/test-place.js && node test/test-mat.js && node test/test-og.js && node test/test-equity-loss.js && node test/test-basefill.js && node test/test-ogxm2.js && node test/test-chunk-passthrough.js && node test/test-robustness.js"
   },
   "engines": {
     "node": ">=18"

@@ -46,8 +46,12 @@ import re
 
 from .met import mwc_anchors
 
-# Checker plays sit at action ids 0-20; 21-23 are the cube.
+# Checker plays sit at action ids 0-20; 21-23 are the cube. Action 31 joins the
+# first group when it carries analysis: that is a restated play, an illegal one
+# no dice ply could encode (see ``export.set_position_ply`` and
+# ``stats._ACTION_SET_POSITION``).
 _MAX_CHECKER_ACTION_ID = 20
+_ACTION_SET_POSITION = 31
 _TAKE_PASS_ACTIONS = frozenset({22, 23})
 
 # Mirrors gvformat.xg._CHECKER_SPREAD_EPS / xg2gva's CHECKER_SPREAD_EPS.
@@ -118,6 +122,18 @@ def _normalizer(ply: dict):
     pass the frame belongs to the other player -- the ply's own colour is the
     one answering the cube, not the one who offered it.
     """
+    frame = mwc_frame(ply)
+    return None if frame is None else frame[0]
+
+
+def mwc_frame(ply: dict):
+    """The same map as ``_normalizer``, paired with its slope alone for a
+    *difference* of two MWCs (an equity loss, a luck), which converts by the
+    span and never by the midpoint: ``(to_equity, to_delta)``, or None.
+
+    Public for ``ogxm2.py``, whose blocks state their currency outright and so
+    convert every value in them, not only the three cube values.
+    """
     ctx = _parse_ogid_context(ply.get("ogid_before"))
     if ctx is None:
         return None
@@ -141,7 +157,10 @@ def _normalizer(ply: dict):
     def to_equity(mwc: float) -> float:
         return round((2 * (mwc - mid) / span) * 10000) / 10000
 
-    return to_equity
+    def to_delta(mwc: float) -> float:
+        return round((2 * mwc / span) * 10000) / 10000
+
+    return to_equity, to_delta
 
 
 def _cube_values(sub: dict | None) -> tuple[float, float, float] | None:
@@ -238,16 +257,21 @@ def _cube_ply_is_decision(ply: dict, analysis: dict) -> bool:
 # Entry point
 # ---------------------------------------------------------------------------
 
-def complete_base_block(block_obj: dict, ply_by_key: dict, analysis_info: dict | None) -> None:
+def complete_base_block(block_obj: dict, ply_by_key: dict, analysis_info: dict | None,
+                        *, convert_units: bool = True) -> None:
     """Complete one analysis block in place, given the plies it describes.
 
     Args:
         block_obj: ``(game_index, ply_index) -> analysis``.
         ply_by_key: the same keys -> the ply itself.
         analysis_info: the block's own header, also completed.
+        convert_units: False when the caller has already put the block on the
+            normalized scale -- an OGXM v2 block names its currency, so
+            ``ogxm2.py`` converts from that rather than from this module's
+            inference, and converting twice would be wrong.
     """
     ply_depths: set = set()
-    mwc = _values_are_mwc(block_obj)
+    mwc = convert_units and _values_are_mwc(block_obj)
 
     for key, analysis in block_obj.items():
         ply = ply_by_key.get(key)
@@ -263,7 +287,14 @@ def complete_base_block(block_obj: dict, ply_by_key: dict, analysis_info: dict |
             _normalize_cube(analysis.get("missed_double"), to_equity)
 
         action_id = ply.get("action_id")
-        if action_id is not None and action_id <= _MAX_CHECKER_ACTION_ID:
+        # A set-position ply with dice is a play that broke the rules, restated
+        # as the board it produced -- that is the only thing a producer writes
+        # one for, so the flag the base format cannot carry is derivable here,
+        # and it is what keeps the play out of the decision count below.
+        if action_id == _ACTION_SET_POSITION and ply.get("d1") is not None:
+            analysis["illegal_move"] = True
+        if action_id is not None and (action_id <= _MAX_CHECKER_ACTION_ID
+                                      or action_id == _ACTION_SET_POSITION):
             analysis["decision"] = _checker_is_decision(analysis)
         elif analysis.get("no_double_equity") is not None:
             analysis["decision"] = _cube_ply_is_decision(ply, analysis)

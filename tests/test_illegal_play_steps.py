@@ -27,6 +27,7 @@ Run directly:
 
 from __future__ import annotations
 
+import copy
 import sys
 from pathlib import Path
 
@@ -44,6 +45,7 @@ from gvformat.notation import canonical_notation  # noqa: E402
 from gvformat.ogid import parse_ogid  # noqa: E402
 from gvformat.xg import convert_xg  # noqa: E402
 from gvformat.legality import board_problems  # noqa: E402
+from gvformat.stats import compute_aggregates  # noqa: E402
 from gvformat.reader import _absolute_to_p1, _apply_moves_p1  # noqa: E402
 
 _checks = 0
@@ -381,8 +383,24 @@ def main() -> int:
                                      _mover_board_of(ply["ogid_after"], ply["color"]),
                                      ply["d1"], ply["d2"]) == notation,
                   f"{name} states a board {notation} reads back out of")
-            check(not ply.get("analysis"),
-                  f"{name} carries no analysis on it -- the known cost of the encoding")
+            # The steps are the only thing the encoding costs. A .mat carries no
+            # analysis to begin with; an .xg does, and it rides along -- the
+            # same analysis the play would have carried had its longest hop
+            # fitted three bits, flagged illegal so it stays out of PR.
+            analysis = ply.get("analysis")
+            if name == "the .mat":
+                check(analysis is None,
+                      f"{name} has no analysis to carry (it is an unanalyzed source)")
+            else:
+                check(analysis is not None,
+                      f"{name} carries its analysis on the restated play")
+                check(bool(analysis and analysis.get("illegal_move"))
+                      and not (analysis or {}).get("decision"),
+                      f"{name} flags it illegal and counts it as no decision")
+                check(len((analysis or {}).get("alternatives") or []) > 1,
+                      f"{name} keeps the plays that were available instead")
+                check("luck" in (analysis or {}),
+                      f"{name} keeps the roll's luck, which the play cannot change")
             nxt = doc["games"][gi]["plies"][pi + 1]
             check(_checkers(nxt["ogid_before"]) == _checkers(ply["ogid_after"]),
                   f"{name} has the next play carry on from the board it stated")
@@ -402,6 +420,37 @@ def main() -> int:
               and round_tripped["ogid_before"] == xg_ply["ogid_before"]
               and round_tripped["ogid_after"] == xg_ply["ogid_after"],
               "and a saved match brings that ply back with its boards intact")
+        # An EVAL entry is keyed by (game, ply) index and never reads the ply's
+        # action, so the analysis survives the binary too -- bar the quantization
+        # every ply's does.
+        rt_analysis = round_tripped.get("analysis") or {}
+        xg_analysis = xg_ply["analysis"]
+        check(rt_analysis.get("illegal_move") is True
+              and rt_analysis.get("decision") is False
+              and len(rt_analysis.get("alternatives") or [])
+                  == len(xg_analysis["alternatives"])
+              and abs(rt_analysis.get("luck", 0) - xg_analysis["luck"]) < 5e-4,
+              "with its analysis, its alternatives and its luck")
+
+        # ...and the aggregates read it as the checker ply it stands in for.
+        # Measured as a difference, so the rest of the match cancels out.
+        side = "white" if xg_ply["color"] else "black"
+        with_it = compute_aggregates(xg_doc)
+        stripped = copy.deepcopy(xg_doc)
+        stripped["games"][gi]["plies"][pi].pop("analysis")
+        without = compute_aggregates(stripped)
+        check(with_it["match"]["illegal_moves"]
+              - without["match"]["illegal_moves"] == 1,
+              "the illegal-move count sees it")
+        check(abs((with_it["match"][side]["total_luck"]
+                   - without["match"][side]["total_luck"])
+                  - xg_analysis["luck"]) < 1e-3,
+              "the luck totals take its roll, which happened whatever was played")
+        check(with_it["match"][side]["total_decisions"]
+              == without["match"][side]["total_decisions"]
+              and abs(with_it["match"][side]["total_error"]
+                      - without["match"][side]["total_error"]) < 1e-9,
+              "and PR does not: the player did not choose among these moves")
 
     # --- the corruption this all prevents is recognisable ------------------
     check(board_problems(stated) == [],

@@ -32,11 +32,18 @@
 
 import { MAX_ANALYSES } from './constants.js';
 
-/** True for a checker/cube action ply (id 0-23), which can carry analysis.
- *  Terminal (24-30) and set-position (31) plies cannot. */
+/** True for a ply this alignment pairs up: a checker/cube action (id 0-23), or a
+ *  *restated play* -- a set-position ply (31) carrying the roll's dice, which is
+ *  an illegal play no dice ply could encode (see `setPositionPly` in export.js).
+ *  Both documents reach such a ply by the same route, so both list it here and
+ *  the pairing stays 1:1.
+ *
+ *  Terminal plies (24-30) hold no decision at all, and a set-position ply with
+ *  *no* dice states where a game starts rather than a turn taken. */
 function _isDecision(ply) {
   const aid = ply.action_id;
-  return aid !== null && aid !== undefined && aid >= 0 && aid <= 23;
+  if (aid === null || aid === undefined) return false;
+  return (aid >= 0 && aid <= 23) || (aid === 31 && ply.d1 !== null && ply.d1 !== undefined);
 }
 
 /** The base plies that can carry analysis, in order. */
