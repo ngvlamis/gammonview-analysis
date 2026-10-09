@@ -1552,6 +1552,7 @@ def to_ogxm_json(result: dict, *, keep_orientation: bool = False) -> dict:
             # bgsage its version, so the label arrives in the summary;
             # the bare fallback keeps an older caller's output valid.
             "model_id": summary.get("engine") or "bgsage",
+            **({"model_name": summary["model_name"]} if summary.get("model_name") else {}),
             "timestamp": ts,
             # What ran it, and that it ran the whole match (v2's `engine_build`
             # and `complete`); supplied for the same reason as `model_id`.

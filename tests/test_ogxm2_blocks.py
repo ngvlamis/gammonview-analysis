@@ -163,7 +163,9 @@ def main() -> int:
           and rec["model_name"] == "Xerxes" and rec["model_id"] == C.BLOCK["model_id"]
           and rec["model_digest"] == C.BLOCK["model_digest"] and rec["cube_efficiency"] == 0.6
           and rec["dials"] == C.DIALS and rec["sources"] == C.SOURCES
-          and rec["completed_at"] == C.BLOCK["completed_at"] and rec["level"]["cube_ply"] == 2,
+          and rec["completed_at"] == C.BLOCK["completed_at"]
+          # v2 counts plies from the alternative: the document's 2 is a 1 there.
+          and rec["level"]["cube_ply"] == 2 - R.PLY_SHIFT,
           "2. and each is v2's own field in the block's ANAL record")
     check(not any(r["key"].startswith(R.GV_PREFIX + "model") or r["key"] == R.GV_PREFIX + "sources"
                   for r in annotations(written["rich-money"])
@@ -180,7 +182,7 @@ def main() -> int:
               and ai["cube_efficiency"] == 0.6 and ai["tables"] == C.BLOCK["tables"]
               and ai["completed_at"] == C.BLOCK["completed_at"] and ai["sources"] == C.SOURCES
               and ai["dials"]["jacoby_mode"] == "forced_on" and ai["dials"]["cube_rule"] == "scalar_equity"
-              and ai["dials"]["top_deep_threshold"] == 0.04 and ai["level"]["cube_ply"] == 2,
+              and ai["dials"]["top_deep_threshold"] == 0.04 and ai["level"]["cube_ply"] == 2 - R.PLY_SHIFT,
               "2. the reference reads them under its own names")
 
     part = settled["partial"]["analysis_info"]
@@ -369,7 +371,8 @@ def main() -> int:
           and fi["completed_at"] == C.BLOCK["completed_at"] and len(fi["coverage"]) == 30,
           "6. the block: every field, the name and the identifier as stated")
     d0 = analysis_at(doc, 0, 0)
-    check(d0["level"]["preset"] == "++" and d0["level"]["rollout"] == C.ROLLOUT
+    check(d0["level"]["preset"] == "++"
+          and d0["level"]["rollout"] == {**C.ROLLOUT, "move_ply": C.ROLLOUT["move_ply"] + R.PLY_SHIFT}
           and d0["alternatives"][5]["level"]["preset"] == "1ply"
           and d0["alternatives_total"] == 40 and d0["luck_producer_ref"] == 0,
           "6. the decisions: levels, counts, sources")
@@ -456,7 +459,7 @@ def main() -> int:
         d["games"][0]["plies"].insert(0, {"color": 1, "action_id": R.ACTION_PASS})
     out, back = edited(move_edit)
     check(analysis_at(back, 0, 1)["alternatives_total"] == 40
-          and analysis_at(back, 0, 1)["level"]["rollout"] == C.ROLLOUT
+          and analysis_at(back, 0, 1)["level"]["rollout"]["move_ply"] == C.ROLLOUT["move_ply"] + R.PLY_SHIFT
           and [0, 0] in back["analysis_info"]["coverage"] and [0, 22] in back["analysis_info"]["coverage"],
           "6. an inserted ply moves the decisions with their plies; coverage is in the document's terms, "
           "and names every ply a decision is on")

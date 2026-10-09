@@ -136,6 +136,11 @@ const RESIGN_KEYS = ['correct_value', 'producer_ref'];
 // holds; every value starts with GV_FORMAT.
 const GV_FORMAT = '1:';
 const GV_KEY_ANALYSIS = 'x-gammonview-analysis/';
+// The x-gammonview-analysis item saying the block counts plies v2's way
+// (PLY_SHIFT). Written since gvformat 2.0.1; a block of ours without it counts
+// them as its document does.
+const GV_ITEM_PLIES = 'plies';
+const GV_PLIES_GNUBG = 'gnubg';
 const GV_KEY_DECISIONS = 'x-gammonview-decisions/';
 const GV_KEY_ILLEGAL_PLY = 'x-gammonview-illegal-ply';
 const GV_KEY_SITE = 'x-gammonview-site';
@@ -353,6 +358,35 @@ function _level(cur) {
   if (has(3)) l.rollout = _rollout(body);
   if (has(4)) l.no_rollout = true;
   return l;
+}
+
+/** How v2 counts plies: gnubg's way, from the alternative rather than from the
+ *  position, so a search a document calls `3ply` is checker_ply 2 on the wire.
+ *  HedgeHog's own files count so, and its author confirmed it as the convention
+ *  (the spec does not say). A document keeps the count players use; the codec
+ *  moves by this much at the boundary, both ways. */
+const PLY_SHIFT = 1;
+
+/** Move a level's depths -- checker_ply, cube_ply and a rollout's move_ply --
+ *  by `by`, in place, never below 0. */
+function shiftLevel(lv, by) {
+  if (!lv) return;
+  for (const k of ['checker_ply', 'cube_ply']) {
+    if (k in lv) lv[k] = Math.max(lv[k] + by, 0);
+  }
+  if (lv.rollout && 'move_ply' in lv.rollout) {
+    lv.rollout.move_ply = Math.max(lv.rollout.move_ply + by, 0);
+  }
+}
+
+/** shiftLevel over a block's level and every level its decision records
+ *  (_decodeDecs's) and their alternatives state. */
+function shiftLevels(anal, decisions, by) {
+  shiftLevel(anal.level, by);
+  for (const d of decisions) {
+    shiftLevel(d.level, by);
+    for (const alt of d.alternatives || []) shiftLevel(alt.level, by);
+  }
 }
 
 /** [6.4] The effective level: each field from the innermost tier carrying it. */
@@ -1833,19 +1867,28 @@ export function _readOgxm2(data, options) {
   const decoded = [];
   const baseBlocks = [];
   const oursIds = new Set();
+  const recounted = new Set();
   const altMaps = new Map();
   for (const { anal, decisions } of blocks) {
     const aid = anal.analysis_id;
     let ours = null;
     const marked = _gvGet(gvMatch, 0, GV_KEY_ANALYSIS + aid);
+    let items = null;
     if (marked !== undefined) {
-      oursIds.add(aid);
-      const items = new Map();
+      items = new Map();
       for (const item of marked.split(';')) {
         if (!item) continue;
         const eq = item.indexOf('=');
         items.set(eq < 0 ? item : item.slice(0, eq), eq < 0 ? '' : item.slice(eq + 1));
       }
+    }
+    // Every producer counts plies v2's way except our writer before gvformat
+    // 2.0.1, whose blocks say so by not naming the count.
+    const shift = items === null || items.get(GV_ITEM_PLIES) === GV_PLIES_GNUBG;
+    if (shift) shiftLevels(anal, decisions, PLY_SHIFT);
+    else recounted.add(aid);
+    if (items !== null) {
+      oursIds.add(aid);
       const extra = new Map();
       for (const { ref, key, value } of gvPly.values()) {
         if (key !== GV_KEY_DECISIONS + aid) continue;
@@ -1853,6 +1896,7 @@ export function _readOgxm2(data, options) {
           throw new GvabError(`annotation on ply ${ref} is not base64`);
         }
         const recs = _decodeDecs(_b64decode(value));
+        if (shift) shiftLevels({}, recs, PLY_SHIFT);
         if (recs.some((d) => d.ply_ref !== ref)) {
           throw new GvabError(`annotation on ply ${ref} holds another ply's decision`);
         }
@@ -1898,7 +1942,7 @@ export function _readOgxm2(data, options) {
   _attachBlocks(ogxm, decoded, plyByKey);
   if (baseBlocks.length) ogxm._base_analyses = baseBlocks;
   // What the file holds that this document cannot: kept for the writer.
-  attach(ogxm, data, [view.getUint16(6, true), rmin], sections, annos, oursIds);
+  attach(ogxm, data, [view.getUint16(6, true), rmin], sections, annos, oursIds, recounted);
   return ogxm;
 }
 
@@ -1907,6 +1951,7 @@ export {
   KIND_CHECKER, KIND_CUBE, KIND_RESIGN, KIND_ROLL,
   CURRENCY_CUBEFUL_MONEY, CURRENCY_CUBEFUL_MATCH,
   GV_FORMAT, GV_KEY_ANALYSIS, GV_KEY_DECISIONS, GV_KEY_ILLEGAL_PLY,
+  GV_ITEM_PLIES, GV_PLIES_GNUBG, PLY_SHIFT, shiftLevel, shiftLevels,
   GV_KEY_SITE, GV_KEY_EVENT, GV_KEY_SCORE, GV_KEY_ANNOTATIONS, GV_KEY_VIDEO_URL, V2_FIELD_NAMES,
   SCOPE_DECISION, SCOPE_ALTERNATIVE, naturalKind, decisionHolder, annoDoc, annoIsOurs,
   GV_PREFIX, GV_MATCH_FIELDS, GV_PROFILE_FIELDS,

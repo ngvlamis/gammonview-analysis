@@ -110,7 +110,9 @@ assert(info.producer === 0 && info.complete === true && info.model_name === 'Xer
 'the block states every optional field v2 gives it');
 const rec = blockRecord(written['rich-money']);
 assert(rec.producer === 0 && rec.complete && rec.currency === 0 && rec.model_name === 'Xerxes'
-  && rec.dials.exact_bearoff === true && rec.sources.length === 2 && rec.level.cube_ply === 2,
+  && rec.dials.exact_bearoff === true && rec.sources.length === 2
+  // v2 counts plies from the alternative: the document's 2 is a 1 there.
+  && rec.level.cube_ply === 1,
 'and each is v2\'s own field in the ANAL record');
 assert(!blockItems(written['rich-money']).includes('engine_build='),
   'nothing about the block needed an annotation of ours');

@@ -93,7 +93,8 @@ def main() -> int:
           and doc["games"][1]["points_won"] == 4, "match: game winners and points")
     info = doc["analysis_info"]
     check(info["model_id"] == "16fcd41c-9f64-4fcc-bca2-c89e6de07721" and info["model_name"] == "xerxes", "match: the model id and name as stated")
-    check(info["ply"] == 2 and info["eval_level"] == "2ply", "match: block depth")
+    # v2 counts plies from the alternative (gnubg): checker_ply 2 is a 3-ply search.
+    check(info["ply"] == 3 and info["eval_level"] == "3ply", "match: block depth, in our count")
 
     rolled = [p for p in plies(doc) if p["action_id"] <= 20]
     lucky = [p for p in rolled if has_luck(p)]
@@ -103,7 +104,7 @@ def main() -> int:
           and any(p["analysis"]["luck"] < 0 for p in lucky), "match: luck runs both ways")
     check(any(abs(p["analysis"]["luck"]) > 0.1 for p in lucky),
           "match: luck is on the equity scale (MWC swings are a fraction of it)")
-    check(info.get("luck_eval_level") == "1ply", "match: luck level from the rolls' own")
+    check(info.get("luck_eval_level") == "2ply", "match: luck level from the rolls' own")
     check("_base_analyses" not in doc, "match: luck is stored, so none needs measuring")
 
     doubles = [p for p in plies(doc) if p["action_id"] == 21 and p.get("analysis")]
@@ -132,7 +133,7 @@ def main() -> int:
           == sum(1 for p in plies(doc) if p.get("analysis")),
           "match: every analysis survives the v1 write")
     check(sum(1 for p in plies(again) if has_luck(p)) == len(lucky)
-          and again["analysis_info"].get("luck_eval_level") == "1ply",
+          and again["analysis_info"].get("luck_eval_level") == "2ply",
           "match: luck survives the v1 write")
 
     # Container checks ---------------------------------------------------------
@@ -150,7 +151,7 @@ def main() -> int:
     # Two blocks: HedgeHog's deeper re-run of a few decisions ------------------
     doc = read_gvab(data("two-blocks"))
     check(len(doc.get("analyses_info") or []) == 2, "two blocks: both listed")
-    check(doc["analyses_info"][1]["ply"] == 3, "two blocks: the second reads at its own depth")
+    check(doc["analyses_info"][1]["ply"] == 4, "two blocks: the second reads at its own depth")
     both = [p for p in plies(doc) if len(p.get("analyses") or []) == 2]
     check(len(both) == 3 and all(p["analyses"][1]["analysis_index"] == 1 for p in both),
           "two blocks: the re-run decisions sit beside the first block's")

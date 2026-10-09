@@ -461,11 +461,14 @@ def v1_sign_to_v2(body: bytes) -> bytes | None:
 # ---------------------------------------------------------------------------
 
 def attach(ogxm: dict, data: bytes, header: tuple, sections: list, annos: list,
-           ours_ids: set) -> None:
+           ours_ids: set, recounted: set = frozenset()) -> None:
     """Attach ``_ogxm2_passthrough`` to ``ogxm`` when the file holds anything
     the document cannot. ``sections`` is ``[(type, offset, payload)]`` in file
-    order, ``annos`` the decoded ``ANNO`` records (each with its ``raw`` bytes)
-    and ``ours_ids`` the ``analysis_id`` of every block our writer made.
+    order, ``annos`` the decoded ``ANNO`` records (each with its ``raw`` bytes),
+    ``ours_ids`` the ``analysis_id`` of every block our writer made, and
+    ``recounted`` those of them that count plies as their document does (before
+    gvformat 2.0.1): their bytes are never kept, since the writer now counts
+    otherwise and would pair them with an annotation saying so.
 
     A file the writer reproduces byte for byte gets nothing, since there is
     nothing to keep: that is our own files, the common case, and it is decided
@@ -546,7 +549,7 @@ def attach(ogxm: dict, data: bytes, header: tuple, sections: list, annos: list,
         if mine is None or "decs" not in blk:
             return
         blk["fp"] = fingerprint(mine.anal, mine.decs, mine.anno_bytes())
-    pt["blocks"] = pt_blocks
+    pt["blocks"] = {aid: blk for aid, blk in pt_blocks.items() if aid not in recounted}
     # The clock and the video are in the document; the source's bytes stand for
     # them while the document still encodes to what they decoded to.
     for name, canon in (("clck", parts.clck), ("vido", parts.vido)):

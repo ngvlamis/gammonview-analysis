@@ -307,11 +307,13 @@ def _json_level(level: dict) -> dict:
 
 #: The levels the foreign file's decisions have. The block's is the default for
 #: all of them; a decision whose level is the block's states none.
-FOREIGN_BLOCK = {"preset": "2ply", "checker_ply": 2}
-FOREIGN_DEEP = {"preset": "++", "checker_ply": 3, "rollout": ROLLOUT}
-FOREIGN_TAIL = {"preset": "1ply", "checker_ply": 1}
-FOREIGN_CUBE = {"preset": "+", "checker_ply": 2, "cube_ply": 3, "rollout": SMALL_ROLLOUT}
-FOREIGN_LUCK = {"preset": "1ply", "checker_ply": 1}
+# On the wire, so counted v2's way (from the alternative): a producer's "2ply"
+# is checker_ply 1 there, and reads back as a document's 2.
+FOREIGN_BLOCK = {"preset": "2ply", "checker_ply": 1}
+FOREIGN_DEEP = {"preset": "++", "checker_ply": 2, "rollout": ROLLOUT}
+FOREIGN_TAIL = {"preset": "1ply", "checker_ply": 0}
+FOREIGN_CUBE = {"preset": "+", "checker_ply": 1, "cube_ply": 2, "rollout": SMALL_ROLLOUT}
+FOREIGN_LUCK = {"preset": "1ply", "checker_ply": 0}
 
 
 def foreign_json(oracle) -> dict:

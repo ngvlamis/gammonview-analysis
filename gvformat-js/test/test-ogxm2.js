@@ -64,7 +64,8 @@ const plies = (doc) => doc.games.flatMap((g) => g.plies);
   assert(doc.games[0].winner === 0 && doc.games[1].winner === 1 && doc.games[1].points_won === 4,
     'match: game winners and points');
   assert(doc.analysis_info.model_id === '16fcd41c-9f64-4fcc-bca2-c89e6de07721' && doc.analysis_info.model_name === 'xerxes', 'match: the model id and name as stated');
-  assert(doc.analysis_info.ply === 2 && doc.analysis_info.eval_level === '2ply', 'match: block depth');
+  // v2 counts plies from the alternative (gnubg): checker_ply 2 is a 3-ply search.
+  assert(doc.analysis_info.ply === 3 && doc.analysis_info.eval_level === '3ply', 'match: block depth, in our count');
   // HedgeHog stores luck per roll; it is read, as an .xg's or a .bgf's is.
   const rolled = plies(doc).filter((p) => p.action_id <= 20);
   const lucky = rolled.filter((p) => typeof p.analysis?.luck === 'number');
@@ -74,7 +75,7 @@ const plies = (doc) => doc.games.flatMap((g) => g.plies);
     'match: luck runs both ways');
   assert(lucky.some((p) => Math.abs(p.analysis.luck) > 0.1),
     'match: luck is on the equity scale (MWC swings are a fraction of it)');
-  assert(doc.analysis_info.luck_eval_level === '1ply', 'match: luck level from the rolls\' own');
+  assert(doc.analysis_info.luck_eval_level === '2ply', 'match: luck level from the rolls\' own');
   assert(doc._base_analyses === undefined, 'match: luck is stored, so none needs measuring');
 
   // HedgeHog analyses match play in MWC; these must arrive as normalized equity.
@@ -105,7 +106,7 @@ const plies = (doc) => doc.games.flatMap((g) => g.plies);
     'match: every analysis survives the v1 write');
   assert(plies(again).filter((p) => typeof p.analysis?.luck === 'number').length
     === plies(doc).filter((p) => typeof p.analysis?.luck === 'number').length
-    && again.analysis_info.luck_eval_level === '1ply',
+    && again.analysis_info.luck_eval_level === '2ply',
     'match: luck survives the v1 write');
 }
 
@@ -134,7 +135,7 @@ const plies = (doc) => doc.games.flatMap((g) => g.plies);
 {
   const doc = readGvab(bytes('two-blocks'));
   assert(doc.analyses_info?.length === 2, 'two blocks: both listed');
-  assert(doc.analyses_info[1].ply === 3, 'two blocks: the second reads at its own depth');
+  assert(doc.analyses_info[1].ply === 4, 'two blocks: the second reads at its own depth');
   const both = plies(doc).filter((p) => p.analyses?.length === 2);
   assert(both.length === 3 && both.every((p) => p.analyses[1].analysis_index === 1),
     'two blocks: the re-run decisions sit beside the first block\'s');

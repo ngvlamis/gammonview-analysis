@@ -15,6 +15,24 @@ behind several design decisions. Dates are the tag dates.
 
 ## 2.0.1 — Unreleased
 
+**Plies are counted the way v2 counts them** *(fix)*
+
+OGXM counts plies from the alternative, as gnubg does, so a 3-ply search is `checker_ply` 2 in
+the file; HedgeHog's author confirmed this as the convention. We wrote our own
+count, so other readers took our 3ply for 4-ply, and we read HedgeHog's 3-ply
+as 2ply. The writer now subtracts one from `checker_ply`, `cube_ply` and a
+rollout's `move_ply`, and the reader adds it back. Documents keep the count
+players use. A file of ours written by 2.0.0 still reads as it did: blocks
+written since carry `plies=gnubg` in their `x-gammonview-analysis` annotation,
+and a block of ours without it is read unshifted.
+
+**Our analysis is named in other readers** *(change)*
+
+An analysis block now carries `model_name` "GammonView bgsage" beside its
+`model_id`. HedgeHog's viewer names an analysis by `model_name` alone, so a
+match analysed here and opened there showed no engine. The identifier is
+unchanged, so nothing that keys on it moves.
+
 **A v1 set-up start survives a rewrite** *(fix)*
 
 A v1 file states a game that starts from a set-up board in its `GAME` header,

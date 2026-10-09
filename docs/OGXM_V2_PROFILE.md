@@ -132,6 +132,16 @@ alternative overrides it only where its own differs, and a decision's or cube's
 `ply` is `checker_ply` / `cube_ply`. A luck record states its depth as
 `checker_ply`; the luck label travels once, in the block's annotation.
 
+**Counting plies.** v2 counts plies gnubg's way, from the alternative rather
+than from the position, and our documents count them the way players do: a
+search our document calls `3ply` is `checker_ply` 2 in the file, and a rollout
+whose moves are played at 2-ply has `move_ply` 1. The spec does not say this;
+HedgeHog's files count so and its author confirmed it as the convention. So the
+writer subtracts one from `checker_ply`, `cube_ply` and `move_ply`, and the
+reader adds it back. A block of ours written before gvformat 2.0.1 counted as
+its document does; it is told apart by its annotation, which since then carries
+`plies=gnubg`, and is read without the shift.
+
 **Checker decisions** carry the alternatives in their order, each with its
 steps, equity, probabilities when recorded, and `is_played`. v2 then derives
 the best equity (the first alternative's) and, when the played move is listed,
@@ -192,7 +202,7 @@ holds is split over `key`, `key~1`, `key~2`, ... and joined in that order.
 
 | Key | Scope | Value after `1:` |
 |---|---|---|
-| `x-gammonview-analysis/<analysis_id>` | match | `;`-separated items: `level=<label>` (the block's own level, when it is not the block preset; empty for none), `luck=<label>` (when the block has luck), `pr=<tokens>` (always present; it marks the block as ours), `frame=<entries>` (when plies carry a source frame) |
+| `x-gammonview-analysis/<analysis_id>` | match | `;`-separated items: `level=<label>` (the block's own level, when it is not the block preset; empty for none), `luck=<label>` (when the block has luck), `pr=<tokens>` (always present; it marks the block as ours), `plies=gnubg` (since gvformat 2.0.1: the block's levels count plies v2's way; see *Counting plies*), `frame=<entries>` (when plies carry a source frame) |
 | `x-gammonview-decisions/<analysis_id>` | ply | base64 of `DECS` records for this ply, in kind order. They stand in for `DECS`'s records of the same kind at that ply |
 | `x-gammonview-illegal-ply` | ply | the steps of the illegal play, `from/pips` joined by `,` (empty for a dance) |
 | `x-gammonview-site` | match | `site` |

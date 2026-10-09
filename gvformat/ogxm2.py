@@ -119,6 +119,11 @@ CURRENCY_CUBEFUL_MATCH = 2
 # holds; every value starts with GV_FORMAT.
 GV_FORMAT = "1:"
 GV_KEY_ANALYSIS = "x-gammonview-analysis/"
+#: The ``x-gammonview-analysis`` item saying the block counts plies v2's way
+#: (``PLY_SHIFT``). Written since gvformat 2.0.1; a block of ours without it
+#: counts them as its document does.
+GV_ITEM_PLIES = "plies"
+GV_PLIES_GNUBG = "gnubg"
 GV_KEY_DECISIONS = "x-gammonview-decisions/"
 GV_KEY_ILLEGAL_PLY = "x-gammonview-illegal-ply"
 GV_KEY_SITE = "x-gammonview-site"
@@ -352,6 +357,37 @@ def _level(cur: _Cursor) -> dict:
     if has(4):
         lv["no_rollout"] = True
     return lv
+
+
+#: How v2 counts plies: gnubg's way, from the alternative rather than from the
+#: position, so a search a document calls ``3ply`` is ``checker_ply`` 2 on the
+#: wire. HedgeHog's own files count so, and its author confirmed it as the
+#: convention (the spec does not say). A document keeps the count players use;
+#: the codec moves by this much at the boundary, both ways.
+PLY_SHIFT = 1
+
+
+def shift_level(lv: dict | None, by: int) -> None:
+    """Move a level's depths -- ``checker_ply``, ``cube_ply`` and a rollout's
+    ``move_ply`` -- by ``by``, in place, never below 0."""
+    if not lv:
+        return
+    for k in ("checker_ply", "cube_ply"):
+        if k in lv:
+            lv[k] = max(lv[k] + by, 0)
+    r = lv.get("rollout")
+    if r and "move_ply" in r:
+        r["move_ply"] = max(r["move_ply"] + by, 0)
+
+
+def shift_levels(anal: dict, decisions, by: int) -> None:
+    """``shift_level`` over a block's level and every level its decision
+    records (``_decode_decs``'s) and their alternatives state."""
+    shift_level(anal.get("level"), by)
+    for d in decisions:
+        shift_level(d.get("level"), by)
+        for alt in d.get("alternatives") or []:
+            shift_level(alt.get("level"), by)
 
 
 def _resolve(parent: dict, override: dict | None) -> dict:
@@ -1897,14 +1933,24 @@ def read_ogxm2(data: bytes, *, verify_crc: bool = True, derive_ogids: bool = Tru
     decoded = []
     base_blocks = []
     ours_ids: set = set()
+    recounted: set = set()
     alt_maps: dict = {}
     for blk in blocks:
         aid = blk["anal"]["analysis_id"]
         ours = None
+        items = None
         if (0, GV_KEY_ANALYSIS + aid) in gv_match:
-            ours_ids.add(aid)
             items = dict(item.partition("=")[::2]
                          for item in gv_match[(0, GV_KEY_ANALYSIS + aid)].split(";") if item)
+        # Every producer counts plies v2's way except our writer before
+        # gvformat 2.0.1, whose blocks say so by not naming the count.
+        shift = items is None or items.get(GV_ITEM_PLIES) == GV_PLIES_GNUBG
+        if shift:
+            shift_levels(blk["anal"], blk["decisions"], PLY_SHIFT)
+        elif items is not None:
+            recounted.add(aid)
+        if items is not None:
+            ours_ids.add(aid)
             extra = {}
             for (ref, key), value in gv_ply.items():
                 if key == GV_KEY_DECISIONS + aid:
@@ -1913,6 +1959,8 @@ def read_ogxm2(data: bytes, *, verify_crc: bool = True, derive_ogids: bool = Tru
                     except ValueError as exc:
                         raise GvabError(f"annotation on ply {ref} is not base64") from exc
                     recs = _decode_decs(raw)
+                    if shift:
+                        shift_levels({}, recs, PLY_SHIFT)
                     if any(d["ply_ref"] != ref for d in recs):
                         raise GvabError(f"annotation on ply {ref} holds another ply's decision")
                     extra[ref] = recs
@@ -1958,5 +2006,5 @@ def read_ogxm2(data: bytes, *, verify_crc: bool = True, derive_ogids: bool = Tru
     # What the file holds that this document cannot: kept for the writer.
     from .ogxm2_passthrough import attach
     header = (struct.unpack_from("<H", data, 6)[0], struct.unpack_from("<H", data, 10)[0])
-    attach(ogxm, data, header, sections, annos, ours_ids)
+    attach(ogxm, data, header, sections, annos, ours_ids, recounted)
     return ogxm

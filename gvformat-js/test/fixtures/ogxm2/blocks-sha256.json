@@ -1,42 +1,42 @@
 {
   "match-currencies": {
-    "length": 4158,
-    "settled_sha256": "99548449686d743422dae17c1718cf845922ca6cb78996eecd2d301a4c1919f2",
-    "sha256": "c7bc246b4250aa0c6c6e50d69c54c4df0b659ea4a74a4d0f05177d83351d9817"
+    "length": 4188,
+    "settled_sha256": "9a7a3abdd4c903c8b5c8c844fd8919acf39b36fe9c100118ea6cf2bace7c49bb",
+    "sha256": "233585ce9757a5db0d1d43809a2ef03261f79d4d343341c111f023a560b93bb1"
   },
   "money-block-in-a-match": {
-    "length": 4152,
-    "settled_sha256": "42444b29f61634c15c57d16a9284b2736b2110d921e73fec65f472cac7857f0c",
-    "sha256": "541656316d0e9b4936ca1b690bf1384b4ec98ea5de184764986a85c4e5f00e1d"
+    "length": 4182,
+    "settled_sha256": "cc669374b8cec5f48c5449dd21596e37ecaa70a4c71950a03087f71249b7b37c",
+    "sha256": "4f1fd95088d73d1ef0b6304db4c33ea157851e21b326a3cf1794e3e58a27a11e"
   },
   "money-in-a-match-currency": {
-    "length": 5118,
-    "settled_sha256": "30a34a2de485a8402df1058588a71f940be2de87a8ba8596249f57162de182fb",
-    "sha256": "88122b7c4e3a0321f6f10019204c8c39a8ec87d63dcb50aff40bbec1b0aae6ba"
+    "length": 5148,
+    "settled_sha256": "96586a915a3d263e8f0f2e5426d4affd6a0c217b9bdf654e8451181fb7c28543",
+    "sha256": "b30030351d560187b76b0b759d115962f9740e71098576a8186fc6bbcd4774c9"
   },
   "partial": {
-    "length": 5191,
-    "settled_sha256": "6cade5770acfcf0476e56c50cfa20d7beb51681f061f3ff09a624f2202b7a260",
-    "sha256": "827113951545f51863b9001446f4e5346f54a86581352ffe792a09e5c772314e"
+    "length": 5221,
+    "settled_sha256": "f4fa24e872ace4e19b8e87d55dedec3036d4d71a94ec2c6ab125f0ffe4add553",
+    "sha256": "338abfaef54b737e22693922adf46792d7352818b16cf2e0a411483e1d7b4d01"
   },
   "resigned": {
-    "length": 595,
+    "length": 607,
     "settled_sha256": "6da5f4dabf2a32f1b9dcd815964b745c8e8f4a25e814bf752d9d38c75bbaa657",
-    "sha256": "8a3c53c8e1a75b1a12d9be41bd7cc0e49196668844c1dc76f2dab7cb612dc6ce"
+    "sha256": "fcfc15c84dc1f0dd6e42ede8d9c9ad2e9a1c8e6e6ed26cbe75feb49558a65dbf"
   },
   "rich-money": {
-    "length": 6141,
+    "length": 6153,
     "settled_sha256": "f85c6add67fccc55bda58cceb1376ef5e84c8617d6ace32bda22fe70dd56538e",
-    "sha256": "268e55b3d56e67fc867c3be912103c149cfbdffa01748c89d7bd1e3bf46b06bd"
+    "sha256": "0778a3570b64028642fbcef32c3de50b94b093351fd1aa7f9d078f678b59389d"
   },
   "two-blocks": {
-    "length": 11026,
-    "settled_sha256": "e63ca61d1e0eb3185e9404f88c68e86d97dd6646042ba73ea29edc1eeac4e991",
-    "sha256": "c94b29b08e6b0e57fa2efae8eeea0211d738e2332303917613217b1369e42929"
+    "length": 11068,
+    "settled_sha256": "530688962cf4fafd907b2d14042bc377dd3d4fbe4c5c7f6a5a9bee7164abaaa7",
+    "sha256": "db50b9d10c6f8ddcc696431ae9357dc89a69590d0ca9f715ffa20c5e154a2a54"
   },
   "unholdable": {
-    "length": 25579,
+    "length": 25591,
     "settled_sha256": "d0de892df149954b19554d385c42491198dbc4b86368667ad9366828671797c5",
-    "sha256": "70d65f86207dfebe3f72581f0d65f84a5d409af546724acbd823eb0b17d67392"
+    "sha256": "c2f67d0524da7990fe8816415ae25a6987836b343024dbc3c96713142254b371"
   }
 }

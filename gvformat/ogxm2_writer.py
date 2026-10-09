@@ -192,7 +192,10 @@ _ROLLOUT_UINTS = ("trials", "truncation_depth", "move_ply", "variance_reduction"
 
 
 def _level_bytes(lv: dict) -> bytes:
-    """A ``level`` record from an override (``_level_diff``'s shape)."""
+    """A ``level`` record from an override (``_level_diff``'s shape), its depths
+    counted v2's way (``R.PLY_SHIFT``)."""
+    lv = copy.deepcopy(lv)
+    R.shift_level(lv, -R.PLY_SHIFT)
     fields: dict[int, bytes] = {}
     if "preset" in lv:
         fields[0] = _str(lv["preset"])
@@ -1870,10 +1873,14 @@ def _encode(ogxm: dict) -> _Parts:
         # from the records just written, and keep only where the document
         # disagrees.
         anal_dec = R._decode_anal(anal)
+        decs_dec = R._decode_decs(decs_payload)
+        R.shift_levels(anal_dec, decs_dec, R.PLY_SHIFT)
         extra_dec = {ref: R._decode_decs(b"".join(rec for _k, rec in recs))
                      for ref, recs in extra.items()}
+        for recs in extra_dec.values():
+            R.shift_levels({}, recs, R.PLY_SHIFT)
         _info, decoded, _luck = R._v1_block(
-            anal_dec, R._decode_decs(decs_payload), match.ply_at, match.match_length,
+            anal_dec, decs_dec, match.ply_at, match.match_length,
             ours={"extra": extra_dec, "exceptions": set(), "illegal": match.illegal,
                   "frames": R._parse_frames(",".join(frames))})
         want = {(match.ref_of[key], key): select(p) for key, p in match.ply_at
@@ -1886,6 +1893,7 @@ def _encode(ogxm: dict) -> _Parts:
                 k == R.KIND_ROLL for recs in extra.values() for k, _b in recs):
             items.append("luck=" + quote(luck_label, safe=_SAFE))
         items.append("pr=" + ",".join(tokens))
+        items.append(f"{R.GV_ITEM_PLIES}={R.GV_PLIES_GNUBG}")
         if frames:
             items.append("frame=" + ",".join(frames))
         gv_annos: list[tuple[int, int, str, str]] = []

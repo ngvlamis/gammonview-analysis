@@ -95,6 +95,12 @@ from .progress import ProgressBar
 # engine upgrade invalidates the goldens anyway.
 MODEL_NAME = "gv-bgsage"
 
+#: What a reader shows for this analysis: v2's ``model_name``, beside the
+#: opaque ``model_id``. HedgeHog's viewer names an analysis by this field alone,
+#: so it is worded for a reader there, saying whose analysis it is; GammonView
+#: labels a ``gv-bgsage`` block from the identifier and never shows it.
+DISPLAY_NAME = "GammonView bgsage"
+
 
 def model_id() -> str:
     """``gv-bgsage/<bgsage version>`` -- the producer of this analysis.
@@ -631,6 +637,7 @@ def analyze_ogxm(
     return {
         "summary": {
             "engine": model_id(),
+            "model_name": DISPLAY_NAME,
             "engine_build": engine_build(),
             # Every decision of the match was looked at: v2's `complete`, as
             # against an incremental run that covered some of them.

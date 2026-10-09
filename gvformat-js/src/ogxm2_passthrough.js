@@ -492,8 +492,11 @@ function v1SignToV2(body) {
 
 /** Attach `_ogxm2_passthrough` to `ogxm` when the file holds anything the
  *  document cannot. `sections` is `[{type, start, payload}]` in file order,
- *  `annos` the decoded ANNO records (each with its `raw` bytes) and `oursIds`
- *  the analysis_id of every block our writer made.
+ *  `annos` the decoded ANNO records (each with its `raw` bytes), `oursIds`
+ *  the analysis_id of every block our writer made, and `recounted` those of
+ *  them that count plies as their document does (before gvformat 2.0.1): their
+ *  bytes are never kept, since the writer now counts otherwise and would pair
+ *  them with an annotation saying so.
  *
  *  A file the writer reproduces byte for byte gets nothing, since there is
  *  nothing to keep: that is our own files, the common case, and it is decided
@@ -507,7 +510,7 @@ function v1SignToV2(body) {
  *  canonical encoding, so it goes out verbatim while the document still says
  *  what it said; one that addressed nothing (an unknown scope or decision kind)
  *  is kept whole. */
-export function attach(ogxm, data, header, sections, annos, oursIds) {
+export function attach(ogxm, data, header, sections, annos, oursIds, recounted = new Set()) {
   const foreignAnnos = annos.filter((r) => !annoIsOurs(r));
   const types = sections.map((s) => s.type);
   const blocksInFile = sections.filter((s) => s.type === 'ANAL').map((s) => uuidOf(s.payload));
@@ -569,7 +572,7 @@ export function attach(ogxm, data, header, sections, annos, oursIds) {
     if (mine === undefined || !('decs' in blk)) return;
     blk.fp = fingerprint(mine.anal, mine.decs, mine.anno_bytes());
   }
-  pt.blocks = ptBlocks;
+  pt.blocks = Object.fromEntries(Object.entries(ptBlocks).filter(([aid]) => !recounted.has(aid)));
   // The clock and the video are in the document; the source's bytes stand for
   // them while the document still encodes to what they decoded to.
   for (const [name, canon] of [['clck', parts.clck], ['vido', parts.vido]]) {

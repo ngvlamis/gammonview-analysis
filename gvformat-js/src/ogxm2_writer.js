@@ -56,6 +56,7 @@ import {
   KIND_CHECKER, KIND_CUBE, KIND_RESIGN, KIND_ROLL,
   CURRENCY_CUBEFUL_MONEY, CURRENCY_CUBEFUL_MATCH,
   GV_FORMAT, GV_KEY_ANALYSIS, GV_KEY_DECISIONS, GV_KEY_ILLEGAL_PLY,
+  GV_ITEM_PLIES, GV_PLIES_GNUBG, PLY_SHIFT, shiftLevel, shiftLevels,
   GV_KEY_SITE, GV_KEY_EVENT, GV_KEY_SCORE, GV_KEY_ANNOTATIONS, GV_KEY_VIDEO_URL, V2_FIELD_NAMES,
   GV_PREFIX, SCOPE_GAME, SCOPE_DECISION, SCOPE_ALTERNATIVE, naturalKind, decisionHolder, _gvText,
   ACTION_BEAVER, ACTION_RACCOON, ACTION_SETTLE, ACTION_CUBE_SET, ACTION_PASS, ACTION_ESCAPE,
@@ -305,8 +306,11 @@ function _seat(color) {
 const _ROLLOUT_UINTS = ['trials', 'truncation_depth', 'move_ply', 'variance_reduction', 'budget_ms',
   'match_policy'];
 
-/** A `level` record from an override (`_levelDiff`'s shape). */
+/** A `level` record from an override (`_levelDiff`'s shape), its depths
+ *  counted v2's way (PLY_SHIFT). */
 function _levelBytes(lv) {
+  lv = structuredClone(lv);
+  shiftLevel(lv, -PLY_SHIFT);
   const fields = {};
   if (_has(lv, 'preset')) fields[0] = _str(lv.preset);
   if (_has(lv, 'checker_ply')) fields[1] = _varint(lv.checker_ply);
@@ -2036,10 +2040,16 @@ export function _encode(ogxm) {
     // The flags v2 has no field for: derive them the way the reader will, from
     // the records just written, and keep only where the document disagrees.
     const analDec = _decodeAnal(anal);
+    const decsDec = _decodeDecs(decsPayload);
+    shiftLevels(analDec, decsDec, PLY_SHIFT);
     const extraDec = new Map();
-    for (const [ref, recs] of extra) extraDec.set(ref, _decodeDecs(_cat(...recs.map((r) => r[1]))));
+    for (const [ref, recs] of extra) {
+      const dec = _decodeDecs(_cat(...recs.map((r) => r[1])));
+      shiftLevels({}, dec, PLY_SHIFT);
+      extraDec.set(ref, dec);
+    }
     const [, decoded] = _v1Block(
-      analDec, _decodeDecs(decsPayload), match.ply_at, match.match_length,
+      analDec, decsDec, match.ply_at, match.match_length,
       { extra: extraDec, exceptions: new Set(), illegal: match.illegal,
         frames: _parseFrames(frames.join(',')) });
     const want = [];
@@ -2059,6 +2069,7 @@ export function _encode(ogxm) {
       items.push(`luck=${_quote(luckLabel, _SAFE)}`);
     }
     items.push(`pr=${tokens.join(',')}`);
+    items.push(`${GV_ITEM_PLIES}=${GV_PLIES_GNUBG}`);
     if (frames.length) items.push(`frame=${frames.join(',')}`);
     const gvAnnos = [];
     for (const [key, value] of _chunked(GV_KEY_ANALYSIS + aidStr, GV_FORMAT + items.join(';'))) {
