@@ -3,7 +3,7 @@
 
 """The OGXM v2 writer: lossless against v1, and conforming by the reference.
 
-``write_gvab`` writes OGXM v2 since 1.6.0. Three things are checked, over every
+``write_gvab`` writes OGXM v2 since 2.0.0. Three things are checked, over every
 match in the sample corpus in every form it ships (``.gvab``, ``.xg``, ``.bgf``,
 ``.mat``) and the goldens, plus synthetic shapes the corpus lacks (two analysis
 blocks, analysed resignations):

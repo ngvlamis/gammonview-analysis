@@ -3,7 +3,7 @@
 
 // Round-trip test: write_gvab(read_gvab(bytes)) === bytes
 //
-// `write_gvab` writes OGXM v2 and `write_gvab_v1` the v1 it wrote before 1.6.0.
+// `write_gvab` writes OGXM v2 and `write_gvab_v1` the v1 it wrote before 2.0.0.
 // Tests of properties either must keep (round-trip stability, PR surviving a
 // write) run on `write_gvab`; those that look inside v1's bytes (the GVAN chunk)
 // run on `write_gvab_v1`. A v2 match-play block is stored in MWC, so reading one

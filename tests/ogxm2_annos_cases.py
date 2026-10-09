@@ -57,11 +57,10 @@ def base() -> dict:
     return B.settled(doc)
 
 
-#: Every field of the clock (8.2): the four numbers, both berserk flags, an
-#: unassigned flag bit, and a step other than the canonical 10 ms.
+#: Every field of the clock (8.2): the four numbers, the flags byte
+#: (both berserk bits and an unassigned one), and a step other than the canonical 10 ms.
 CLOCK = {"reserve_ms": 120000, "delay_ms": 12000, "increment_ms": 5000,
-         "start_timestamp": 1790380800, "white_berserk": True, "black_berserk": True,
-         "flags_other": 0x20, "precision": 100}
+         "start_timestamp": 1790380800, "flags": 3 | 0x20, "precision": 100}
 
 #: Every field of the video (8.3).
 VIDEO = {"kind": 2, "is_live": True, "offset_ms": -250, "url": "https://twitch.tv/videos/123"}
@@ -71,12 +70,12 @@ def add_clock(doc: dict, clock: dict, readings: int, step: int = 100) -> None:
     """``clock`` on the document and a reading on each of the first ``readings``
     plies v2 holds (the series may end before the last ply). The steps grow, and
     one is long, so the series needs its unary part."""
-    doc["clock"] = copy.deepcopy(clock)
+    doc["clock_info"] = copy.deepcopy(clock)
     t = 0
     for i, (_gi, _pi, p) in enumerate(v2_plies(doc)):
         if i >= readings:
             break
-        p["clock_ms"] = t
+        p["timestamp_ms"] = t
         t += step * (1 + i % 7) + (65000 if i == 5 else 0)
 
 
@@ -85,7 +84,7 @@ def clock_video() -> dict:
     every field, one with only its position, one with the wall-clock time)."""
     doc = base()
     add_clock(doc, CLOCK, 30)
-    doc["video"] = copy.deepcopy(VIDEO)
+    doc["video_info"] = copy.deepcopy(VIDEO)
     g0, g1 = doc["games"]
     g0["plies"][3].update(video_ms=5000, wall_ms=1790380805000, behind_live_ms=3000,
                           video_hand_anchored=True)
@@ -96,9 +95,10 @@ def clock_video() -> dict:
 
 
 def clock_canonical() -> dict:
-    """A clock at the canonical step, which is no key; no berserk."""
+    """A clock at the canonical step, which is no key; black berserk only."""
     doc = base()
-    clock = {k: v for k, v in CLOCK.items() if k not in ("precision", "white_berserk", "flags_other")}
+    clock = {k: v for k, v in CLOCK.items() if k != "precision"}
+    clock["flags"] = 2
     add_clock(doc, clock, 12, step=70)
     return B.settled(doc)
 
@@ -106,15 +106,15 @@ def clock_canonical() -> dict:
 def clock_empty() -> dict:
     """A clock that has no reading yet, and a video that has no marks."""
     doc = base()
-    doc["clock"] = {"reserve_ms": 0, "delay_ms": 0, "increment_ms": 0, "start_timestamp": 0}
-    doc["video"] = {"kind": 0}
+    doc["clock_info"] = {"reserve_ms": 0, "delay_ms": 0, "increment_ms": 0, "start_timestamp": 0}
+    doc["video_info"] = {"kind": 0}
     return B.settled(doc)
 
 
 def video_url_unholdable() -> dict:
     """A URL v2 drops (8.3: not https) travels in an annotation of ours."""
     doc = base()
-    doc["video"] = {"kind": 1, "url": "ftp://example.com/match.mp4"}
+    doc["video_info"] = {"kind": 1, "url": "ftp://example.com/match.mp4"}
     doc["games"][0]["plies"][1]["video_ms"] = 100
     return B.settled(doc)
 
@@ -132,11 +132,11 @@ def clock_gap() -> tuple[dict, dict]:
     """``(written, read back)``: a reading on a ply after one without cannot be
     written (8.2), so the clock is dropped, the plies' readings with it."""
     doc = clock_video()
-    del doc["games"][0]["plies"][6]["clock_ms"]
+    del doc["games"][0]["plies"][6]["timestamp_ms"]
     read = copy.deepcopy(doc)
-    read.pop("clock")
+    read.pop("clock_info")
     for _gi, _pi, p in v2_plies(read):
-        p.pop("clock_ms", None)
+        p.pop("timestamp_ms", None)
     return doc, read
 
 
@@ -253,7 +253,7 @@ def errors() -> dict[str, dict]:
     doc["games"][0]["plies"][5]["analysis"]["annotations"] = [{"value": "x", "kind": 9}]
     out["unknown-decision-kind"] = doc
     doc = base()
-    doc["clock"] = {"reserve_ms": -1}
+    doc["clock_info"] = {"reserve_ms": -1}
     out["negative-clock"] = doc
     return out
 
@@ -402,7 +402,7 @@ def annotation_removed(doc: dict) -> dict:
 
 def clock_edited(doc: dict) -> dict:
     doc = copy.deepcopy(doc)
-    doc["games"][0]["plies"][6]["clock_ms"] += 40
+    doc["games"][0]["plies"][6]["timestamp_ms"] += 40
     return doc
 
 

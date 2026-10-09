@@ -297,6 +297,24 @@ def main() -> int:
           "10. and the ratings are identical")
 
     print()
+    print()
+    print("--- 11. a cube beside a missed double is one decision, counted once ---")
+    cube = {"no_double_equity": 0.40, "double_take_equity": 0.60, "double_pass_equity": 1.0}
+    ply = {"color": 1, "action_id": 6, "ogid_before": None}
+    both = _checker([0.2, 0.1], True, {"cube_decision": dict(cube), "missed_double": dict(cube)})
+    complete_base_block({(0, 0): both}, {(0, 0): ply}, None)
+    check("decision" not in both["cube_decision"],
+          "11. the live cube takes no flag when a missed double sits beside it")
+    check(both["missed_double"].get("decision") is None,
+          "11. the missed double stays unflagged: stats derives it")
+    alone = _checker([0.2, 0.1], True, {"cube_decision": dict(cube)})
+    complete_base_block({(0, 0): alone}, {(0, 0): ply}, None)
+    check(alone["cube_decision"]["decision"] is True,
+          "11. a live cube on its own is still judged on its triviality")
+    doc = {"games": [{"plies": [{"color": 1, "action_id": 6, "analysis": both}]}]}
+    counted = compute_aggregates(doc)["match"]["white"]["cube_decisions"]
+    check(counted == 1, "11. and compute_aggregates counts the cube once")
+
     print(f"{_checks - len(_failures)}/{_checks} checks passed.")
     if _failures:
         print("FAILURES:")

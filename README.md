@@ -106,8 +106,8 @@ normalized equity, and the reader converts back.
 **We read OGXM, both versions.** `read_gvab` takes a v1 or v2 file this repo
 never wrote, including one carrying another engine's analysis, and `gvan-match`
 appends its own analysis block rather than replacing what is already there.
-Files written before 1.6.0 are OGXM v1 with a `GVAN` chunk
-([`docs/OGXM_FORMAT_SPEC_GAMMONVIEW.md`](docs/OGXM_FORMAT_SPEC_GAMMONVIEW.md));
+Files written before 2.0.0 are OGXM v1 with a `GVAN` chunk
+([`docs/v1/OGXM_FORMAT_SPEC_GAMMONVIEW.md`](docs/v1/OGXM_FORMAT_SPEC_GAMMONVIEW.md));
 they stay readable for good.
 
 `.gva` is our document as JSON — the same content as the `.gvab`, in the shape
@@ -256,9 +256,9 @@ tiers fire, parallelism, and preset overrides.
 | [`CONTRIBUTING.md`](CONTRIBUTING.md) | How to run the tests, the conventions, what a good change looks like |
 | [`CHANGELOG.md`](CHANGELOG.md) | Release history, including the measurements behind several design decisions |
 | [`CLAUDE.md`](CLAUDE.md) | Maintainer and coding-agent notes: design rationale, measurements, and the rituals around an engine upgrade |
-| [`docs/OGXM_JSON_SPEC_GAMMONVIEW.md`](docs/OGXM_JSON_SPEC_GAMMONVIEW.md) | The JSON shape this repo writes (match → game → ply → analysis) — base spec plus every GammonView addition, marked |
+| [`docs/OGXM_JSON_SPEC_GAMMONVIEW.md`](docs/OGXM_JSON_SPEC_GAMMONVIEW.md) | The 2.0 document — the JSON `.gva` holds and `read_gvab` returns (match → game → ply → analysis): every key, its type and units, and the OGXM v2 field it maps to |
 | [`docs/OGXM_V2_PROFILE.md`](docs/OGXM_V2_PROFILE.md) | How a document is written as OGXM v2 — the mapping, the `x-gammonview` annotations, and what reading back can change |
-| [`docs/OGXM_FORMAT_SPEC_GAMMONVIEW.md`](docs/OGXM_FORMAT_SPEC_GAMMONVIEW.md) | The OGXM **v1** `.gvab` layout written before 1.6.0, including the `GVAN` chunk — still read |
+| [`docs/v1/OGXM_FORMAT_SPEC_GAMMONVIEW.md`](docs/v1/OGXM_FORMAT_SPEC_GAMMONVIEW.md) | The OGXM **v1** `.gvab` layout written before 2.0.0, including the `GVAN` chunk — still read |
 | [`docs/OGXM_COMPUTED_FIELDS.md`](docs/OGXM_COMPUTED_FIELDS.md) | Fields the reader computes rather than stores (PR, luck-MWC, MWC, classification) |
 | [`docs/METHODOLOGY.md`](docs/METHODOLOGY.md) | PR / luck / cube-decision methodology and filters |
 | [`docs/PRESET_ACCURACY.md`](docs/PRESET_ACCURACY.md) | What each preset costs in accuracy, measured against XG over 493 matches |

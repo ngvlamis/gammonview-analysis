@@ -3,7 +3,7 @@
 
 """The clock, the video and the annotations of OGXM v2 as document keys.
 
-``clock`` (with ``clock_ms`` on the plies), ``video`` (with ``video_ms`` and its
+``clock_info`` (with ``timestamp_ms`` on the plies), ``video_info`` (with ``video_ms`` and its
 companions on the marked plies) and ``annotations`` -- lists on the match, a
 game, a ply, a decision's analysis object and an alternative -- carry what v2's
 ``CLCK``, ``VIDO`` and ``ANNO`` hold, so they move with their plies and are
@@ -107,7 +107,7 @@ def main() -> int:
     if have_oracle:
         check(all(oracle.is_field_name(n) for n in R.V2_FIELD_NAMES),
               "1. every name in V2_FIELD_NAMES is a field name to the reference")
-        check(not any(oracle.is_field_name(n) for n in ("x-note", "x-gammonview-site", "note", "clock_ms")),
+        check(not any(oracle.is_field_name(n) for n in ("x-note", "x-gammonview-site", "note", "timestamp_ms")),
               "1. and a key of ours or a producer's is not")
     else:
         check(len(R.V2_FIELD_NAMES) == 140, "1. the list has the reference schema's 140 names")
@@ -133,20 +133,19 @@ def main() -> int:
             check(j["clock_info"]["reserve_ms"] == 120000, f"2. {name}: and reads the clock")
 
     cv = cases["clock-video"]
-    check(cv["clock"] == C.CLOCK and cv["video"] == C.VIDEO
+    check(cv["clock_info"] == C.CLOCK and cv["video_info"] == C.VIDEO
           and cv["games"][0]["plies"][3]["video_hand_anchored"] is True
           and cv["games"][0]["plies"][3]["wall_ms"] == 1790380805000
           and cv["games"][1]["plies"][5]["behind_live_ms"] == 65534000,
           "2. the clock and the video carry every header field and every mark field")
-    check(sum("clock_ms" in p for g in cv["games"] for p in g["plies"]) == 30
-          and "clock_ms" not in cv["games"][1]["plies"][0],
+    check(sum("timestamp_ms" in p for g in cv["games"] for p in g["plies"]) == 30
+          and "timestamp_ms" not in cv["games"][1]["plies"][0],
           "2. a clock reading is on thirty plies, and not on a game's set-up position")
-    check("precision" not in cases["clock-canonical"]["clock"] and "white_berserk" not in cases["clock-canonical"]["clock"]
-          and "flags_other" not in cases["clock-canonical"]["clock"],
-          "2. a canonical clock has no precision, and a false flag is no key")
-    check(cases["clock-empty"]["clock"] == {"reserve_ms": 0, "delay_ms": 0, "increment_ms": 0, "start_timestamp": 0}
-          and cases["clock-empty"]["games"][0]["plies"][0]["clock_ms"] == 0
-          and cases["clock-empty"]["video"] == {"kind": 0},
+    check("precision" not in cases["clock-canonical"]["clock_info"] and cases["clock-canonical"]["clock_info"]["flags"] == 2,
+          "2. a canonical clock has no precision key; its flags are the byte as stored")
+    check(cases["clock-empty"]["clock_info"] == {"reserve_ms": 0, "delay_ms": 0, "increment_ms": 0, "start_timestamp": 0}
+          and cases["clock-empty"]["games"][0]["plies"][0]["timestamp_ms"] == 0
+          and cases["clock-empty"]["video_info"] == {"kind": 0},
           "2. an empty clock reads back with the reading at ply 0 that v2 implies, and a bare video")
 
     # -- 3. What ANNO cannot hold -------------------------------------------------------
@@ -185,8 +184,8 @@ def main() -> int:
           "3. a mark on a set-up position is on no ply v2 holds, so it is not written")
     written, read = C.clock_gap()
     back = read_gvab(write_gvab(written))
-    check("clock" not in back and "video" in back
-          and not any("clock_ms" in p for g in back["games"] for p in g["plies"]),
+    check("clock_info" not in back and "video_info" in back
+          and not any("timestamp_ms" in p for g in back["games"] for p in g["plies"]),
           "3. a clock with a gap in its readings is not written, and the video stands")
 
     many = C.base()
@@ -217,14 +216,14 @@ def main() -> int:
     expected = json.loads((FIXTURES / "annos.expected.json").read_text())
     held = {k: v for k, v in doc.items() if k != P.KEY}
     check(held == expected, "4. read_gvab gives the expected document")
-    check(doc["clock"]["flags_other"] == 16 and doc["clock"]["white_berserk"] and doc["clock"]["black_berserk"]
-          and doc["video"] == {"kind": 2, "is_live": True, "offset_ms": -300,
+    check(doc["clock_info"]["flags"] == 3 | 16
+          and doc["video_info"] == {"kind": 2, "is_live": True, "offset_ms": -300,
                                "url": "https://www.twitch.tv/videos/99"},
           "4. the clock and video headers")
     check(len(pt["anno"]) == 2 and sorted(a["scope"] for a in pt["anno"]) == [3, 9]
           and len(pt["anno_raw"]) == 17 and "clck" in pt and "vido" in pt,
           "4. only the two annotations that address nothing are kept whole; the rest by fingerprint")
-    check(not any(k in pt for k in ("clock", "video")) and json.loads(json.dumps(pt)) == pt,
+    check(not any(k in pt for k in ("clock_info", "video_info")) and json.loads(json.dumps(pt)) == pt,
           "4. and the record is JSON-safe")
     check(write_gvab(doc) == FOREIGN, "4. write(read(F)) is F, byte for byte")
     check(write_gvab(json.loads(json.dumps(doc))) == FOREIGN, "4. the .gva route writes the same bytes")
@@ -331,18 +330,18 @@ def main() -> int:
     # -- 6. A v1 file ---------------------------------------------------------------------------
     print("--- 6. a v1 file's clock and video ---")
     v1 = read_gvab(V1_CHUNKS)
-    check(v1["clock"] == {"reserve_ms": 120000, "delay_ms": 12000, "increment_ms": 0,
+    check(v1["clock_info"] == {"reserve_ms": 120000, "delay_ms": 12000, "increment_ms": 0,
                           "start_timestamp": 1790442000}
-          and v1["video"]["kind"] == 1 and v1["video"]["offset_ms"] == -500,
+          and v1["video_info"]["kind"] == 1 and v1["video_info"]["offset_ms"] == -500,
           "6. the chunks decode to clock and video (a v1 clock's step is rewritten to the canonical one)")
-    check(sum("clock_ms" in p for g in v1["games"] for p in g["plies"]) == 11
+    check(sum("timestamp_ms" in p for g in v1["games"] for p in g["plies"]) == 11
           and [c["name"] for c in v1["_unknown_chunks"]] == ["SIGN", "CLCK", "VIDO"],
           "6. eleven readings, and the chunks still stand for a v1 rewrite")
     marked = [(gi, pi, p["video_ms"]) for gi, g in enumerate(v1["games"]) for pi, p in enumerate(g["plies"])
               if "video_ms" in p]
     check(marked == [(0, 2, 7000), (0, 6, 15000)], f"6. and two marks ({marked})")
     out = write_gvab(v1)
-    check(write_gvab(read_gvab(out)) == out and read_gvab(out)["clock"] == v1["clock"],
+    check(write_gvab(read_gvab(out)) == out and read_gvab(out)["clock_info"] == v1["clock_info"],
           "6. the v2 file reads back to the same clock")
     if have_oracle:
         ref, _rule = oracle.v1_to_v2(V1_CHUNKS)

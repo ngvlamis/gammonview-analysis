@@ -55,7 +55,7 @@ The JS suite reads `mat/`, `xg/` and `bgf/` from here too — see
 `mat/`, `xg/` and `bgf/` are source data. `gv/` is pipeline *output* — don't
 curate it, regenerate it (see [below](#regenerating-the-derived-files)).
 
-**`gv/` is OGXM v1, on purpose.** Since 1.6.0 `write_gvab` writes v2, but
+**`gv/` is OGXM v1, on purpose.** Since 2.0.0 `write_gvab` writes v2, but
 `read_gvab` reads v1 for good, and these are the corpus's real v1 files — the
 form every file written before the switch is in. The tests that exercise the v1
 reader on a real match (`test_chunk_passthrough`, `test_share_link`'s fixtures,

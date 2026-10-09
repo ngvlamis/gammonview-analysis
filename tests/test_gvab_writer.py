@@ -198,7 +198,7 @@ def _diff_cube_entries(ours: bytes, ref: bytes) -> None:
 # GammonView metadata decode helpers -- independent of gvab.py's internals,
 # these pull beaver/raccoon/cube_limit/event/site back out of raw MHDR bytes and
 # met_value out of raw GAME bytes, per the placement documented in
-# OGXM_FORMAT_SPEC_GAMMONVIEW.md and gvab.py's module docstring:
+# docs/v1/OGXM_FORMAT_SPEC_GAMMONVIEW.md and gvab.py's module docstring:
 #   - MHDR flags byte (offset 3): bit 2 = beaver, bit 3 = raccoon
 #   - MHDR reserved[8] (offset 16-23): cube_limit as uint16 LE at 16-17
 #   - MHDR variable part: event then site, each uint8-length-prefixed UTF-8,

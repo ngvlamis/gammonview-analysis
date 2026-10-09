@@ -215,6 +215,7 @@ def reconstruct_game_decisions(
                 "cube_owner": _cube_owner_rel(dbl_owner_abs, dbl_is_white),
                 "doubled": True,
                 "response": "take",
+                "played": "beaver",       # what the ply says; the judgement stays a take
                 "doubler": name(dbl_is_white),
                 "responder": name(resp_is_white),
                 "is_doubler_p1": dbl_is_white,

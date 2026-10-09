@@ -8,7 +8,7 @@
 // readers.
 //
 // Our document models a match, its analyses, the clock, the video and every
-// annotation a player or another tool wrote (`clock`, `video`, `annotations`).
+// annotation a player or another tool wrote (`clock_info`, `video_info`, `annotations`).
 // What it cannot model -- the signatures, unknown sections, fields and annotation
 // scopes this version does not know -- would be dropped by reading a foreign v2
 // file and writing it back. `_readOgxm2` therefore attaches `_ogxm2_passthrough`
@@ -422,20 +422,18 @@ export function encodeVideo(header, marksIn) {
   return out;
 }
 
-/** The document's `clock` for a decoded header: its four numbers, the berserk
+/** The document's `clock_info` for a decoded header: its four numbers, the berserk
  *  flags when set, the unassigned flag bits when any, and `precision` only when
  *  it is not the canonical 10. */
 export function clockDoc(header, precision) {
   const [reserve, delay, incr, start, flags] = header;
   const out = { reserve_ms: reserve, delay_ms: delay, increment_ms: incr, start_timestamp: start };
-  if (flags & 1) out.white_berserk = true;
-  if (flags & 2) out.black_berserk = true;
-  if (flags & ~3) out.flags_other = flags & ~3;
+  if (flags) out.flags = flags;
   if (precision !== CLOCK_PRECISION) out.precision = precision;
   return out;
 }
 
-/** The document's `video` for a decoded header: its `kind` and the other fields
+/** The document's `video_info` for a decoded header: its `kind` and the other fields
  *  where they are not the default. */
 export function videoDoc(header) {
   const [kind, live, offset, url] = header;
@@ -759,8 +757,8 @@ export class Plan {
   }
 }
 
-/** Read a v1 file's CLCK and VIDO chunks into `clock`, `video` and the plies'
- *  `clock_ms` / `video_ms`, as the reference's `v1_to_v2` reads them. The chunks
+/** Read a v1 file's CLCK and VIDO chunks into `clock_info`, `video_info` and the plies'
+ *  `timestamp_ms` / `video_ms`, as the reference's `v1_to_v2` reads them. The chunks
  *  stay in `_unknown_chunks`, so a v1 rewrite is unchanged. A chunk that is not
  *  valid (8.2, 8.3) is dropped, as it is there. */
 export function decodeV1Chunks(doc) {
@@ -781,8 +779,8 @@ export function decodeV1Chunks(doc) {
       if (got !== null) {
         // The reference rewrites a v1 clock at the canonical step, so does this:
         // the stated precision is not kept.
-        doc.clock = clockDoc(got.header, CLOCK_PRECISION);
-        got.ts.forEach((v, i) => { games[keys[i][0]].plies[keys[i][1]].clock_ms = v; });
+        doc.clock_info = clockDoc(got.header, CLOCK_PRECISION);
+        got.ts.forEach((v, i) => { games[keys[i][0]].plies[keys[i][1]].timestamp_ms = v; });
         done.add(t);
       }
     } else {
@@ -790,7 +788,7 @@ export function decodeV1Chunks(doc) {
       // lists it, a game's set-up position included.
       const got = decodeVideo(body, games.map((g) => g.plies.length));
       if (got !== null) {
-        doc.video = videoDoc(got.header);
+        doc.video_info = videoDoc(got.header);
         for (const [gi, pi, hand, videoMs, wall, behind] of got.marks) {
           Object.assign(games[gi].plies[pi], videoMarkDoc(hand, videoMs, wall, behind));
         }

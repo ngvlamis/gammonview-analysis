@@ -1,7 +1,8 @@
 # Computed fields
 
 Quantities a reader is expected to **derive** rather than read. They are not
-stored anywhere in OGXM — not in the JSON, not in the binary — so every consumer
+stored anywhere in the GammonView document ([`OGXM_JSON_SPEC_GAMMONVIEW.md`](OGXM_JSON_SPEC_GAMMONVIEW.md))
+or in an OGXM file (v2, [`OGXM_V2_PROFILE.md`](OGXM_V2_PROFILE.md); nor v1), so every consumer
 computes them from the ply records, and two consumers that disagree about them
 disagree about the numbers a user sees.
 
@@ -43,6 +44,16 @@ is match length; see "Score at Game Start" below for the field layout).
 `1 − mwc(e)`. MWC is undefined for money games (no score/cube frame to anchor
 it to) — same as the old GVA output, which omitted all MWC fields there.
 
+A ply that carries `mwc_frame` (`[mid, half]`, set by the `.bgf` importer
+because BGBlitz's table is not ours) converts through that instead:
+`mwc = mid + e · half`, and a difference through `half`. Note this is also the
+conversion a v2 file uses to hold a match block in MWC; the document itself stays
+normalized.
+
+On a take, pass, beaver or raccoon ply the three cube equities are the
+**doubler's**, so the frame belongs to the doubler: the opponent of the ply's own
+colour.
+
 For a `missed_double` / `cube_decision` sub-object, use the **parent checker
 ply's** `(away1, away2, cube_value, is_crawford)` (same score/cube frame,
 recovered the same way from the parent's `ogid_before`).
@@ -60,7 +71,7 @@ two equities behind it (`preroll`/`postroll`) are not themselves stored.
 
 | GVA field | How to compute |
 |---|---|
-| `moves[].luck` | Read directly: `analysis.luck` (stored) |
+| `moves[].luck` | Read directly: `analysis.luck` (a document key) |
 | `moves[].luck_mwc` | `luck * (mwc_win − mwc_loss) / 2`, using this ply's `(away1, away2, cube_value, is_crawford)` via [MWC Conversion](#mwc-conversion) — engine-free (a *change* in equity converts to a change in MWC via half the win/loss slope, since `eq2mwc` is affine). Implemented in `gvformat/stats.py` (`_eq_delta_to_mwc`), whose `total_luck_mwc` reproduces the analyzer's engine-computed totals to 1/10000 quantization. |
 | `summary.player1_total_luck` | Sum `analysis.luck` over checker plies (`action_id` 0–20, plus a restated play — a set-position ply carrying dice, see below) where `color==1` and `luck` is present |
 | `summary.player2_total_luck` | Same for `color==0` |
@@ -124,18 +135,22 @@ A ply's checker-move `analysis` (and each standalone cube ply's `analysis`) carr
 
 - **Checker-move ply** (`action_id` 0–20): counts iff `analysis.decision == true`.
 - **Restated play** (`action_id` 31 *with* dice): an illegal play no checker ply could encode, written as the board it produced (see `set_position` in `OGXM_JSON_SPEC_GAMMONVIEW.md`). Read it as a checker-move ply — its `luck` counts toward the luck totals and its `illegal_move` toward the illegal-move count — and it never counts as a decision, because `analysis.decision` on an illegal play is `false`. A set-position ply *without* dice states where a game starts and is not a play at all.
-- **Cube decision**: a *standalone* cube ply (`action_id` 21 = double, 22 = take, 23 = pass) counts iff `analysis.decision == true`. This is not the only source of cube decisions — a player who *holds* correctly (doesn't double, and not doubling was optimal) never gets a standalone action_id-21 ply; instead the resulting cube analysis is embedded as `cube_decision` on the checker ply that follows (mutually exclusive with `missed_double` — see the Checker Analysis section of `OGXM_JSON_SPEC_GAMMONVIEW.md`). Cube decisions are the union of:
-  1. Standalone `action_id` 21/22/23 plies where `analysis.decision == true`.
+- **Cube decision**: a *standalone* cube ply (`action_id` 21 = double, 22 = take, 23 = pass, 32 = beaver) counts iff `analysis.decision == true`. A **beaver's** analysis is a cube *response*: it is judged as the take it answers, at the cube before the double, and counts toward PR on the same terms as a take (`basefill` treats 32 like 22/23: a response is trivial when take and pass are within 0.001). The **raccoon** (33) after it carries no analysis — the engine has no such decision — and so counts for nothing. This is not the only source of cube decisions — a player who *holds* correctly (doesn't double, and not doubling was optimal) never gets a standalone action_id-21 ply; instead the resulting cube analysis is embedded as `cube_decision` on the checker ply that follows (in what the analyzer writes and in a read of one of our files it is mutually exclusive with a counted `missed_double`: a `missed_double` is accompanied by a `cube_decision` with no `decision` flag, which must not be counted — see the Checker Analysis section of `OGXM_JSON_SPEC_GAMMONVIEW.md`). Cube decisions are the union of:
+  1. Standalone `action_id` 21/22/23/32 plies where `analysis.decision == true`.
   2. Embedded `cube_decision` sub-objects (on a checker ply's `analysis`) where `cube_decision.decision == true`.
-  3. Embedded `missed_double` sub-objects — these carry **no** `decision` flag of their own (per the MissedDouble object), so whether one counts must be recomputed from its three stored equities (`no_double_equity`, `double_take_equity`, `double_pass_equity`) using the same triviality rule the analyzer applies to the doubler: trivial iff `abs(nd - min(dt, dp)) < 0.001 or (nd - dt) > 0.200 or (nd - dp) > 0.200 or (nd < -0.900 and dt < -0.900)`; the missed double counts iff **not** (trivial and `min(dt, dp) - nd < 0.001`).
+  3. Embedded `missed_double` sub-objects — these normally carry **no** `decision` flag of their own (a source that records its own counted-ness, such as BGF's `pr.cubeError`, may state one, and then it wins), so whether one counts must otherwise be recomputed from its three stored equities (`no_double_equity`, `double_take_equity`, `double_pass_equity`) using the same triviality rule the analyzer applies to the doubler: trivial iff `abs(nd - min(dt, dp)) < 0.001 or (nd - dt) > 0.200 or (nd - dp) > 0.200 or (nd < -0.900 and dt < -0.900)`; the missed double counts iff **not** (trivial and `min(dt, dp) - nd < 0.001`).
 
   This matches what `gvformat/stats.py` (`_accumulate_ply` / `_missed_double_counts`) implements — treat that module as the reference implementation if in doubt.
+
+  **One cube decision counts once.** A `missed_double` and the `cube_decision` beside it on one checker ply are the same decision seen twice, and the missed double is the one that counts (by its own stated flag, or the rule above). So the `cube_decision` beside a `missed_double` takes no `decision` flag and is never counted, whatever produced it: the analyzer writes it unflagged, and `basefill.complete_base_block` (which derives the flag for a block of another producer) leaves it unflagged too. A `cube_decision` with no `missed_double` beside it counts iff its `decision` is true.
+
+  How the `decision` flag is obtained: the analyzer sets it; on reading a v2 file, a block of ours gets it from the same rule `basefill` applies to a foreign block (a checker play with at least two alternatives that differ by 1e-4, a cube that is not trivial, every resignation, never an illegal play), with the exceptions the block's annotation records (`OGXM_V2_PROFILE.md` §3); a v1 file stores it in `GVAN`.
 
 ---
 
 ## Classification
 
-`classification` (the `"inaccuracy"` / `"error"` / `"blunder"` / none bucket for a decision) is **not stored** in `.ogxm.json`. It is a threshold policy over the raw `equity_loss` (which *is* stored on every analysis and sub-object), and the **reader owns that policy** — a consumer may bucket the same `equity_loss` however it likes. This mirrors the PR/luck aggregates, which are likewise derived on read rather than persisted.
+`classification` (the `"inaccuracy"` / `"error"` / `"blunder"` / none bucket for a decision) is **not stored** in the document or the file. It is a threshold policy over the raw `equity_loss` (which *is* stored on every analysis and sub-object), and the **reader owns that policy** — a consumer may bucket the same `equity_loss` however it likes. This mirrors the PR/luck aggregates, which are likewise derived on read rather than persisted.
 
 The **default** GammonView policy (buckets over `equity_loss`, in equity):
 
@@ -154,7 +169,7 @@ Apply the same buckets to any `equity_loss`: checker `analysis`, standalone cube
 
 | GVA field | How to compute |
 |---|---|
-| `summary.illegal_moves` | Count checker plies where `analysis.illegal_move == true` (across all games) |
+| `summary.illegal_moves` | Count checker plies (and restated plays) where `analysis.illegal_move == true` (across all games) |
 
 ---
 
@@ -230,14 +245,14 @@ no base level.
 
 ## Engine Level Names
 
-`eval_level` is stored in one closed vocabulary — `1ply`…`4ply`, `truncated1`…
-`truncated3`, `rollout`, `database` — because that is exactly what the binary
-`GVAN` byte encodes (a 4-bit depth plus the truncated/rollout/database flags).
-A name outside it encodes as `0`, which reads back as "same as
-`base_eval_level`" rather than as itself, so an importer that kept a foreign
-engine's own wording would lose the level on write and not be able to tell
-afterwards. The converters therefore map into the canonical names, and the
-engine's wording is **recovered on read** from the level plus the engine.
+Our `eval_level` labels use one vocabulary — `1ply`…`4ply`, `truncated1`…
+`truncated3`, `rollout`, `database`. In OGXM v2 a level's `preset` is a free
+label, so the file can hold any name; the vocabulary is closed only by
+convention, and because the v1 `GVAN` byte could encode nothing else (a name
+outside it read back as "same as `base_eval_level`"). The converters keep to the
+canonical names, a foreign v2 block reads with its label derived from its depth,
+and the engine's own wording is **recovered on read** from the level plus the
+engine.
 
 | GVA field | How to compute |
 |---|---|

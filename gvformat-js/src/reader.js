@@ -1147,7 +1147,7 @@ function _readGvab(data, options) {
 
   if (unknown.length) {
     ogxm._unknown_chunks = unknown;
-    // The clock and the video are document keys too (`clock`, `video`).
+    // The clock and the video are document keys too (`clock_info`, `video_info`).
     decodeV1Chunks(ogxm);
   }
   if (baseBlocks.length) ogxm._base_analyses = baseBlocks;

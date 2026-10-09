@@ -1092,7 +1092,7 @@ def _cube_response_analysis(entry: dict, no_double_equity: float | None,
     equity_loss = max(0.0, entry.get("lost_equity", 0.0))
     analysis = {
         "correct_action": entry["optimal_response"],
-        "played_action": entry["player_response"],
+        "played_action": entry.get("played_action") or entry["player_response"],
         "double_take_equity": entry["equity_take"],
         "double_pass_equity": entry["equity_pass"],
         "equity_loss": round(equity_loss, 4),

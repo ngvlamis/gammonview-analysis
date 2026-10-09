@@ -102,7 +102,7 @@ def main() -> int:
         expected = _EXPECTED.get(stem)
         if expected is None:
             continue
-        # The goldens are v2 since 1.6.0; this asks what the reference makes of
+        # The goldens are v2 since 2.0.0; this asks what the reference makes of
         # the same content as v1, which is the question the table answers.
         v1 = write_gvab_v1(read_gvab(golden.read_bytes()))
         v2, rule = oracle.v1_to_v2(v1)

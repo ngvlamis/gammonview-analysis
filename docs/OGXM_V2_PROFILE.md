@@ -1,6 +1,6 @@
 # OGXM v2 — the GammonView profile
 
-Since 1.6.0 `write_gvab` writes **OGXM v2**, HedgeHog's current match format,
+Since 2.0.0 `write_gvab` writes **OGXM v2**, HedgeHog's current match format,
 specified in `docs/OGXM_FORMAT_SPEC.md` of the
 [HedgeHog repository](https://gitlab.com/eranlambooij/hedgehog-public). Every
 file we write is plain v2: any conforming reader loads it, replays every game,
@@ -9,9 +9,9 @@ document maps onto v2, what travels outside v2's fields, and where reading a
 file back gives something other than what was written.
 
 `read_gvab` reads v1 and v2 alike. v1 stays readable for good — files and share
-links written before 1.6.0 are v1 — and `write_gvab_v1` keeps the old writer for
+links written before 2.0.0 are v1 — and `write_gvab_v1` keeps the old writer for
 tests and comparison. The GVAN chunk and the rest of
-`OGXM_FORMAT_SPEC_GAMMONVIEW.md` describe that v1 format only.
+`docs/v1/OGXM_FORMAT_SPEC_GAMMONVIEW.md` describe that v1 format only.
 
 The Python implementation is `gvformat/ogxm2_writer.py` and `gvformat/ogxm2.py`;
 `gvformat-js/src/` mirrors both. `tests/test_ogxm2_writer.py` checks the rules
@@ -166,8 +166,8 @@ there. **Resignations** are `RESIGN` records. **Luck** is a `ROLL` record on
 every dice ply that has it. A beaver is analyzed as the take it answers, at the
 cube before the double; the raccoon after it carries no decision.
 
-**Clock, video and annotations.** `CLCK` is `clock` (its settings) with
-`clock_ms` on each ply; `VIDO` is `video` with `video_ms`, `wall_ms`,
+**Clock, video and annotations.** `CLCK` is `clock_info` (its settings: the four numbers, `flags` as the header byte stores it when not 0, and `precision` when not 10) with
+`timestamp_ms` on each ply; `VIDO` is `video_info` with `video_ms`, `wall_ms`,
 `behind_live_ms` and `video_hand_anchored` on each marked ply (the spec's
 Appendix A.3 names); `ANNO` records other than ours are `annotations` lists —
 `{value, key?, lang?, author?, at?, drawings?}` — on the match, a game, a ply,
@@ -250,9 +250,15 @@ decisions where the document says otherwise, each as its `ply_ref` and a letter:
 | clock-first-reading | a clock reads back with a reading of 0 on the first ply (`t[0]`, which v2 does not store), and readings are held to the clock's step: 10 ms, or the `precision` the document states |
 | clock-dropped | a clock whose readings have a gap (a reading after a ply without one), do not start at 0, or run backwards is not written (8.2); its readings go with it, the video and annotations stay |
 | video-unaddressed | a mark on a ply v2 has no record of (a game's set-up position, a game past the 256th, a ply past 65535) is not written; `behind_live_ms` reads back in whole seconds, at most 65534000 |
+| alternatives-cut | a checker decision with more than v2's 1024 alternatives reads back with the first 1023 and the played move (the first 1024 when it is among them) and an `alternatives_total` stating the full count, or the larger one the decision already stated |
 | probability-places | `cube_efficiency` and `take_point` are held to a ten-thousandth, `rollout_se`, `cubeless_equity` and `cubeful_take_value` to the document's four places; an empty string, list or object is no key |
 
-Each is a rule in `tests/test_ogxm2_writer.py`, which fails on any difference
+The writer refuses, with a `ValueError`, what v2's limits cannot hold rather than
+writing an invalid file: more than 1000 games, more than 1500 plies in a game,
+more than 100000 plies, more than 64 analysis blocks (`write_gvab_v1`: more than
+16). `tests/test_ogxm2_limits.py` pins these and the cut above.
+
+Each rule above is in `tests/test_ogxm2_writer.py`, which fails on any difference
 none of them explains.
 
 ## 5. Another producer's file: what is kept (spec I7)
@@ -290,8 +296,8 @@ clear one.
 | `MTCH` (a name, the event, ...) | games, foreign blocks (`match_digest` recomputed), `CLCK`, `VIDO`, annotations, unknown sections; `MTCH`'s unknown tail | `MSIG`, `SIGN` | both digest `MTCH` |
 | a `GAME` (a move) | unchanged games, unknown sections | `SIGN`, `MSIG`, foreign blocks' bytes (re-encoded from the document, unsigned) | signatures cover the moves; the analysis was made over the old ones |
 
-The clock, the video and every annotation are document keys (`clock` and
-`clock_ms`, `video` and `video_ms`, `annotations`), so they move with their plies
+The clock, the video and every annotation are document keys (`clock_info` and
+`timestamp_ms`, `video_info` and `video_ms`, `annotations`), so they move with their plies
 and are written from the document in every case: a move edit renumbers them
 rather than dropping them. The source's bytes stand for each (the fingerprint
 rule above, per record for annotations) while the document still encodes to what
@@ -318,7 +324,7 @@ error.
 
 **A v1 file's chunks** (`SIGN`, `CLCK`, `VIDO`, carried as `_unknown_chunks`) are
 written as v2 the way the reference's `v1_to_v2` converts them, byte for byte
-(tested against it). `CLCK` and `VIDO` are decoded into `clock` and `video` (the chunks stay in
+(tested against it). `CLCK` and `VIDO` are decoded into `clock_info` and `video_info` (the chunks stay in
 `_unknown_chunks` for a v1 rewrite) and re-encoded canonically (8.2, 8.3), and
 dropped if invalid. `SIGN` becomes a v2 `SIGN` with the same
 signature; it cannot verify (v1 and v2 sign different payloads), so a verifier

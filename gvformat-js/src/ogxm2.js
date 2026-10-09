@@ -188,12 +188,12 @@ const SCOPE_DECISION = 3;
 const SCOPE_ALTERNATIVE = 4;
 const MARKER_ACTIONS = [24, 25, 26, 30];
 
-// [9.13] verdict -> the v1 label set (no_double / double / take / pass).
-// "Too good" is a no-double; a beaver or raccoon verdict is a take that does
-// better than a take, and the take is what the v1 shape can say.
+// [9.13] verdict -> the document's label, one for one (writer: _VERDICT). The
+// three beyond the v1 set keep their names: a reader that wants the plain
+// no-double or take they refine can fold them itself.
 const VERDICT_NAMES = {
-  0: 'no_double', 1: 'double', 2: 'take', 3: 'pass', 4: 'no_double',
-  5: 'take', 6: 'take',
+  0: 'no_double', 1: 'double', 2: 'take', 3: 'pass', 4: 'too_good',
+  5: 'beaver', 6: 'raccoon',
 };
 
 const PRODUCER_OGX = 0;                          // [9.9] HedgeHog's own engine
@@ -943,20 +943,20 @@ function _placeAnnotations(ogxm, plyAt, decoded, annos, altMaps, fallback) {
   }
 }
 
-/** The CLCK section as `clock` and each ply's `clock_ms`; an invalid section is
+/** The CLCK section as `clock_info` and each ply's `timestamp_ms`; an invalid section is
  *  dropped (8.2) and kept only by the passthrough. */
 function _docClock(payload, plyAt, ogxm) {
   const got = decodeClock(payload, plyAt.length);
   if (got === null) return;
-  ogxm.clock = clockDoc(got.header, got.precision);
-  got.ts.forEach((t, i) => { plyAt[i].ply.clock_ms = t; });
+  ogxm.clock_info = clockDoc(got.header, got.precision);
+  got.ts.forEach((t, i) => { plyAt[i].ply.timestamp_ms = t; });
 }
 
-/** The VIDO section as `video` and its marks on the plies they mark. */
+/** The VIDO section as `video_info` and its marks on the plies they mark. */
 function _docVideo(payload, v2games, ogxm, plyOffset) {
   const got = decodeVideo(payload, v2games.map((g) => g.plies.length));
   if (got === null) return;
-  ogxm.video = videoDoc(got.header);
+  ogxm.video_info = videoDoc(got.header);
   for (const [gi, pi, hand, videoMs, wall, behind] of got.marks) {
     Object.assign(ogxm.games[gi].plies[pi + plyOffset[gi]], videoMarkDoc(hand, videoMs, wall, behind));
   }
@@ -1085,7 +1085,7 @@ function _v1Match(mtch, v2games) {
   const crawford = _crawfordGames(mtch, starts);
   const [whiteScore, blackScore] = mtch.score_final || final;
   let result = mtch.result;
-  if (result === undefined || result === 3) {
+  if (result === undefined) {   // 3 (abandoned) is stored, and read back as stored
     const length = mtch.match_length;
     result = length > 0 && whiteScore >= length ? 1
       : length > 0 && blackScore >= length ? 2 : 0;
@@ -1822,7 +1822,7 @@ export function _readOgxm2(data, options) {
   if (vido !== null) {
     _docVideo(vido, games, ogxm, plyOffset);
     const url = _gvGet(gvMatch, 0, GV_KEY_VIDEO_URL);
-    if (ogxm.video !== undefined && url !== undefined) ogxm.video.url = url;
+    if (ogxm.video_info !== undefined && url !== undefined) ogxm.video_info.url = url;
   }
 
   if (deriveOgids) _deriveOgids(ogxm);

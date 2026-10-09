@@ -136,6 +136,11 @@ def main() -> int:
         out = append_analysis(doc, to_ogxm_json(data, keep_orientation=True))
         analyzed = sum(1 for g in out["games"] for p in g["plies"] if p.get("analysis"))
         check(analyzed > 20, f"{name}: analyzed ({analyzed} plies carry analysis)")
+        if name in ("beaver", "raccoon"):
+            fresh = next(p for p in out["games"][0]["plies"] if p["action_id"] == R.ACTION_BEAVER)
+            ans = fresh.get("analysis") or {}
+            check(ans.get("played_action") == "beaver" and ans.get("correct_action") in ("take", "pass"),
+                  f"{name}: a fresh analysis of the beaver says it was a beaver, judged as the take it answers")
         blob = write_gvab(out)
         back = read_gvab(blob)
         check(write_gvab(back) == blob and back.get("score_start") == doc.get("score_start"),
@@ -144,7 +149,7 @@ def main() -> int:
             by_action = {p["action_id"]: p for p in back["games"][0]["plies"]
                          if p["action_id"] in (R.ACTION_BEAVER, R.ACTION_RACCOON)}
             ans = (by_action[R.ACTION_BEAVER].get("analysis") or {})
-            check(ans.get("correct_action") in ("take", "pass") and ans.get("played_action") == "beaver"
+            check(ans.get("correct_action") in ("take", "pass", "beaver") and ans.get("played_action") == "beaver"
                   and "analysis" not in by_action.get(R.ACTION_RACCOON, {}),
                   f"{name}: the answer to the double is analyzed on the beaver ply, the raccoon has none")
         agg = compute_aggregates(back)["match"]

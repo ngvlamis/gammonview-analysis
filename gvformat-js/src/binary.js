@@ -8,7 +8,7 @@
 // JavaScript ESM port of gvformat/binary.py — pure-stdlib OGXM **v1** binary
 // writer.
 //
-// Since 1.6.0 `write_gvab` writes OGXM v2 (`ogxm2_writer.js`; profile in
+// Since 2.0.0 `write_gvab` writes OGXM v2 (`ogxm2_writer.js`; profile in
 // `docs/OGXM_V2_PROFILE.md`) and is defined at the bottom of this module only so
 // that its import path stays where every caller has it. Everything else here is
 // the v1 writer, `write_gvab_v1`: kept because `readGvab` reads v1 for good and
@@ -29,7 +29,7 @@ import {
   CUBE_TYPE_MISSED_DOUBLE, CUBE_TYPE_RESIGN, CUBE_TYPE_LIVE_CHECKER,
   CUBE_ACTION_NO_DOUBLE, CUBE_ACTION_DOUBLE, CUBE_ACTION_TAKE, CUBE_ACTION_PASS,
   CUBE_ACTION_CODES,
-  DICE_TABLE, MAX_ANALYSES,
+  DICE_TABLE, MAX_ANALYSES_V1,
 } from './constants.js';
 import { write_ogxm2 } from './ogxm2_writer.js';
 
@@ -854,7 +854,7 @@ function _analysis_blocks(ogxm, games) {
 // ---------------------------------------------------------------------------
 
 /**
- * Serialize our document to `.gvab` bytes -- OGXM v2 since 1.6.0 (see
+ * Serialize our document to `.gvab` bytes -- OGXM v2 since 2.0.0 (see
  * `ogxm2_writer.js`). The v1 writer below stays for reading tests and
  * comparisons; `readGvab` reads both.
  */
@@ -864,7 +864,7 @@ function write_gvab(ogxm) {
 
 /**
  * Serialize an OGXM-JSON object to OGXM **v1** + GVAN bytes, the format
- * `write_gvab` wrote until 1.6.0.
+ * `write_gvab` wrote until 2.0.0.
  */
 function write_gvab_v1(ogxm) {
   const games = ogxm.games || [];
@@ -940,9 +940,10 @@ function write_gvab_v1(ogxm) {
   }
 
   const blocks = _analysis_blocks(ogxm, games);
-  if (blocks.length > MAX_ANALYSES) {
+  if (blocks.length > MAX_ANALYSES_V1) {
     throw new Error(
-      `too many analysis blocks: ${blocks.length} (format cap is ${MAX_ANALYSES})`);
+      `too many analysis blocks for an OGXM v1 file: ${blocks.length} `
+      + `(v1 holds ${MAX_ANALYSES_V1}; write_gvab writes v2, which holds more)`);
   }
   const has_analysis = blocks.length > 0;
 

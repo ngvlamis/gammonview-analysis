@@ -7,7 +7,7 @@
 
 """Pure-Python OGXM **v1** binary WRITER: OGXM-JSON dict -> v1 ``.gvab`` bytes.
 
-Since 1.6.0 ``write_gvab`` writes OGXM v2 (``ogxm2_writer``; profile in
+Since 2.0.0 ``write_gvab`` writes OGXM v2 (``ogxm2_writer``; profile in
 ``docs/OGXM_V2_PROFILE.md``) and is defined at the bottom of this module only
 so that its import path stays where every caller has it. Everything else here
 is the v1 writer, ``write_gvab_v1``: kept because ``read_gvab`` reads v1 for
@@ -27,7 +27,7 @@ https://gitlab.com/eranlambooij/hedgehog-public
 
 Two specs describe the on-wire format:
 
-  - ``OGXM_FORMAT_SPEC_GAMMONVIEW.md`` (this repo) -- file header, chunk
+  - ``docs/v1/OGXM_FORMAT_SPEC_GAMMONVIEW.md`` (this repo) -- file header, chunk
     framing, GammonView MHDR/GAME metadata, and the GVAN ancillary chunk
     (checker/alt/cube sections, eval-level bit-flag encoding).
   - HedgeHog's own ``docs/OGXM_FORMAT_SPEC.md`` -- the base MHDR/
@@ -50,7 +50,7 @@ documented below. GAME and ANAL/EVAL/ALTS/CUBE remain byte-for-byte identical
 to the compiled C++ writer, mirroring its field layout and semantics verified
 by reading ``ogxm_io.cpp``/``ogxm_format.hpp``/``ogxm_json.cpp`` directly.
 
-GammonView MHDR metadata placement (see ``OGXM_FORMAT_SPEC_GAMMONVIEW.md``
+GammonView MHDR metadata placement (see ``docs/v1/OGXM_FORMAT_SPEC_GAMMONVIEW.md``
 for the full writeup):
 
   - ``beaver`` -> MHDR flags byte (offset 3) bit 2; ``raccoon`` -> bit 3.
@@ -179,6 +179,11 @@ _CUBE_ACTION_CODES = {
     "double": CUBE_ACTION_DOUBLE,
     "take": CUBE_ACTION_TAKE,
     "pass": CUBE_ACTION_PASS,
+    # v1 has only these four. A refinement is written as the plain action it
+    # refines: too good is a no-double; a beaver or raccoon is a take.
+    "too_good": CUBE_ACTION_NO_DOUBLE,
+    "beaver": CUBE_ACTION_TAKE,
+    "raccoon": CUBE_ACTION_TAKE,
 }
 
 # action_id -> (d1, d2, num_move_bytes); index = action_id (0-20).
@@ -225,7 +230,7 @@ def _enc_equity(eq: float) -> int:
 # Still Tier 1: readers decode with a plain divide and never range-check, so the
 # reference codec reads our wider values correctly. No version bump. The clamp
 # stays at the top of the range -- without it, 6.6 would overflow the uint16 and
-# wrap to 0.0464. See OGXM_FORMAT_SPEC_GAMMONVIEW.md, "Fixed-Point Encoding".
+# wrap to 0.0464. See docs/v1/OGXM_FORMAT_SPEC_GAMMONVIEW.md, "Fixed-Point Encoding".
 MAX_EQUITY_LOSS = 6.5535
 
 
@@ -693,7 +698,7 @@ def _encode_cube_entry(c: dict) -> bytes:
 
 
 # ---------------------------------------------------------------------------
-# GVAN chunk encoder (mirrors OGXM_FORMAT_SPEC_GAMMONVIEW.md's GVAN section --
+# GVAN chunk encoder (mirrors docs/v1/OGXM_FORMAT_SPEC_GAMMONVIEW.md's GVAN section --
 # a GammonView-only addition; the reference codec neither writes nor reads it).
 # GVAN carries only luck + decision + eval_level now: correct-no-doubles and
 # missed-doubles both live in base CUBE (type=4/type=2) since the maintainer
@@ -774,7 +779,7 @@ def _encode_gvan(analysis_info: dict, checker_evals: list[dict],
 # for a given block in the multi-analysis case.
 # ---------------------------------------------------------------------------
 
-MAX_ANALYSES = 16
+MAX_ANALYSES_V1 = 16     # what a v1 file holds; v2 allows 64 (merge.MAX_ANALYSES)
 
 
 def _gather_evals(games: list[dict], select) -> tuple[list[dict], list[dict]]:
@@ -881,7 +886,7 @@ def _analysis_blocks(ogxm: dict, games: list[dict]) -> list[tuple[dict, list[dic
 # ---------------------------------------------------------------------------
 
 def write_gvab(ogxm: dict) -> bytes:
-    """Serialize our document to ``.gvab`` bytes -- OGXM v2 since 1.6.0 (see
+    """Serialize our document to ``.gvab`` bytes -- OGXM v2 since 2.0.0 (see
     ``ogxm2_writer``). The v1 writer below stays for reading tests and
     comparisons; ``read_gvab`` reads both."""
     from .ogxm2_writer import write_ogxm2
@@ -890,11 +895,11 @@ def write_gvab(ogxm: dict) -> bytes:
 
 def write_gvab_v1(ogxm: dict) -> bytes:
     """Serialize an OGXM-JSON dict (``ogxm_export.to_ogxm_json(...)`` shape)
-    to OGXM **v1** + GVAN bytes, the format ``write_gvab`` wrote until 1.6.0.
+    to OGXM **v1** + GVAN bytes, the format ``write_gvab`` wrote until 2.0.0.
 
     Emits, in order: File Header -> MHDR -> GAME (per game) -> one
     [ANAL -> EVAL -> ALTS -> CUBE -> GVAN] group **per analysis block** (0..N,
-    primary first; the format allows up to ``MAX_ANALYSES``) -> CSUM -> End
+    primary first; v1 allows up to ``MAX_ANALYSES_V1``) -> CSUM -> End
     Marker. A file with more than one block sets ``min_reader_minor = 3`` (pre-
     1.3 readers reject the second ANAL). Pure stdlib; no engine/bgsage calls.
     """
@@ -957,6 +962,10 @@ def write_gvab_v1(ogxm: dict) -> bytes:
         game_chunks.append(_chunk(CHUNK_GAME, game_data, critical=True))
 
     blocks = _analysis_blocks(ogxm, games)
+    if len(blocks) > MAX_ANALYSES_V1:
+        raise ValueError(
+            f"too many analysis blocks for an OGXM v1 file: {len(blocks)} "
+            f"(v1 holds {MAX_ANALYSES_V1}; write_gvab writes v2, which holds more)")
     has_analysis = bool(blocks)
 
     min_reader_minor = 0

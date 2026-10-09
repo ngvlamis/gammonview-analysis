@@ -11,7 +11,7 @@
 import { write_gvab, write_gvab_v1 } from '../src/binary.js';
 import { readGvab } from '../src/reader.js';
 import { appendAnalysis, analysisCount, MAX_ANALYSES } from '../src/merge.js';
-import { OGXM_MAGIC, CHUNK_ANAL, END_MAGIC } from '../src/constants.js';
+import { OGXM_MAGIC, CHUNK_ANAL, END_MAGIC, MAX_ANALYSES_V1 } from '../src/constants.js';
 
 let passed = 0;
 let failed = 0;
@@ -304,14 +304,19 @@ function canonical(ogxm) {
 
 // --- 9. MAX_ANALYSES cap ----------------------------------------------------
 {
+  // v2's cap is 64; a v1 file holds MAX_ANALYSES_V1 and refuses more.
   let doc = canonical(makeMatch({ analysis: true, modelId: 'engine-0' }));
+  let sixteen = null;
   for (let i = 1; i < MAX_ANALYSES; i++) {
     doc = appendAnalysis(doc, canonical(makeMatch({ analysis: true, modelId: `engine-${i}` })));
+    if (i === MAX_ANALYSES_V1 - 1) sixteen = structuredClone(doc);
   }
   assert(doc.analyses_info.length === MAX_ANALYSES,
     `${MAX_ANALYSES} blocks can be accumulated`);
-  assert(countAnalChunks(write_gvab_v1(doc)) === MAX_ANALYSES,
-    'all of them serialize');
+  assert(countAnalChunks(write_gvab_v1(sixteen)) === MAX_ANALYSES_V1,
+    `a v1 file serializes ${MAX_ANALYSES_V1} of them`);
+  assertThrows(() => write_gvab_v1(doc), 'too many analysis blocks for an OGXM v1 file',
+    'and refuses more rather than writing an invalid file');
 
   assertThrows(
     () => appendAnalysis(doc, canonical(makeMatch({ analysis: true, modelId: 'one-too-many' }))),

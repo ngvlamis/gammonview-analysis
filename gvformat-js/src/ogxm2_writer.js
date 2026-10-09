@@ -70,7 +70,11 @@ import {
 } from './ogxm2_passthrough.js';
 
 const MAX_STRING = 4096;
-const MAX_ALTS = 1024;
+const MAX_ALTS = 1024;            // MAX_ALTS_PER_DECISION
+const MAX_GAMES = 1000;
+const MAX_PLIES_PER_GAME = 1500;
+const MAX_TOTAL_PLIES = 100000;
+const MAX_ANALYSES = 64;
 const MAX_EVENT = 120;
 
 const SCOPE_MATCH = 0;
@@ -656,8 +660,16 @@ class _Match {
     const variant = _int(this.doc.variant || 0);
     const openingAbs = variantOpeningAbs(variant) || _p1ToAbsolute(_STARTING_BOARD_P1);
     const openingP1 = variantOpeningP1(variant) || _STARTING_BOARD_P1.slice();
-    (this.doc.games || []).forEach((g, gi) => {
+    const allGames = this.doc.games || [];
+    if (allGames.length > MAX_GAMES) {
+      throw new Error(`too many games for an OGXM v2 file: ${allGames.length} (v2 holds ${MAX_GAMES})`);
+    }
+    allGames.forEach((g, gi) => {
       const plies = g.plies || [];
+      if (plies.length > MAX_PLIES_PER_GAME) {
+        throw new Error(`game ${gi} has too many plies for an OGXM v2 file: `
+          + `${plies.length} (v2 holds ${MAX_PLIES_PER_GAME} per game)`);
+      }
       let board = openingP1.slice();
       const fields = {};
       const start = _gameStart(g, openingAbs);
@@ -777,6 +789,10 @@ class _Match {
       }
       this.games.push(Uint8Array.from(out));
     });
+    if (this.ply_at.length > MAX_TOTAL_PLIES) {
+      throw new Error(`too many plies for an OGXM v2 file: ${this.ply_at.length} `
+        + `(v2 holds ${MAX_TOTAL_PLIES})`);
+    }
   }
 
   static _setPosition(color, dice, boardAbs) {
@@ -1120,14 +1136,15 @@ function _positionKey(position, moves) {
  * would reject is still written, for the annotation that keeps the decision
  * exactly (P6).
  */
-function _checkerExtras(a, count, nsources) {
+function _checkerExtras(a, count, nsources, total = null) {
   const f = {};
   let ok = true;
   let truncated = false;
-  if (_present(a.alternatives_total)) {
-    _uintField(a.alternatives_total, 'alternatives_total');
-    f[1] = _varint(a.alternatives_total);
-    truncated = a.alternatives_total > count;
+  if (total === null) total = _present(a.alternatives_total) ? a.alternatives_total : null;
+  if (total !== null) {
+    _uintField(total, 'alternatives_total');
+    f[1] = _varint(total);
+    truncated = total > count;
     ok = ok && truncated;
   }
   for (const [bit, key] of [[5, 'rollouts_done'], [6, 'deep_searched']]) {
@@ -1155,7 +1172,27 @@ function _checkerExtras(a, count, nsources) {
  */
 function _checkerRecords(a, ref, blockEff, conv, unplayed, position = null, playedMoves = null,
   nsources = 0) {
-  const alts = (a.alternatives || []).slice(0, MAX_ALTS);
+  const full = a.alternatives || [];
+  let kept = full.map((_a, i) => i);
+  let total = null;
+  if (full.length > MAX_ALTS) {
+    // v2 holds MAX_ALTS_PER_DECISION alternatives and lets a list be cut only
+    // where `alternatives_total` states the full count (7.1). The played move
+    // must stay in the list (A4), so it takes the last place if it would fall
+    // past the cut.
+    kept = kept.slice(0, MAX_ALTS);
+    const at = full.findIndex((x) => x.is_played);
+    if (at >= MAX_ALTS) kept[kept.length - 1] = at;
+    total = Math.max(full.length, Number(a.alternatives_total || 0));
+  }
+  const alts = kept.map((i) => full[i]);
+  // `places` over the kept list, over the document's own.
+  const lift = (places) => {
+    if (places === null || kept.length === full.length) return places;
+    const out = full.map(() => null);
+    places.forEach((where, pos) => { out[kept[pos]] = where; });
+    return out;
+  };
   const best = Number(a.best_equity || 0.0);
   const loss = Number(a.equity_loss || 0.0);
   const hasExtras = CHECKER_KEYS.some((k) => _present(a[k]));
@@ -1174,7 +1211,7 @@ function _checkerRecords(a, ref, blockEff, conv, unplayed, position = null, play
       fields[0] = _cat(_varint(order.length), ...order.map((i) => _altRecord(
         alts[i], tiers[i][0], played.includes(i), conv)));
     }
-    const [extra, conformant] = _checkerExtras(a, order.length, nsources);
+    const [extra, conformant] = _checkerExtras(a, order.length, nsources, total);
     Object.assign(fields, extra);
     if (explicit || !order.length) fields[2] = _equity(conv.eq(best));
     if (explicit || !played.length) fields[3] = _loss(conv.delta(loss));
@@ -1221,10 +1258,10 @@ function _checkerRecords(a, ref, blockEff, conv, unplayed, position = null, play
     if (!order.length || order[0] !== 0) return [null, exact, null];
     const [main, conformant] = build(order, false);
     const places = alts.map((_a, i) => (order.includes(i) ? order.indexOf(i) : null));
-    return [conformant ? main : null, exact, conformant ? places : null];
+    return [conformant ? main : null, exact, conformant ? lift(places) : null];
   }
   const [main, conformant] = build(order, false);
-  return conformant ? [main, null, alts.map((_a, i) => i)] : [null, exact, null];
+  return conformant ? [main, null, lift(alts.map((_a, i) => i))] : [null, exact, null];
 }
 
 /** What the records of one block need to know about the block. */
@@ -1810,45 +1847,43 @@ function checkAnnos(annos) {
   }
 }
 
-/** CLCK (8.2) from `clock` and each ply's `clock_ms`, or null where the document
+/** CLCK (8.2) from `clock_info` and each ply's `timestamp_ms`, or null where the document
  *  has no clock or the series cannot be written: a reading after a ply without
  *  one, a first reading that is not 0, one that runs backwards. */
 function _clockSection(doc, match) {
-  const { clock } = doc;
+  const clock = doc.clock_info;
   if (clock === null || typeof clock !== 'object' || clock === undefined) return null;
-  const flags = (clock.white_berserk ? 1 : 0) | (clock.black_berserk ? 2 : 0);
-  const other = _optUint(clock, 'flags_other', 'clock', 8);
-  if (other & 3) throw new Error('clock flags_other overlaps the berserk flags');
+  const flags = _optUint(clock, 'flags', 'clock_info', 8);
   const header = ['reserve_ms', 'delay_ms', 'increment_ms', 'start_timestamp']
-    .map((k) => _optUint(clock, k, 'clock')).concat([flags | other]);
+    .map((k) => _optUint(clock, k, 'clock_info')).concat([flags]);
   let precision = clock.precision;
   if (precision === undefined || precision === null) precision = CLOCK_PRECISION;
   if (!_isUint(precision) || precision < 1) throw new Error(`clock precision ${precision} is not a step`);
   const ts = [];
   let gap = false;
   for (const { ply: p } of match.ply_at) {
-    const v = p.clock_ms;
+    const v = p.timestamp_ms;
     if (v === undefined || v === null) { gap = true; continue; }
     if (gap) return null;
-    if (!_isUint(v)) throw new Error(`clock_ms ${v} is not a time v2 can hold`);
+    if (!_isUint(v)) throw new Error(`timestamp_ms ${v} is not a time v2 can hold`);
     ts.push(v);
   }
   return encodeClock(header, ts, match.ply_at.length, precision);
 }
 
-/** VIDO (8.3) from `video` and the marks on the plies. A mark on a ply v2 has no
+/** VIDO (8.3) from `video_info` and the marks on the plies. A mark on a ply v2 has no
  *  record of (a game's set-up position, a game past the 256th) is dropped by
  *  itself. */
 function _videoSection(doc, match) {
-  const { video } = doc;
+  const video = doc.video_info;
   if (video === null || typeof video !== 'object' || video === undefined) return null;
-  const kind = _optUint(video, 'kind', 'video', 8);
+  const kind = _optUint(video, 'kind', 'video_info', 8);
   const offset = video.offset_ms || 0;
   if (!Number.isInteger(offset) || !(offset >= -(2 ** 31) && offset < 2 ** 31)) {
-    throw new Error(`video offset_ms ${offset} is not an offset v2 can hold`);
+    throw new Error(`video_info offset_ms ${offset} is not an offset v2 can hold`);
   }
   const url = video.url || '';
-  if (typeof url !== 'string') throw new Error('video url must be a string');
+  if (typeof url !== 'string') throw new Error('video_info url must be a string');
   let raw = url ? _enc.encode(url) : new Uint8Array(0);
   if (raw.length > MAX_VIDEO_URL || !urlStorable(raw, kind)) {
     if (url) match.annos.push([SCOPE_MATCH, 0, GV_KEY_VIDEO_URL, GV_FORMAT + url]);
@@ -1927,6 +1962,10 @@ export function _encode(ogxm) {
   }
 
   const blocks = _blocks(doc);
+  if (blocks.length > MAX_ANALYSES) {
+    throw new Error(`too many analysis blocks for an OGXM v2 file: ${blocks.length} `
+      + `(v2 holds ${MAX_ANALYSES})`);
+  }
   const flagged = new Set();
   (doc.games || []).forEach((g, gi) => (g.plies || []).forEach((p, pi) => {
     for (const [, select] of blocks) {

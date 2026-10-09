@@ -15,7 +15,7 @@ decision of an analysis block.
 
 **A reader into our document's shape.** The document that comes out is the one
 a v1 file holding the same match would give, so nothing downstream learns there
-are two versions. ``ogxm2_writer`` is the other half, and since 1.6.0 what
+are two versions. ``ogxm2_writer`` is the other half, and since 2.0.0 what
 ``write_gvab`` writes; ``docs/OGXM_V2_PROFILE.md`` is the profile the two
 share.
 
@@ -30,7 +30,7 @@ completes it as it completes any foreign v1 block. HedgeHog's own ``to_v1``
 * Signatures, unknown sections and fields, and annotations that address nothing
   the document holds are not carried by the document (they travel in
   ``_ogxm2_passthrough``, ``ogxm2_passthrough``). The clock, the video and every
-  other annotation are: ``clock`` / ``clock_ms``, ``video`` / ``video_ms``,
+  other annotation are: ``clock_info`` / ``timestamp_ms``, ``video_info`` / ``video_ms``,
   ``annotations`` on the match, a game, a ply, a decision's analysis object and
   an alternative. Everything that does change the
   board or the score is: a starting score, a variant, a cube that a game opens
@@ -174,10 +174,11 @@ SCOPE_DECISION = 3
 SCOPE_ALTERNATIVE = 4
 MARKER_ACTIONS = (24, 25, 26, 30)
 
-#: verdict -> the v1 label set. "Too good" is a no-double; a beaver or raccoon
-#: verdict is a take that does better than a take.
+#: verdict -> the document's label, one for one (writer: ``_VERDICT``). The
+#: three beyond the v1 set keep their names: a reader that wants the plain
+#: no-double or take they refine can fold them itself.
 VERDICT_NAMES = {
-    0: "no_double", 1: "double", 2: "take", 3: "pass", 4: "no_double", 5: "take", 6: "take",
+    0: "no_double", 1: "double", 2: "take", 3: "pass", 4: "too_good", 5: "beaver", 6: "raccoon",
 }
 
 PRODUCER_OGX = 0
@@ -991,26 +992,26 @@ def _place_annotations(ogxm: dict, games: list, ply_at: list, decoded: list, ann
 
 
 def _doc_clock(payload: bytes, ply_at: list, ogxm: dict) -> None:
-    """The ``CLCK`` section as ``clock`` and each ply's ``clock_ms``; an invalid
+    """The ``CLCK`` section as ``clock_info`` and each ply's ``timestamp_ms``; an invalid
     section is dropped (8.2) and kept only by the passthrough."""
     from .ogxm2_passthrough import clock_doc, decode_clock
     got = decode_clock(payload, len(ply_at))
     if got is None:
         return
     header, ts, precision = got
-    ogxm["clock"] = clock_doc(header, precision)
+    ogxm["clock_info"] = clock_doc(header, precision)
     for i, t in enumerate(ts):
-        ply_at[i][1]["clock_ms"] = t
+        ply_at[i][1]["timestamp_ms"] = t
 
 
 def _doc_video(payload: bytes, v2games: list, games: list, offsets: list, ogxm: dict) -> None:
-    """The ``VIDO`` section as ``video`` and its marks on the plies they mark."""
+    """The ``VIDO`` section as ``video_info`` and its marks on the plies they mark."""
     from .ogxm2_passthrough import decode_video, video_doc, video_mark_doc
     got = decode_video(payload, [len(g["plies"]) for g in v2games])
     if got is None:
         return
     header, marks = got
-    ogxm["video"] = video_doc(header)
+    ogxm["video_info"] = video_doc(header)
     for gi, pi, hand, video_ms, wall, behind in marks:
         games[gi]["plies"][pi + offsets[gi]].update(video_mark_doc(hand, video_ms, wall, behind))
 
@@ -1146,7 +1147,7 @@ def _v1_match(mtch: dict, v2games: list[dict]):
     white_score, black_score = mtch.get("score_final") or final
     result = mtch.get("result")
     length = mtch["match_length"]
-    if result is None or result == 3:
+    if result is None:   # 3 (abandoned) is stored, and read back as stored
         result = (1 if length > 0 and white_score >= length
                   else 2 if length > 0 and black_score >= length else 0)
     rules = mtch.get("rules", 0)
@@ -1886,8 +1887,8 @@ def read_ogxm2(data: bytes, *, verify_crc: bool = True, derive_ogids: bool = Tru
         _doc_clock(clck, ply_at, ogxm)
     if vido is not None:
         _doc_video(vido, v2games, games, offsets, ogxm)
-        if ogxm.get("video") is not None and (0, GV_KEY_VIDEO_URL) in gv_match:
-            ogxm["video"]["url"] = gv_match[(0, GV_KEY_VIDEO_URL)]
+        if ogxm.get("video_info") is not None and (0, GV_KEY_VIDEO_URL) in gv_match:
+            ogxm["video_info"]["url"] = gv_match[(0, GV_KEY_VIDEO_URL)]
 
     if derive_ogids:
         _derive_ogids({"match_length": ogxm["match_length"], "games": games,

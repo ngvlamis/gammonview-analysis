@@ -1,9 +1,10 @@
 # Handoff to GammonView: `.gvab` becomes OGXM v2
 
 *Draft, started 2026-10-08, on `feat/ogxm-v2`.
-Ships as gammonview / `@gammonview/gvformat` **1.6.0**, not yet tagged.*
+Ships as gammonview / `@gammonview/gvformat` **2.0.0**, not yet tagged.*
 
-This is what the GammonView repo needs to know and do when it takes 1.6.0. The
+This is what the GammonView repo needs to know and do when it takes 2.0.0. It is a major version because both the file format and
+the document shape change (see *The document gained every v2 field*). The
 format itself is specified in [`OGXM_V2_PROFILE.md`](OGXM_V2_PROFILE.md); this
 note covers only what touches the site, the analysis service and stored data.
 
@@ -12,9 +13,9 @@ note covers only what touches the site, the analysis service and stored data.
 `write_gvab` writes **OGXM v2** (HedgeHog's current format) where it wrote v1
 plus a `GVAN` chunk. That holds in Python and in JS, and the two writers agree
 byte for byte. `read_gvab` / `readGvab` read v1 and v2 both, and always will.
-The function names, import paths and document shape are otherwise unchanged:
-`readGvab`, `write_gvab`, `appendAnalysis`, `compute_aggregates` are called
-exactly as before. `write_gvab_v1` is new, for comparison only. GammonView
+The function names and import paths are unchanged: `readGvab`, `write_gvab`,
+`appendAnalysis`, `compute_aggregates` are called exactly as before. The
+document gains keys and changes a few meanings, listed below. `write_gvab_v1` is new, for comparison only. GammonView
 should not need it.
 
 Nothing GammonView stores is lost. What v2 has no field for goes in `ANNO`
@@ -26,7 +27,7 @@ records keyed `x-gammonview-…`, which other v2 readers keep and ignore:
 - an event over 120 bytes;
 - a stated score that the games don't add up to.
 
-A 1.6 reader restores all of it.
+A 2.0 reader restores all of it.
 
 ## Rollout order: this is the part that can lose data
 
@@ -36,21 +37,21 @@ Both sides of GammonView write `.gvab`:
   edits) and `DownloadMatchDialog.vue`;
 - the service: `server/gvserver/app.py`, which returns `write_gvab(ogxm)`.
 
-1.5.x already *reads* v2, but as a foreign reader. On a file written by 1.6 it
+1.5.x already *reads* v2, but as a foreign reader. On a file written by 2.0 it
 drops the `x-gammonview-…` data: `site`, the analysis of illegal plays, and the
 stored PR-counting exceptions (it re-derives counting instead). If a 1.5 side
 then writes the document back, the loss is saved.
 
-So both sides should move to 1.6.0 **in the same deploy**:
+So both sides should move to 2.0.0 **in the same deploy**, in one commit:
 
-- `server/pyproject.toml`: `gammonview[engine]==1.5.1` → `==1.6.0`, then
+- `server/pyproject.toml`: `gammonview[engine]==1.5.1` → `==2.0.0`, then
   `uv lock`.
-- `package.json`: `"@gammonview/gvformat": "^1.5.0"` → `"^1.6.0"`, then
+- `package.json`: `"@gammonview/gvformat": "^1.5.0"` → `"^2.0.0"`, then
   `npm install`.
-  - Watch out: the caret range already admits 1.6.0, so any `npm install` or
-    `npm update` after the publish pulls it into the lockfile without the server
-    moving with it.
-  - Either pin `1.5.x` until deploy day, or bump both in one commit.
+
+The major version is what keeps this safe in the meantime: `^1.5.0` never admits
+2.0.0, so no `npm install` or `npm update` can pull it into the client ahead of
+the server.
 
 ## Stored data
 
@@ -106,7 +107,7 @@ These differences are all in the profile's §4. The ones a viewer could notice:
 
 ## The document gained every v2 field
 
-1.6 reads everything v2 defines into the document, under v2's own names, and
+2.0 reads everything v2 defines into the document, under v2's own names, and
 writes it back. All of it is optional: a key is absent when the file has no
 value, so documents from our own converters look exactly as before, apart from
 `complete` and `engine_build` on our analysis blocks. What the site will see
@@ -117,7 +118,7 @@ when it opens another producer's file:
   `date_precision`, `player_seat`, `score_start`, `variant`, and
   `white_profile` / `black_profile` with `rating`, `rating_system`, `country`,
   `user_id`, `kind`.
-- **Clock, video and annotations:** `clock` with `clock_ms` per ply, `video`
+- **Clock, video and annotations:** `clock_info` with `timestamp_ms` per ply, `video_info`
   with `video_ms` per marked ply, and `annotations` (comments, key/value notes,
   arrows and highlights) on the match, games, plies, decisions and
   alternatives.
@@ -176,14 +177,14 @@ keeps them. What the document cannot model (signatures, unknown sections) rides
 in a private `_ogxm2_passthrough` key, also in `.gva`; leave it alone.
 `docs/OGXM_V2_PROFILE.md` §5 has the rules.
 
-## Not in 1.6 (known gaps)
+## Not in 2.0 (known gaps)
 
 - **`.gva` is our document's JSON**, not v2's JSON projection (which the spec
   says is not an interchange format). `.gvab` is the file to exchange.
 
 ## Checklist for the GammonView session
 
-1. Wait for the 1.6.0 tag and npm publish.
+1. Wait for the 2.0.0 tag and npm publish.
 2. Bump both pins in one change (see the rollout order above).
 3. Add the match-key stability test over `samples/gv`.
 4. Run the full jest suite. The suites that write and re-read

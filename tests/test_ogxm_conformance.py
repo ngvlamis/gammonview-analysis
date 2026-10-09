@@ -243,7 +243,7 @@ def main() -> int:
         print(f"SKIP: {_HEDGEHOG_EXAMPLES} not found (hedgehog-public not checked out)")
         return 0
     # This compares the reference's v1 JSON projection with ours. A 2.x library
-    # projects every file in v2's shape, and the goldens are v2 since 1.6.0;
+    # projects every file in v2's shape, and the goldens are v2 since 2.0.0;
     # test_ogxm2_writer.py checks what we write against that library instead.
     import ogxm2_oracle
     try:

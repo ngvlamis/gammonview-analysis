@@ -50,7 +50,7 @@ board state (not from this dict), recomputes ``analysis_info`` bookkeeping,
 ignores ``notation``/``diff``, and re-emits a zero prob block for an absent
 ``eval``.
 
-The on-wire layout is documented in ``OGXM_FORMAT_SPEC_GAMMONVIEW.md`` and,
+The on-wire layout is documented in ``docs/v1/OGXM_FORMAT_SPEC_GAMMONVIEW.md`` and,
 authoritatively, in ``gvab.py`` (whose encoders this module mirrors field for
 field). Constants and the dice/action tables are imported from ``gvab`` so the
 two stay in lockstep.
@@ -1027,7 +1027,7 @@ def _read_gvab(data: bytes, *, verify_crc: bool, derive_ogids: bool) -> dict:
     ogxm["games"] = games
     if unknown:
         ogxm["_unknown_chunks"] = unknown
-        # The clock and the video are document keys too (`clock`, `video`).
+        # The clock and the video are document keys too (`clock_info`, `video_info`).
         from .ogxm2_passthrough import decode_v1_chunks
         decode_v1_chunks(ogxm)
     if base_blocks:

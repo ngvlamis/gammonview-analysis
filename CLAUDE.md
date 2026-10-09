@@ -363,7 +363,7 @@ and always will — every file and share link from before the switch is v1 — a
 for comparison. **`docs/OGXM_V2_PROFILE.md` is the profile**: how our document
 maps onto v2, what travels outside its fields, and every way reading a file back
 differs from what was written. `docs/OGXM_FORMAT_SPEC.md` in the HedgeHog
-checkout is the v2 spec; `OGXM_FORMAT_SPEC_GAMMONVIEW.md` here now describes v1
+checkout is the v2 spec; `docs/v1/OGXM_FORMAT_SPEC_GAMMONVIEW.md` here now describes v1
 only.
 
 **Nothing GammonView stores is dropped, and nothing outside v2 is invented.**
@@ -462,10 +462,10 @@ compare against libogxm's *v1* writer and projection, and skip — saying so —
 against a 2.x library, which writes and projects v2 only. They need a pre-v2
 build to run.
 
-**Every field and section v2 defines is a document key** (since 1.6), under
+**Every field and section v2 defines is a document key** (since 2.0), under
 v2's own name — the match context and player profiles, a game's starting cube,
-every block, level and decision field, and `CLCK`/`VIDO`/`ANNO` as `clock` +
-`clock_ms`, `video` + `video_ms`, and `annotations` lists on the match, game,
+every block, level and decision field, and `CLCK`/`VIDO`/`ANNO` as `clock_info` +
+`timestamp_ms`, `video_info` + `video_ms`, and `annotations` lists on the match, game,
 ply, decision and alternative. Two names differ: v2's `site` (a host name) is
 `platform`, because our `site` is the free-text place; and `event_year` is its
 own key, no longer joined onto `event`. `model_id`/`model_name` are exactly what

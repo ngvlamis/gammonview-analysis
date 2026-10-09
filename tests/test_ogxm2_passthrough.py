@@ -288,7 +288,7 @@ def main() -> int:
               "7. the non-canonical clock is re-encoded canonically, the video's marks kept")
     again = read_gvab(out)
     check(write_gvab(again) == out, "7. and the v2 file is stable")
-    without = {k: v for k, v in v1doc.items() if k not in ("_unknown_chunks", "clock", "video")}
+    without = {k: v for k, v in v1doc.items() if k not in ("_unknown_chunks", "clock_info", "video_info")}
     check(set(kinds(write_gvab(without))) & {"SIGN", "CLCK", "VIDO"} == set(),
           "7. a document without the chunks writes none")
 

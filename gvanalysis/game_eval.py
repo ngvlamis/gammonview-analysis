@@ -566,6 +566,9 @@ def _eval_cube_decision(dec: dict, ctx: _EvalCtx) -> _DecResult:
             "equity_pass": round(dp, 4),
             "optimal_response": "take" if dt <= dp else "pass",
             "player_response": dec["response"],
+            # What the ply actually was where that is not the response it is
+            # judged as (a beaver is judged as the take it answers).
+            **({"played_action": dec["played"]} if dec.get("played") else {}),
             "lost_equity": round(resp_err_raw, 4),
             "upgraded": cube_upgraded,
             "counted": resp_counts,

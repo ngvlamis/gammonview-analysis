@@ -264,5 +264,24 @@ console.log('\n--- 10. a completed block rates like the one it was written from 
     '10. and the ratings are identical');
 }
 
+console.log('\n--- 11. a cube beside a missed double is one decision, counted once ---');
+{
+  const cube = { no_double_equity: 0.40, double_take_equity: 0.60, double_pass_equity: 1.0 };
+  const ply = { color: 1, action_id: 6, ogid_before: null };
+  const both = checker([0.2, 0.1], true, { cube_decision: { ...cube }, missed_double: { ...cube } });
+  completeBaseBlock(new Map([['0,0', both]]), new Map([['0,0', ply]]), null);
+  assert(both.cube_decision.decision === undefined,
+    '11. the live cube takes no flag when a missed double sits beside it');
+  assert(both.missed_double.decision == null,
+    '11. the missed double stays unflagged: stats derives it');
+  const alone = checker([0.2, 0.1], true, { cube_decision: { ...cube } });
+  completeBaseBlock(new Map([['0,0', alone]]), new Map([['0,0', ply]]), null);
+  assert(alone.cube_decision.decision === true,
+    '11. a live cube on its own is still judged on its triviality');
+  const doc = { games: [{ plies: [{ color: 1, action_id: 6, analysis: both }] }] };
+  assert(compute_aggregates(doc).match.white.cube_decisions === 1,
+    '11. and compute_aggregates counts the cube once');
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

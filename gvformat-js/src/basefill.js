@@ -312,8 +312,11 @@ export function completeBaseBlock(blockObj, plyByKey, analysisInfo, options) {
 
     // The live cube above a checker play: not itself an error, so triviality is
     // the whole test (og2gva applies the same one to the same shape).
+    // Beside a `missed_double` it is the same decision seen twice (the missed
+    // double *is* the cube decision, counted by its own rule), so it takes no
+    // flag: one cube decision counts once.
     const live = analysis.cube_decision;
-    if (live != null && live.no_double_equity != null) {
+    if (live != null && live.no_double_equity != null && analysis.missed_double == null) {
       live.decision = !trivialCube(
         live.no_double_equity, live.double_take_equity, live.double_pass_equity);
     }

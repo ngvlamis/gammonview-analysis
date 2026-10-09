@@ -7,7 +7,7 @@ Mirrors ``gvformat-js/src/ogxm2_passthrough.js``; keep the two in step, byte
 for byte. ``docs/OGXM_V2_PROFILE.md`` (section 5) is the account for readers.
 
 Our document models a match, its analyses, the clock, the video and every
-annotation a player or another tool wrote (``clock``, ``video``,
+annotation a player or another tool wrote (``clock_info``, ``video_info``,
 ``annotations``). What it cannot model -- the signatures, unknown sections,
 fields and annotation scopes this version does not know -- would be dropped by
 reading a foreign v2 file and writing it back. ``read_ogxm2`` therefore attaches
@@ -350,25 +350,21 @@ def decode_video(payload: bytes, plies_per_game: list[int]):
 
 
 def clock_doc(header, precision: int) -> dict:
-    """The document's ``clock`` for a decoded header: its four numbers, the
-    berserk flags when set, the unassigned flag bits when any, and ``precision``
-    only when it is not the canonical 10."""
+    """The document's ``clock_info`` for a decoded header: its four numbers, the
+    ``flags`` byte as stored when it is not 0, and ``precision`` only when it is
+    not the canonical 10."""
     reserve, delay, incr, start, flags = header
     out: dict = {"reserve_ms": reserve, "delay_ms": delay, "increment_ms": incr,
                  "start_timestamp": start}
-    if flags & 1:
-        out["white_berserk"] = True
-    if flags & 2:
-        out["black_berserk"] = True
-    if flags & ~3:
-        out["flags_other"] = flags & ~3
+    if flags:
+        out["flags"] = flags
     if precision != CLOCK_PRECISION:
         out["precision"] = precision
     return out
 
 
 def video_doc(header) -> dict:
-    """The document's ``video`` for a decoded header: its ``kind`` and the other
+    """The document's ``video_info`` for a decoded header: its ``kind`` and the other
     fields where they are not the default."""
     kind, live, offset, url = header
     out: dict = {"kind": kind}
@@ -724,8 +720,8 @@ class Plan:
 
 
 def decode_v1_chunks(doc: dict) -> None:
-    """Read a v1 file's ``CLCK`` and ``VIDO`` chunks into ``clock``, ``video``
-    and the plies' ``clock_ms`` / ``video_ms``, as the reference's ``v1_to_v2``
+    """Read a v1 file's ``CLCK`` and ``VIDO`` chunks into ``clock_info``, ``video_info``
+    and the plies' ``timestamp_ms`` / ``video_ms``, as the reference's ``v1_to_v2``
     reads them. The chunks stay in ``_unknown_chunks``, so a v1 rewrite is
     unchanged. A chunk that is not valid (8.2, 8.3) is dropped, as it is there."""
     from .binary import CHUNK_CLCK, CHUNK_VIDO
@@ -749,10 +745,10 @@ def decode_v1_chunks(doc: dict) -> None:
                 # The reference rewrites a v1 clock at the canonical step, so
                 # does this: the stated precision is not kept.
                 header, ts, _precision = got
-                doc["clock"] = clock_doc(header, CLOCK_PRECISION)
+                doc["clock_info"] = clock_doc(header, CLOCK_PRECISION)
                 for i, v in enumerate(ts):
                     gi, pi = keys[i]
-                    games[gi]["plies"][pi]["clock_ms"] = v
+                    games[gi]["plies"][pi]["timestamp_ms"] = v
                 done.add(t)
         else:
             # v1 addresses a mark by the ply's place in the game as the document
@@ -760,7 +756,7 @@ def decode_v1_chunks(doc: dict) -> None:
             got = decode_video(body, [len(g["plies"]) for g in games])
             if got is not None:
                 header, marks = got
-                doc["video"] = video_doc(header)
+                doc["video_info"] = video_doc(header)
                 for gi, pi, hand, video_ms, wall, behind in marks:
                     games[gi]["plies"][pi].update(video_mark_doc(hand, video_ms, wall, behind))
                 done.add(t)

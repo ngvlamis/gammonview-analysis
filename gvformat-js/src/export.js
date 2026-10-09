@@ -844,7 +844,7 @@ function _cubeResponseAnalysis(entry, noDoubleEquity) {
   const equityLoss = Math.max(0.0, entry.lost_equity || 0.0);
   const analysis = {
     correct_action: entry.optimal_response,
-    played_action: entry.player_response,
+    played_action: entry.played_action || entry.player_response,
     double_take_equity: entry.equity_take,
     double_pass_equity: entry.equity_pass,
     equity_loss: Math.round(equityLoss * 10000) / 10000,

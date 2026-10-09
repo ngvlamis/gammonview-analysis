@@ -37,7 +37,7 @@ console.log(ogxm.match_length, ogxm.games.length);
 // write_gvab writes OGXM v2 (write_gvab_v1 is the old v1 writer, kept for
 // tests and comparison). Rewriting is idempotent: one pass canonicalizes, and
 // it is byte-stable from then on. Every v2 field and section (match context, player
-// profiles, clock, video, annotations, rollout settings) is a document key; another
+// profiles, clock_info, video_info, annotations, rollout settings) is a document key; another
 // producer's signatures and unknown sections are carried, and kept while unedited.
 const canonical = write_gvab(read_gvab(bytes));
 write_gvab(read_gvab(canonical));   // === canonical

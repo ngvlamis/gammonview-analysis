@@ -80,9 +80,9 @@ const readBack = {};
   const dropped = clone(docs['clock-video']);
   readBack['video-dropped-mark'] = dropped;
   const gap = clone(docs['clock-video']);
-  delete gap.clock;
-  for (const g of gap.games) for (const p of g.plies) delete p.clock_ms;
-  delete gap.games[0].plies[6].clock_ms;
+  delete gap.clock_info;
+  for (const g of gap.games) for (const p of g.plies) delete p.timestamp_ms;
+  delete gap.games[0].plies[6].timestamp_ms;
   readBack['clock-gap'] = gap;
 }
 for (const [name, doc] of Object.entries(docs)) {
@@ -128,7 +128,7 @@ const refuses = (doc) => { try { write_gvab(doc); return false; } catch (e) { re
     'a key in our namespace is refused');
   assert(refuses(mk((d) => { d.annotations = [{ value: 'a', key: 'x-k' }, { value: 'b', key: 'x-k' }]; })),
     'a (key, language) pair used twice on one target is refused');
-  assert(refuses(mk((d) => { d.clock = { reserve_ms: -1 }; })), 'a negative clock is refused');
+  assert(refuses(mk((d) => { d.clock_info = { reserve_ms: -1 }; })), 'a negative clock is refused');
   const many = mk((d) => { d.annotations = Array.from({ length: 4100 }, (_, i) => ({ value: 'n', key: `x-k${i}` })); });
   const big = mk((d) => { d.annotations = Array.from({ length: 70 }, (_, i) => ({ value: 'b'.repeat(4000), key: `x-k${i}` })); });
   for (const [label, d] of [['more than 4096 annotations', many], ['more than 256 KiB of annotations', big]]) {
@@ -145,7 +145,7 @@ const pt = doc[KEY];
 const held = { ...doc };
 delete held[KEY];
 assert(same(held, expectedForeign), 'readGvab gives the expected document');
-assert(pt.anno.length === 2 && pt.anno_raw.length === 17 && pt.clck && pt.vido && !pt.clock && !pt.video,
+assert(pt.anno.length === 2 && pt.anno_raw.length === 17 && pt.clck && pt.vido && !pt.clock_info && !pt.video_info,
   'only the two annotations that address nothing are kept whole; the rest by fingerprint');
 assert(bytesEqual(write_gvab(doc), FOREIGN), 'write(read(F)) is F, byte for byte');
 assert(bytesEqual(write_gvab(JSON.parse(JSON.stringify(doc))), FOREIGN), 'the .gva route writes the same bytes');
@@ -165,7 +165,7 @@ const EDITS = {
     return d;
   },
   annotation_removed: (d) => { delete d.games[0].plies[3].annotations; return d; },
-  clock_edited: (d) => { d.games[0].plies[6].clock_ms += 40; return d; },
+  clock_edited: (d) => { d.games[0].plies[6].timestamp_ms += 40; return d; },
   ply_removed: (d) => { d.games[0].plies.splice(7, 2); return d; },
   ply_inserted_after_clock: (d) => {
     const p = d.games[0].plies;
@@ -238,7 +238,7 @@ assert(!kinds(out).includes('CLCK') && payloads(out, 'VIDO').length,
   const marks = back.games.flatMap((g, gi) => g.plies.map((p, pi) => [gi, pi, p]))
     .filter(([, , p]) => p.video_ms !== undefined).map(([gi, pi]) => [gi, pi]);
   assert(same(marks, [[0, 1], [0, 6], [1, 10]]), 'the video marks moved with their plies');
-  assert(back.clock === undefined && back.games[0].plies[4].annotations !== undefined
+  assert(back.clock_info === undefined && back.games[0].plies[4].annotations !== undefined
     && back.games[0].plies[5].annotations !== undefined, 'no clock; the annotations moved too');
 }
 out = edited('block_removed');
@@ -247,15 +247,15 @@ assert(payloads(out, 'SIGN').length === 1 && sameList(payloads(out, 'MSIG'), pay
 
 // -- (c) a v1 file ------------------------------------------------------------------------
 const v1 = readGvab(V1);
-assert(same(v1.clock, { reserve_ms: 120000, delay_ms: 12000, increment_ms: 0, start_timestamp: 1790442000 })
-  && v1.video.kind === 1 && v1.video.offset_ms === -500,
+assert(same(v1.clock_info, { reserve_ms: 120000, delay_ms: 12000, increment_ms: 0, start_timestamp: 1790442000 })
+  && v1.video_info.kind === 1 && v1.video_info.offset_ms === -500,
 'a v1 file\'s chunks decode to clock and video');
-assert(v1.games.flatMap((g) => g.plies).filter((p) => p.clock_ms !== undefined).length === 11
+assert(v1.games.flatMap((g) => g.plies).filter((p) => p.timestamp_ms !== undefined).length === 11
   && v1._unknown_chunks.map((c) => c.name).join() === 'SIGN,CLCK,VIDO',
 'eleven readings, and the chunks still stand for a v1 rewrite');
 {
   const o = write_gvab(v1);
-  assert(bytesEqual(write_gvab(readGvab(o)), o) && same(readGvab(o).clock, v1.clock),
+  assert(bytesEqual(write_gvab(readGvab(o)), o) && same(readGvab(o).clock_info, v1.clock_info),
     'the v2 file reads back to the same clock');
 }
 

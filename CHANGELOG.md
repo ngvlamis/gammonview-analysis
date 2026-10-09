@@ -13,7 +13,7 @@ when the repository was opened; they are kept because they record why things
 are the way they are — particularly the breaking changes and the measurements
 behind several design decisions. Dates are the tag dates.
 
-## 1.6.0 — unreleased
+## 2.0.0 — unreleased
 
 **`.gvab` is OGXM v2** *(format change)*
 
@@ -50,6 +50,22 @@ What a reader sees differently, each a named rule in
 
 Size: +2.8% raw and +6.9% deflated across the corpus, for strictly more
 content (1e-6 precision, the values v1 clamped or dropped).
+
+**Consistency and limits** *(fix)*
+
+- A foreign `missed_double` and the `cube_decision` beside it no longer count the
+  cube twice; one cube decision counts once. On HedgeHog's own `match.ogxm` black's
+  PR moves 7.119 -> 7.274 (47 -> 46 decisions); on the `blocks.ogxm` fixture white's
+  moves 17.798 -> 19.671 (21 -> 19). No sample-corpus match changes.
+- An abandoned match (`result` 3) reads back as 3 instead of the result its score implies.
+- A cube verdict reads back as written: `too_good`, `beaver` and `raccoon`, not
+  `no_double` / `take`. A fresh analysis of a beaver ply says `played_action: "beaver"`
+  (judged as a take, as before).
+- `MAX_ANALYSES` is v2's 64 (was 16); `write_gvab_v1` refuses more than the 16 a v1 file
+  holds with a clear error.
+- A decision with more than 1024 alternatives is written cut with `alternatives_total`
+  stating the full count, the played move kept in the list. More than 1000 games, 1500
+  plies in a game or 100000 plies raise instead of writing an invalid file.
 
 **Another producer's v2 file keeps its content when rewritten** *(spec I7)*
 
@@ -94,8 +110,8 @@ the file has no value, so existing documents are unchanged.
   and `cubeless_equity`; per cube `take_point`, `window_searched`,
   `is_optional`, `is_free_cube`, `cubeful_take_value`, `currency`; per
   resignation `correct_value`.
-- **Clock, video, annotations:** `clock` (settings) with `clock_ms` on each
-  ply; `video` with `video_ms` (and the wall-clock marks) on each marked ply;
+- **Clock, video, annotations:** `clock_info` (settings, with a `flags` byte) with `timestamp_ms` on each
+  ply; `video_info` with `video_ms` (and the wall-clock marks) on each marked ply;
   `annotations` (prose or key/value, author, language, time, arrows and
   highlights) on the match, a game, a ply, a decision and an alternative.
   These now move with their ply, so **a move edit keeps them**.

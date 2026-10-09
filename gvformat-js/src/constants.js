@@ -75,11 +75,17 @@ export const CUBE_ACTION_CODES = {
   double: CUBE_ACTION_DOUBLE,
   take: CUBE_ACTION_TAKE,
   pass: CUBE_ACTION_PASS,
+  // v1 has only these four. A refinement is written as the plain action it
+  // refines: too good is a no-double; a beaver or raccoon is a take.
+  too_good: CUBE_ACTION_NO_DOUBLE,
+  beaver: CUBE_ACTION_TAKE,
+  raccoon: CUBE_ACTION_TAKE,
 };
 
-// Format cap on analysis blocks per match (binary spec: MAX_ANALYSES). A file
-// carrying more than one sets min_reader_minor = 3.
-export const MAX_ANALYSES = 16;
+// Format cap on analysis blocks per match: OGXM v2's MAX_ANALYSES. A v1 file
+// holds only MAX_ANALYSES_V1, which write_gvab_v1 enforces.
+export const MAX_ANALYSES = 64;
+export const MAX_ANALYSES_V1 = 16;
 
 // action_id -> [d1, d2, num_move_bytes]; index = action_id (0-20).
 export const DICE_TABLE = [

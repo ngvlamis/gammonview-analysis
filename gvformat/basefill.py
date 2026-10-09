@@ -347,8 +347,12 @@ def complete_base_block(block_obj: dict, ply_by_key: dict, analysis_info: dict |
         # The live cube above a checker play: not itself an error, so
         # triviality is the whole test (og2gva applies the same one to the
         # same shape).
+        # Beside a `missed_double` it is the same decision seen twice (the
+        # missed double *is* the cube decision, counted by its own rule), so
+        # it takes no flag: one cube decision counts once.
         live = analysis.get("cube_decision")
-        if live is not None and live.get("no_double_equity") is not None:
+        if (live is not None and live.get("no_double_equity") is not None
+                and analysis.get("missed_double") is None):
             live["decision"] = not _trivial_cube(
                 live["no_double_equity"], live["double_take_equity"], live["double_pass_equity"])
         # A `missed_double` deliberately keeps no flag of its own: `stats.py`

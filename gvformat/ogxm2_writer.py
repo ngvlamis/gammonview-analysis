@@ -72,7 +72,11 @@ from . import ogxm2 as R
 from . import ogxm2_passthrough as P
 
 MAX_STRING = 4096
-MAX_ALTS = 1024
+MAX_ALTS = 1024            # MAX_ALTS_PER_DECISION
+MAX_GAMES = 1000
+MAX_PLIES_PER_GAME = 1500
+MAX_TOTAL_PLIES = 100000
+MAX_ANALYSES = 64
 MAX_EVENT = 120
 
 SCOPE_MATCH = 0
@@ -527,8 +531,14 @@ class _Match:
         variant = int(self.doc.get("variant") or 0)
         opening_abs = variant_opening_abs(variant) or _p1_to_absolute(_STARTING_BOARD_P1)
         opening_p1 = variant_opening_p1(variant) or list(_STARTING_BOARD_P1)
-        for gi, g in enumerate(self.doc.get("games") or []):
+        games = self.doc.get("games") or []
+        if len(games) > MAX_GAMES:
+            raise ValueError(f"too many games for an OGXM v2 file: {len(games)} (v2 holds {MAX_GAMES})")
+        for gi, g in enumerate(games):
             plies = g.get("plies") or []
+            if len(plies) > MAX_PLIES_PER_GAME:
+                raise ValueError(f"game {gi} has too many plies for an OGXM v2 file: "
+                                 f"{len(plies)} (v2 holds {MAX_PLIES_PER_GAME} per game)")
             board = list(opening_p1)
             fields: dict[int, bytes] = {}
             start = _game_start(g, opening_abs)
@@ -641,6 +651,9 @@ class _Match:
                 else:
                     raise ValueError(f"game {gi} ply {pi}: action {action} has no OGXM v2 form here")
             self.games.append(bytes(out))
+        if len(self.ply_at) > MAX_TOTAL_PLIES:
+            raise ValueError(f"too many plies for an OGXM v2 file: {len(self.ply_at)} "
+                             f"(v2 holds {MAX_TOTAL_PLIES})")
 
     @staticmethod
     def _set_position(color: int, dice, board_abs: list[int]) -> bytes:
@@ -960,7 +973,7 @@ def _position_key(position, moves) -> tuple | None:
         return None
 
 
-def _checker_extras(a: dict, count: int, nsources: int):
+def _checker_extras(a: dict, count: int, nsources: int, total=None):
     """``(fields, conformant)``: the checker record's fields beyond the list and
     the level, from the document, and whether ``DECS`` can hold them as they
     are. The list's size decides two of them (7.1): the total only means
@@ -969,8 +982,9 @@ def _checker_extras(a: dict, count: int, nsources: int):
     keeps the decision exactly (P6)."""
     f: dict[int, bytes] = {}
     ok = True
-    total = a.get("alternatives_total")
     truncated = False
+    if total is None:
+        total = a.get("alternatives_total")
     if total is not None:
         _uint_field(total, "alternatives_total")
         f[1] = _varint(total)
@@ -996,7 +1010,30 @@ def _checker_records(a: dict, ref: int, block_eff: dict, conv: _Converter, unpla
     document alternative sits in ``main`` (None for one it leaves out; the list
     is None without a ``main``). ``position`` is the board before a legal dice
     ply and ``played_moves`` its play, for A4."""
-    alts = (a.get("alternatives") or [])[:MAX_ALTS]
+    full = a.get("alternatives") or []
+    kept = list(range(len(full)))
+    total = None
+    if len(full) > MAX_ALTS:
+        # v2 holds MAX_ALTS_PER_DECISION alternatives and lets a list be cut only
+        # where `alternatives_total` states the full count (7.1). The played
+        # move must stay in the list (A4), so it takes the last place if it
+        # would fall past the cut.
+        kept = kept[:MAX_ALTS]
+        at = next((i for i, x in enumerate(full) if x.get("is_played")), None)
+        if at is not None and at >= MAX_ALTS:
+            kept[-1] = at
+        total = max(len(full), int(a.get("alternatives_total") or 0))
+    alts = [full[i] for i in kept]
+
+    def lift(places):
+        """``places`` over the kept list, over the document's own."""
+        if places is None or len(kept) == len(full):
+            return places
+        out = [None] * len(full)
+        for pos, where in enumerate(places):
+            out[kept[pos]] = where
+        return out
+
     best = float(a.get("best_equity", 0.0) or 0.0)
     loss = float(a.get("equity_loss", 0.0) or 0.0)
     has_extras = any(a.get(k) is not None for k in R.CHECKER_KEYS)
@@ -1015,7 +1052,7 @@ def _checker_records(a: dict, ref: int, block_eff: dict, conv: _Converter, unpla
         if order:
             fields[0] = _varint(len(order)) + b"".join(
                 _alt_record(alts[i], tiers[i][0], i in played, conv) for i in order)
-        extra, conformant = _checker_extras(a, len(order), nsources)
+        extra, conformant = _checker_extras(a, len(order), nsources, total)
         fields.update(extra)
         if explicit or not order:
             fields[2] = _equity(conv.eq(best))
@@ -1064,9 +1101,9 @@ def _checker_records(a: dict, ref: int, block_eff: dict, conv: _Converter, unpla
             return None, exact, None
         main, conformant = build(order, explicit=False)
         places = [order.index(i) if i in order else None for i in range(len(alts))]
-        return (main if conformant else None), exact, (places if conformant else None)
+        return (main if conformant else None), exact, (lift(places) if conformant else None)
     main, conformant = build(order, explicit=False)
-    return ((main, None, list(range(len(alts)))) if conformant else (None, exact, None))
+    return ((main, None, lift(list(range(len(alts))))) if conformant else (None, exact, None))
 
 
 class _Ctx:
@@ -1647,18 +1684,15 @@ def check_annos(annos: list[_Anno]) -> None:
 
 
 def _clock_section(doc: dict, match: _Match) -> bytes | None:
-    """``CLCK`` (8.2) from ``clock`` and each ply's ``clock_ms``, or None where
+    """``CLCK`` (8.2) from ``clock_info`` and each ply's ``timestamp_ms``, or None where
     the document has no clock or the series cannot be written: a reading after a
     ply without one, a first reading that is not 0, one that runs backwards."""
-    clock = doc.get("clock")
+    clock = doc.get("clock_info")
     if not isinstance(clock, dict):
         return None
-    flags = (1 if clock.get("white_berserk") else 0) | (2 if clock.get("black_berserk") else 0)
-    other = _opt_uint(clock, "flags_other", "clock", 8)
-    if other & 3:
-        raise ValueError("clock flags_other overlaps the berserk flags")
-    header = tuple(_opt_uint(clock, k, "clock") for k in
-                   ("reserve_ms", "delay_ms", "increment_ms", "start_timestamp")) + (flags | other,)
+    flags = _opt_uint(clock, "flags", "clock_info", 8)
+    header = tuple(_opt_uint(clock, k, "clock_info") for k in
+                   ("reserve_ms", "delay_ms", "increment_ms", "start_timestamp")) + (flags,)
     precision = clock.get("precision")
     if precision is None:
         precision = P.CLOCK_PRECISION
@@ -1667,32 +1701,32 @@ def _clock_section(doc: dict, match: _Match) -> bytes | None:
     ts: list[int] = []
     gap = False
     for _key, p in match.ply_at:
-        v = p.get("clock_ms")
+        v = p.get("timestamp_ms")
         if v is None:
             gap = True
             continue
         if gap:
             return None
         if not _is_uint(v):
-            raise ValueError(f"clock_ms {v!r} is not a time v2 can hold")
+            raise ValueError(f"timestamp_ms {v!r} is not a time v2 can hold")
         ts.append(v)
     return P.encode_clock(header, ts, len(match.ply_at), precision)
 
 
 def _video_section(doc: dict, match: _Match) -> bytes | None:
-    """``VIDO`` (8.3) from ``video`` and the marks on the plies. A mark on a ply
+    """``VIDO`` (8.3) from ``video_info`` and the marks on the plies. A mark on a ply
     v2 has no record of (a game's set-up position, a game past the 256th) is
     dropped by itself."""
-    video = doc.get("video")
+    video = doc.get("video_info")
     if not isinstance(video, dict):
         return None
-    kind = _opt_uint(video, "kind", "video", 8)
+    kind = _opt_uint(video, "kind", "video_info", 8)
     offset = video.get("offset_ms") or 0
     if not isinstance(offset, int) or isinstance(offset, bool) or not -(1 << 31) <= offset < 1 << 31:
-        raise ValueError(f"video offset_ms {offset!r} is not an offset v2 can hold")
+        raise ValueError(f"video_info offset_ms {offset!r} is not an offset v2 can hold")
     url = video.get("url") or ""
     if not isinstance(url, str):
-        raise ValueError("video url must be a string")
+        raise ValueError("video_info url must be a string")
     raw = url.encode("utf-8") if url else b""
     if len(raw) > P.MAX_VIDEO_URL or not P.url_storable(raw, kind):
         if url:
@@ -1768,6 +1802,9 @@ def _encode(ogxm: dict) -> _Parts:
         _derive_ogids(doc)
 
     blocks = _blocks(doc)
+    if len(blocks) > MAX_ANALYSES:
+        raise ValueError(f"too many analysis blocks for an OGXM v2 file: {len(blocks)} "
+                         f"(v2 holds {MAX_ANALYSES})")
     flagged = {(gi, pi) for gi, g in enumerate(doc.get("games") or [])
                for pi, p in enumerate(g.get("plies") or [])
                for _info, select in blocks

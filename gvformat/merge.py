@@ -28,8 +28,9 @@ from __future__ import annotations
 
 import copy
 
-#: Format cap on analysis blocks (binary spec: MAX_ANALYSES).
-MAX_ANALYSES = 16
+#: Format cap on analysis blocks: OGXM v2's ``MAX_ANALYSES`` (the v1 file held
+#: 16, which ``binary.MAX_ANALYSES_V1`` still enforces for ``write_gvab_v1``).
+MAX_ANALYSES = 64
 
 
 def _decision_plies(game: dict) -> list[dict]:
