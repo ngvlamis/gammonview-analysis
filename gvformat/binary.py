@@ -135,6 +135,8 @@ GVAN_CUBE_REC = 2
 GVAN_CHECKER_REC_V2 = 7
 GVAN_CUBE_REC_V2 = 6
 
+# v1's cap on a decision's alternatives, used by ``write_gvab_v1`` only. v2
+# holds 1024 (``MAX_ALTS`` in ogxm2_writer).
 MAX_ALTS_PER_DECISION = 50
 
 # The largest hop a ply record can hold. A move step is one byte -- the start

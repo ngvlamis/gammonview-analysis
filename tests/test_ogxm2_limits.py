@@ -12,6 +12,7 @@
 * A checker decision with more than 1024 alternatives is written truncated with
   ``alternatives_total`` stating the full count, and the played move stays in the
   list. A match with too many games, or a game with too many plies, is refused.
+* A long event or site is split over annotations; a long player name is refused.
 
 Mirrors gvformat-js/test/test-ogxm2-limits.js -- keep the two in step.
 
@@ -169,6 +170,20 @@ def main() -> int:
     d = C.midmatch()
     d["games"][0]["plies"] = d["games"][0]["plies"][:1] * 1501
     check(raises(lambda: write_gvab(d), "too many plies"), "5. 1501 plies in a game are refused")
+
+    print("\n--- 6. strings past v2's 4096 bytes ---")
+    d = C.midmatch()
+    d["event"] = "\u00c9" * 5000 + "x" * 3000
+    d["site"] = "s" * 9000
+    blob = write_gvab(d)
+    back = read_gvab(blob)
+    check(back["event"] == d["event"] and back["site"] == d["site"],
+          "6. an event and a site past a string's length come back whole, over key~1, key~2, ...")
+    check(write_gvab(back) == blob, "6. and rewriting it is byte-stable")
+    d = C.midmatch()
+    d["player_white"] = "w" * 4097
+    check(raises(lambda: write_gvab(d), "exceeds OGXM v2's 4096"),
+          "6. a player name past 4096 bytes is refused (v2 has no other place for it)")
 
     print(f"\n{_checks - len(_failures)}/{_checks} checks passed.")
     if _failures:

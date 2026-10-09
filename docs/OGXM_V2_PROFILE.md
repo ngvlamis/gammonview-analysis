@@ -71,6 +71,8 @@ has not assigned is kept whole, as `extras_raw`.
 A game that starts from a set-up board (a leading set-position ply with no
 dice) stores it as `GAME.initial_board` — unless the board is the opening
 position, which v2 never writes as an initial board, and then it stays a ply.
+A game read from a v1 file states its set-up board only as `initial_board`,
+with no such ply; the writer stores that as `GAME.initial_board` too.
 
 **Illegal plays.** A play that is not legal (M4) for its roll — or that any
 analysis block flags `illegal_move` — is written the way v2 records one: a
@@ -256,7 +258,8 @@ decisions where the document says otherwise, each as its `ply_ref` and a letter:
 The writer refuses, with a `ValueError`, what v2's limits cannot hold rather than
 writing an invalid file: more than 1000 games, more than 1500 plies in a game,
 more than 100000 plies, more than 64 analysis blocks (`write_gvab_v1`: more than
-16). `tests/test_ogxm2_limits.py` pins these and the cut above.
+16), and a player name longer than v2's 4096-byte string (the one text field
+with no annotation to fall back on). `tests/test_ogxm2_limits.py` pins these and the cut above.
 
 Each rule above is in `tests/test_ogxm2_writer.py`, which fails on any difference
 none of them explains.

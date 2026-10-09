@@ -13,8 +13,9 @@
 //
 // **A reader into our document's shape.** The document that comes out is the
 // one a v1 file holding the same match would give, so nothing downstream learns
-// there are two versions. `ogxm2_writer.js` is the other half, and what
-// `write_gvab` writes; `docs/OGXM_V2_PROFILE.md` is the profile the two share.
+// there are two versions. `ogxm2_writer.js` is the other half, and since 2.0.0
+// what `write_gvab` writes; `docs/OGXM_V2_PROFILE.md` is the profile the two
+// share.
 //
 // **Two kinds of block.** A block our writer made is marked by its
 // `x-gammonview-analysis` annotation and read exactly: the `x-` annotations put
@@ -22,18 +23,20 @@
 // PR-counting flags, level labels, `site`), and the reader derives nothing it
 // was told. Any other producer's block is read as below, and `basefill.js`
 // completes it as it completes any foreign v1 block. HedgeHog's own `to_v1`
-// (`src/match/ogxm2_v1.cpp`) is the model for that, with two departures, both
-// towards reading more files rather than fewer:
+// (`src/match/ogxm2_v1.cpp`) is the model for that, with two departures:
 //
-//   * `to_v1` refuses a game with a `termination` field, a file with `ANNO`,
-//     `MSIG`, a `completed_at`, and so on -- content its v1 *writer* cannot
-//     store. We are not writing a v1 file of record (the original upload is
-//     what is kept), so content that does not change what is on the board is
-//     simply not carried: signatures, annotations, the clock, the video. What
-//     *would* change the board or the score -- beavers, a cube set by edit,
-//     a settlement, a starting score -- is refused, with a message for the
-//     player, because the v1 shape has no way to say it and a wrong board is
-//     worse than none.
+//   * Signatures, unknown sections and fields, and annotations that address
+//     nothing the document holds are not carried by the document (they travel
+//     in `_ogxm2_passthrough`, `ogxm2_passthrough.js`). The clock, the video
+//     and every other annotation are: `clock_info` / `timestamp_ms`,
+//     `video_info` / `video_ms`, `annotations` on the match, a game, a ply, a
+//     decision's analysis object and an alternative. Everything that does
+//     change the board or the score is: a starting score, a variant, a cube
+//     that a game opens with or one set by hand, automatic doubles, a beaver, a
+//     raccoon, a settlement. The match context (event year, stage, city,
+//     platform, ...), the two player profiles and each game's termination are
+//     document keys too; a value v2 cannot hold travels in an
+//     `x-gammonview-<field>` annotation and is put back.
 //
 //   * Units. A v2 block names its currency, and HedgeHog's match analyses are
 //     `cubeful_match`: every equity in them -- each candidate move's, the three

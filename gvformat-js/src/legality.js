@@ -146,17 +146,19 @@ function extend(mine, opp, dice, acc, results) {
  * possible, and when a non-double allows only one die, the larger one must be
  * played if either alone is playable.
  *
- * @returns {{plays: Set<string>, diceUsed: number}} plays are normalizePlay keys.
+ * @returns {{plays: Set<string>, best: Array, diceUsed: number}} plays are
+ *   normalizePlay keys; best the maximal sequences they came from (empty in a
+ *   dance, which `isPlayLegal` relies on).
  */
 export function legalPlays(mine, opp, d1, d2) {
   const results = [];
   const dice = d1 === d2 ? [d1, d1, d1, d1] : [d1, d2];
   extend(mine, opp, dice, [], results);
-  if (!results.length) return { plays: new Set(), diceUsed: 0 };
+  if (!results.length) return { plays: new Set(), best: [], diceUsed: 0 };
 
   let longest = 0;
   for (const s of results) if (s.length > longest) longest = s.length;
-  if (longest === 0) return { plays: new Set(), diceUsed: 0 };
+  if (longest === 0) return { plays: new Set(), best: [], diceUsed: 0 };
 
   let best = results.filter((s) => s.length === longest);
 

@@ -13,6 +13,33 @@ when the repository was opened; they are kept because they record why things
 are the way they are — particularly the breaking changes and the measurements
 behind several design decisions. Dates are the tag dates.
 
+## 2.0.1 — Unreleased
+
+**A v1 set-up start survives a rewrite** *(fix)*
+
+A v1 file states a game that starts from a set-up board in its `GAME` header,
+so a v1 read gives that game an `initial_board` and no leading set-position
+ply. The v2 writers took the start only from such a ply, so rewriting the file
+dropped the board, replayed the game from the opening, and flagged its plays
+illegal. Both writers now take a bare `initial_board` as the game's start; a
+leading set-up ply, where there is one, still wins.
+
+**Long text values are split, not refused** *(fix)*
+
+An event or a `site` too long for one v2 string is carried in our annotation,
+which the profile says is split over `key~1`, `key~2`, … — but only the
+analysis and annotation records were split, so the writer raised instead. Every
+`x-gammonview-` record is split now, at character boundaries. A player name
+past v2's 4 096 bytes, the one text field with no annotation to fall back on,
+is still refused, and the profile now says so.
+
+**`isPlayLegal` on a roll with no legal play** *(fix, JavaScript only)*
+
+`legalPlays` returned no `best` for a dance, so `isPlayLegal` — and with it
+`write_gvab` — threw a `TypeError` on a dice ply that recorded checker steps on
+a roll that could not be played, where the Python writer flagged the play
+illegal. The two writers now agree on such a file.
+
 ## 2.0.0 — 2026-10-08
 
 **`.gvab` is OGXM v2** *(format change)*

@@ -582,6 +582,20 @@ function _gameStart(g, openingAbs) {
   return sp.length === openingAbs.length && sp.every((v, i) => v === openingAbs[i]) ? 0 : 1;
 }
 
+/** The set-up board a game states only as `initial_board`, or null.
+ *
+ *  A v1 read states a set-up start that way, with no leading ply (v1 kept the
+ *  board in the GAME header), so a v1 file rewritten as v2 would otherwise lose
+ *  its start -- and its plies, replayed from the opening, would be flagged
+ *  illegal. A leading set-up ply, where there is one, wins: a v2 read states
+ *  the board both ways. */
+function _bareInitialBoard(g, openingAbs, start) {
+  const ib = g.initial_board;
+  if (start || !Array.isArray(ib) || ib.length !== 26) return null;
+  const boardAbs = ib.map(_int);
+  return boardAbs.every((v, i) => v === openingAbs[i]) ? null : boardAbs;
+}
+
 /** `{keys, starts}`: the `[game, ply]` of every ply v2 holds, in `ply_ref`
  *  order, and each game's leading set-up position (0 or 1) that it does not. */
 export function plyLayout(doc) {
@@ -673,8 +687,10 @@ class _Match {
       let board = openingP1.slice();
       const fields = {};
       const start = _gameStart(g, openingAbs);
-      if (start) {
-        const boardAbs = plies[0].set_position.map(_int);
+      const boardAbs = start
+        ? plies[0].set_position.map(_int)
+        : _bareInitialBoard(g, openingAbs, start);
+      if (boardAbs !== null) {
         board = _absoluteToP1(boardAbs);
         fields[3] = _board(boardAbs);
       }
@@ -1589,16 +1605,27 @@ function _flagExceptions(docObjs, decoded) {
   return tokens;
 }
 
-/** Split an ASCII value over `key`, `key~1`, ... to stay under `MAX_STRING`;
- *  the reader concatenates them in suffix order. */
+/** Split a value over `key`, `key~1`, ... to stay under `MAX_STRING` bytes;
+ *  the reader concatenates them in suffix order. Cuts fall between characters,
+ *  never inside one's UTF-8 bytes. */
 function _chunked(key, value) {
   const room = MAX_STRING - 16;
-  if (value.length <= room) return [[key, value]];
-  const out = [];
-  for (let i = 0, n = 0; i < value.length; i += room, n++) {
-    out.push([n === 0 ? key : `${key}~${n}`, value.slice(i, i + room)]);
+  if (_enc.encode(value).length <= room) return [[key, value]];
+  const parts = [];
+  let cur = '';
+  let size = 0;
+  for (const ch of value) {
+    const n = _enc.encode(ch).length;
+    if (size + n > room) {
+      parts.push(cur);
+      cur = '';
+      size = 0;
+    }
+    cur += ch;
+    size += n;
   }
-  return out;
+  parts.push(cur);
+  return parts.map((part, n) => [n === 0 ? key : `${key}~${n}`, part]);
 }
 
 function _cmpBytes(a, b) {
@@ -2108,9 +2135,13 @@ export function _assemble(parts, plan) {
       ours.push([SCOPE_MATCH, 0, key, part]);
     }
   }
-  for (const [scope, ref, key, value] of ours) {
-    entries.push([annoSortKey(scope, ref, null, null, null, key, null, entries.length),
-      _annoRecord(scope, ref, key, value)]);
+  // A value of ours past a string's length goes over `key~1`, `key~2`, ...
+  // (profile 3), whichever field it carries.
+  for (const [scope, ref, key0, value0] of ours) {
+    for (const [key, value] of _chunked(key0, value0)) {
+      entries.push([annoSortKey(scope, ref, null, null, null, key, null, entries.length),
+        _annoRecord(scope, ref, key, value)]);
+    }
   }
   if (entries.length) {
     entries.sort((x, y) => cmpSortKeys(x[0], y[0]));

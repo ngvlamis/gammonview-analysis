@@ -532,6 +532,16 @@ def main() -> int:
     check(read_gvab(write_gvab(stated))["white_score"] == stated["white_score"],
           "4. a stated score the games do not add up to is kept")
 
+    # A set-up start stated only as `initial_board`, the way a v1 read states
+    # one (v1 kept the board in the GAME header, with no leading ply). Dropping
+    # it would replay the game from the opening and flag every play illegal.
+    setup = read_gvab((_REPO_ROOT / "gvformat-js" / "test" / "fixtures" / "ogxm2"
+                       / "set-up.ogxm").read_bytes())
+    bare = copy.deepcopy(setup)
+    del bare["games"][1]["plies"][0]
+    check(write_gvab(bare) == write_gvab(setup),
+          "1. a bare initial_board (a v1 read's set-up start) is written as the game's start")
+
     _bgf_frame_checks()
     _field_rules()
     _block_rules()

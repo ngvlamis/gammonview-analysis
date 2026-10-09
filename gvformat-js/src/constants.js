@@ -32,6 +32,8 @@ export const HEADER_FLAG_HAS_ANALYSIS = 0x0001;
 //   v3: the blanked bytes dropped -- checker record 7->3 B, cube record 6->2 B
 export const GVAN_VERSION = 3;
 
+// v1's cap on a decision's alternatives, used by `write_gvab_v1` only. v2
+// holds 1024 (`MAX_ALTS` in ogxm2_writer.js).
 export const MAX_ALTS_PER_DECISION = 50;
 
 // The largest hop a ply record can hold. A move step is one byte -- the start

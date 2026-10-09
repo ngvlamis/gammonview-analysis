@@ -66,8 +66,10 @@ unknown sections, presence-bit tails a later spec adds), it rides along in
 - **Output only** keys are produced by a reader (or a converter) for display and
   ignored by the writer, which derives them again: `ogid_before`, `ogid_after`,
   `notation`, `diff`, `played_equity`, `eval.equity`, `game_index`,
-  `is_crawford`, `first_to_move`, `initial_board`, `action` (on a
-  `cube_decision`) and `analysis_info.preset`.
+  `is_crawford`, `first_to_move`, `action` (on a `cube_decision`) and
+  `analysis_info.preset`. `initial_board` is output only *unless* the game has
+  no leading set-up ply, which is how a v1 read states a set-up start; the
+  writer then takes the board from it.
 
 ---
 
@@ -342,7 +344,7 @@ analysis to a document that already has one promotes it to this form
 | `initial_cube_value` | uint | The cube's value when the game opens (a power of two, within `cube_limit`). Default-omitted at 1 | `GAME.initial_cube_value` |
 | `initial_cube_owner` | uint | 0 White, 1 Black, 2 centred. Default-omitted at 2 | `GAME.initial_cube_owner` |
 | `auto_doubles` | uint | Automatic doubles this game opened with. The cube's real starting value is `initial_cube_value · 2^auto_doubles`. Default-omitted at 0 | `GAME.auto_doubles` |
-| `initial_board` | int[26] | **Output only.** The board of a game that starts from a set-up position, as a read also states it as the game's first ply | `GAME.initial_board` |
+| `initial_board` | int[26] | The board of a game that starts from a set-up position, as a v2 read also states it as the game's first ply. **Output only** when that ply is there; a v1 read gives this key alone, and the writer then takes the start from it | `GAME.initial_board` |
 | `annotations` | Annotation[] | Notes on the game | `ANNO`, game scope |
 | `plies` | [Ply](#ply)[] | The game's actions in order | |
 
@@ -623,7 +625,7 @@ A hold with the cube dead has none.
 | `action` | string | **Output only.** `"no_double"` when holding is correct; else `"double_take"` (when `double_pass_equity ≥ double_take_equity`) or `"double_pass"` |
 | `equity_loss` | float | Fresh converter output only (0.0 for a correct hold); not stored, absent in a read. The error belongs to `missed_double` |
 | `eval` | Eval | The pre-roll probabilities |
-| `decision` | bool | Whether this cube decision counted as a PR decision (not trivial). **Absent when a `missed_double` sits beside it** in a block of ours or in a v1 read — that record carries the count, so one cube is never counted twice. (A block of another producer completed by `basefill` currently gets one; see [`OGXM_COMPUTED_FIELDS.md`](OGXM_COMPUTED_FIELDS.md)) |
+| `decision` | bool | Whether this cube decision counted as a PR decision (not trivial). **Absent when a `missed_double` sits beside it** in a block of ours or in a v1 read — that record carries the count, so one cube is never counted twice. A block of another producer completed by `basefill` leaves it absent too; see [`OGXM_COMPUTED_FIELDS.md`](OGXM_COMPUTED_FIELDS.md) |
 | `eval_level` | string | The label of the cube result used. Our blocks only |
 | `level`, `take_point`, `window_searched`, `is_optional`, `is_free_cube`, `cubeful_take_value`, `currency`, `producer_ref`, `annotations` | | See [Per-decision v2 fields](#per-decision-v2-fields) |
 
@@ -921,8 +923,11 @@ The v1 byte layout is frozen in
 Those of v2 (spec §10): 1 000 games, 1 500 plies per game, 100 000 plies in a
 file, 1 024 alternatives per decision, 64 analysis blocks, 4 096 bytes per
 string, 4 096 annotations (256 KiB) and 256 drawings per annotation, a video URL
-of 512 bytes. The writer raises `ValueError` past a string or annotation limit and cuts an
-alternatives list at 1 024; the game and ply counts are not checked here.
+of 512 bytes. The writer cuts an alternatives list at 1 024, and carries a
+string past a field's own cap in an `x-gammonview-` annotation, split over as
+many records as it needs. It raises `ValueError` past the game, ply, block and
+annotation limits, and for a player name past 4 096 bytes, which has no
+annotation to fall back on.
 
 ---
 

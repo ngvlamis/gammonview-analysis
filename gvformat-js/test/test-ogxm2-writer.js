@@ -99,5 +99,16 @@ for (const name of bgfs) {
   }
 }
 
+// A set-up start stated only as `initial_board`, the way a v1 read states one
+// (v1 kept the board in the GAME header, with no leading ply). Dropping it would
+// replay the game from the opening and flag every play illegal.
+{
+  const setup = readGvab(toU8(readFileSync(join(here, 'fixtures', 'ogxm2', 'set-up.ogxm'))));
+  const bare = structuredClone(setup);
+  bare.games[1].plies.shift();
+  assert(bytesEqual(write_gvab(bare), write_gvab(setup)),
+    "a bare initial_board (a v1 read's set-up start) is written as the game's start");
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

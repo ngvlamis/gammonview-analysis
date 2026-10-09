@@ -456,6 +456,21 @@ def _game_start(g: dict, opening_abs: list) -> int:
                and [int(v) for v in first.get("set_position") or [0] * 26] != opening_abs)
 
 
+def _bare_initial_board(g: dict, opening_abs: list, start: int):
+    """The set-up board a game states only as ``initial_board``, or None.
+
+    A v1 read states a set-up start that way, with no leading ply (v1 kept the
+    board in the GAME header), so a v1 file rewritten as v2 would otherwise
+    lose its start -- and its plies, replayed from the opening, would be
+    flagged illegal. A leading set-up ply, where there is one, wins: a v2 read
+    states the board both ways."""
+    ib = g.get("initial_board")
+    if start or not isinstance(ib, list) or len(ib) != 26:
+        return None
+    board_abs = [int(v) for v in ib]
+    return None if board_abs == opening_abs else board_abs
+
+
 def ply_layout(doc: dict):
     """``(keys, starts)``: the ``(game, ply)`` of every ply v2 holds, in
     ``ply_ref`` order, and each game's leading set-up position (0 or 1) that it
@@ -543,8 +558,10 @@ class _Match:
             fields: dict[int, bytes] = {}
             start = _game_start(g, opening_abs)
             if start:
-                first = plies[0]
-                board_abs = [int(v) for v in first["set_position"]]
+                board_abs = [int(v) for v in plies[0]["set_position"]]
+            else:
+                board_abs = _bare_initial_board(g, opening_abs, start)
+            if board_abs is not None:
                 board = _absolute_to_p1(board_abs)
                 fields[3] = _board(board_abs)
 
@@ -1444,12 +1461,21 @@ def _flag_exceptions(doc_obj_by_key: dict, decoded_by_key: dict) -> list[str]:
 
 
 def _chunked(key: str, value: str) -> list[tuple[str, str]]:
-    """Split an ASCII value over ``key``, ``key~1``, ... to stay under
-    ``MAX_STRING``; the reader concatenates them in suffix order."""
+    """Split a value over ``key``, ``key~1``, ... to stay under ``MAX_STRING``
+    bytes; the reader concatenates them in suffix order. Cuts fall between
+    characters, never inside one's UTF-8 bytes."""
     room = MAX_STRING - 16
-    if len(value) <= room:
+    if len(value.encode("utf-8")) <= room:
         return [(key, value)]
-    parts = [value[i:i + room] for i in range(0, len(value), room)]
+    parts, cur, size = [], [], 0
+    for ch in value:
+        n = len(ch.encode("utf-8"))
+        if size + n > room:
+            parts.append("".join(cur))
+            cur, size = [], 0
+        cur.append(ch)
+        size += n
+    parts.append("".join(cur))
     return [(key if i == 0 else f"{key}~{i}", part) for i, part in enumerate(parts)]
 
 
@@ -1929,9 +1955,12 @@ def _assemble(parts: _Parts, plan: P.Plan) -> bytes:
                                            ensure_ascii=False).encode("utf-8")).decode("ascii")
         ours += [(SCOPE_MATCH, 0, key, part)
                  for key, part in _chunked(R.GV_KEY_ANNOTATIONS, R.GV_FORMAT + text)]
-    for scope, ref, key, value in ours:
-        entries.append((P.anno_sort_key(scope, ref, None, None, None, key, None, len(entries)),
-                        _anno_record(scope, ref, key, value)))
+    # A value of ours past a string's length goes over ``key~1``, ``key~2``, ...
+    # (profile 3), whichever field it carries.
+    for scope, ref, key0, value0 in ours:
+        for key, value in _chunked(key0, value0):
+            entries.append((P.anno_sort_key(scope, ref, None, None, None, key, None, len(entries)),
+                            _anno_record(scope, ref, key, value)))
     if entries:
         entries.sort(key=lambda e: e[0])
         payload = b"".join(rec for _k, rec in entries)

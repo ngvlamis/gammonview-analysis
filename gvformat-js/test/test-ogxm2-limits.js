@@ -6,7 +6,7 @@
 // was written from; v2 holds 64 analysis blocks and a v1 file 16; a checker
 // decision with more than 1024 alternatives is written truncated with
 // `alternatives_total`, the played move kept; too many games or plies are
-// refused. Mirrors tests/test_ogxm2_limits.py -- keep the two in step.
+// refused; a long event or site is split over annotations, a long name refused. Mirrors tests/test_ogxm2_limits.py -- keep the two in step.
 
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -157,6 +157,21 @@ console.log('\n--- 5. games and plies ---');
   d = clone(fields.midmatch);
   d.games[0].plies = Array.from({ length: 1501 }, () => d.games[0].plies[0]);
   assert(throwsWith(() => write_gvab(d), 'too many plies'), '5. 1501 plies in a game are refused');
+}
+
+{
+  let d = clone(fields.midmatch);
+  d.event = '\u00c9'.repeat(5000) + 'x'.repeat(3000);
+  d.site = 's'.repeat(9000);
+  const blob = write_gvab(d);
+  const back = readGvab(blob);
+  assert(back.event === d.event && back.site === d.site,
+    '6. an event and a site past a string\'s length come back whole, over key~1, key~2, ...');
+  assert(bytesEqual(write_gvab(back), blob), '6. and rewriting it is byte-stable');
+  d = clone(fields.midmatch);
+  d.player_white = 'w'.repeat(4097);
+  assert(throwsWith(() => write_gvab(d), "exceeds OGXM v2's 4096"),
+    '6. a player name past 4096 bytes is refused (v2 has no other place for it)');
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

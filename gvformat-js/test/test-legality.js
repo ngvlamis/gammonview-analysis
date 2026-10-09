@@ -141,5 +141,13 @@ assert(isPlayLegal(board({ 8: 2 }), EMPTY, 2, 2, [[8, 4], [8, 4]]),
 assert(isPlayLegal(board({ 5: 1 }), EMPTY, 2, 3, [[5, 0]]),
   'combined forced two-die bear-off 5/off (2-3, no single die reaches off) is legal');
 
+// --- A play recorded on a roll that has no legal play. A dance's legalPlays
+//     must still carry `best`, or isPlayLegal throws instead of answering false
+//     (Python's legal_plays never had the gap). -------------------------------
+assert(Array.isArray(legalPlays(BAR_MINE, FULL_CLOSED, 6, 5).best),
+  'a dance still returns best (empty)');
+assert(!isPlayLegal(BAR_MINE, FULL_CLOSED, 6, 5, [[25, 19]]),
+  'a move written on a dancing roll is illegal, not a TypeError');
+
 console.log(`\n${passed + failed} tests, ${failed} failures`);
 if (failed) process.exit(1);
