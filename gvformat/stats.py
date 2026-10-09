@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 # Copyright (C) 2026 Nicholas Vlamis
 
-"""Pure-stdlib "compute-on-read" aggregates for an OGXM-JSON match dict.
+"""Pure-stdlib "compute-on-read" aggregates for a GVA match dict.
 
 ``OGXM_JSON_SPEC_GAMMONVIEW.md`` deliberately does *not* store match/game/
 player aggregates (PR, total error, decision counts, luck totals, illegal-
@@ -25,7 +25,7 @@ Conventions (mirrors ``OGXM_COMPUTED_FIELDS.md`` / the GammonView spec):
 Field-name note: ``OGXM_COMPUTED_FIELDS.md`` refers to a ``counted`` flag on
 ``analysis``; the exporter (``ogxm_export.py``) actually emits ``decision``
 (bool) -- ``counted`` is this repo's internal/pre-export GVA-shape field
-name, renamed to ``decision`` for the OGXM JSON. This module reads
+name, renamed to ``decision`` for the GVA JSON. This module reads
 ``decision``, matching what real OGXM output actually contains.
 
 Embedded cube decisions

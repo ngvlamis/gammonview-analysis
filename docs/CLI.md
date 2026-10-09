@@ -9,8 +9,8 @@ name once `pip install "gammonview[engine]"` has put them on your `PATH`.
 | [`gvan-match`](#gvan-match) | yes | Analyze one match, compute PR, write `.gva`/`.gvab` |
 | [`gvan-batch`](#gvan-batch) | yes | The same over many files, one output each |
 | [`gvan-position`](#gvan-position) | yes | Analyze a single position from an XGID or OGID |
-| [`xg2gva`](#xg2gva--bgf2gva) | no | Convert an eXtreme Gammon `.xg` to OGXM JSON |
-| [`bgf2gva`](#xg2gva--bgf2gva) | no | Convert a BGBlitz `.bgf` to OGXM JSON |
+| [`xg2gva`](#xg2gva--bgf2gva) | no | Convert an eXtreme Gammon `.xg` to GVA JSON |
+| [`bgf2gva`](#xg2gva--bgf2gva) | no | Convert a BGBlitz `.bgf` to GVA JSON |
 | `reconstruct-mat` | no | Rebuild a `.mat` from an analyzed file (development) |
 | `compare-gva` | no | Diff analyses of the same match from different engines |
 
@@ -36,7 +36,7 @@ uv run gvan-match match.mat --link                   # print a shareable URL
 ### Input
 
 Takes `.xg` (eXtreme Gammon), `.bgf` (BGBlitz), `.mat` (Jellyfish/GNUbg),
-`.gva`/`.ogxm` (OGXM JSON) or `.gvab` (OGXM binary), optionally `.gz`. OGXM is
+`.gva`/`.ogxm` (GVA JSON) or `.gvab` (OGXM binary), optionally `.gz`. OGXM is
 the pipeline's internal representation, so a source format is converted first.
 The format is read from the file's own first bytes where it says so, and from
 the extension otherwise; a file nothing identifies is an error, not a guess.
@@ -186,7 +186,7 @@ separately rather than letting the bar sit at 100%.
 
 ## `xg2gva` / `bgf2gva`
 
-Convert a source file to OGXM JSON. **No engine required** — these are
+Convert a source file to GVA JSON. **No engine required** — these are
 `gvformat` entry points and pure stdlib. They convert; they do not analyze.
 
 ```bash

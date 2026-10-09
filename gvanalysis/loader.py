@@ -1,10 +1,10 @@
 # SPDX-License-Identifier: MIT
 # Copyright (C) 2026 Nicholas Vlamis
 
-"""Load any supported match file into a canonical OGXM-JSON dict.
+"""Load any supported match file into a canonical GVA document.
 
 OGXM is the pipeline's internal representation: every input — an eXtreme Gammon
-``.xg``, a BGBlitz ``.bgf``, a Jellyfish/GNUbg ``.mat``, an OGXM-JSON
+``.xg``, a BGBlitz ``.bgf``, a Jellyfish/GNUbg ``.mat``, a GVA document
 ``.gva``/``.ogxm``, or the compact ``.gvab`` binary — becomes one OGXM document
 here, and the analyzer works from that (see ``ogxm_reconstructor`` +
 ``match.analyze_ogxm``). An OGXM input may already carry analysis blocks; they
@@ -13,7 +13,7 @@ converters all live in ``gvformat``, since none of them needs the engine.
 
 Dispatch reads the **content** first and the extension second. Three of the five
 formats name themselves in their opening bytes, so a mislabeled or
-extension-less file is still read as what it is; only ``.mat`` and OGXM JSON
+extension-less file is still read as what it is; only ``.mat`` and GVA JSON
 have to fall back to the name, and both are recognizable as text anyway. A
 format nothing identifies raises rather than being guessed at: guessing used to
 mean parsing an ``.xg`` as ``.mat`` text and returning an empty match.
@@ -60,7 +60,7 @@ _MAT_MARKER_RE = re.compile(
 )
 
 #: What each extension names, for the files whose bytes cannot say. ``.json`` is
-#: an accepted alias for OGXM JSON but is deliberately left out of
+#: an accepted alias for GVA JSON but is deliberately left out of
 #: ``INPUT_EXTENSIONS``: a directory of matches may hold unrelated JSON, and
 #: sweeping it up is worse than making the caller name the file.
 _EXT_KIND = {
@@ -131,7 +131,7 @@ def _from_bytes(data: bytes, hint_ext: str | None) -> dict:
 
 def load_ogxm(path: "Path | str") -> dict:
     """Read ``path`` (``.mat`` / ``.xg`` / ``.bgf`` / ``.gva`` / ``.ogxm`` /
-    ``.gvab``, optionally ``.gz``) and return a canonical OGXM-JSON dict.
+    ``.gvab``, optionally ``.gz``) and return a canonical GVA document.
 
     Raises ``FileNotFoundError`` if the path does not exist, and ``ValueError``
     if nothing identifies the file as a match.

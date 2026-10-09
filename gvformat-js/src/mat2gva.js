@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: MIT
 // Copyright (C) 2026 Nicholas Vlamis
 
-// Pure-JS converter: Jellyfish/GNUbg/OpenGammon .mat match files -> OGXM JSON.
+// Pure-JS converter: Jellyfish/GNUbg/OpenGammon .mat match files -> GVA JSON.
 // No third-party dependencies, no engine -- board/cube/score tracking only.
 //
 // Ports (byte-for-byte, field-for-field) three Python modules:
 //   gvanalysis/mat_parser.py         -> .mat text -> structured match dict
 //   gvanalysis/game_reconstructor.py -> per-game decision reconstruction
-//   gvanalysis/mat_to_ogxm.py        -> decisions -> unanalyzed OGXM-JSON
+//   gvanalysis/mat_to_ogxm.py        -> decisions -> unanalyzed GVA JSON
 //
 // Strategy (see mat_to_ogxm.py's docstring): build the same *unanalyzed*
 // `data` dict (summary + per-game moves, no eval fields) that the analyzed
@@ -624,7 +624,7 @@ export function reconstructDecisions(game, matchLength, p1, p2, isCrawford = fal
 }
 
 // ---------------------------------------------------------------------------
-// Unanalyzed data -> OGXM-JSON (mat_to_ogxm.py)
+// Unanalyzed data -> GVA JSON (mat_to_ogxm.py)
 // ---------------------------------------------------------------------------
 
 /**
@@ -725,7 +725,7 @@ export function matToData(matchData) {
 // ---------------------------------------------------------------------------
 
 /**
- * Convert a Jellyfish/GNUbg/OpenGammon .mat file (as text) to OGXM JSON, no
+ * Convert a Jellyfish/GNUbg/OpenGammon .mat file (as text) to GVA JSON, no
  * analysis.
  * @param {string} text
  * @returns {object}

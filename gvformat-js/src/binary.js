@@ -863,7 +863,7 @@ function write_gvab(ogxm) {
 }
 
 /**
- * Serialize an OGXM-JSON object to OGXM **v1** + GVAN bytes, the format
+ * Serialize a GVA document to OGXM **v1** + GVAN bytes, the format
  * `write_gvab` wrote until 2.0.0.
  */
 function write_gvab_v1(ogxm) {

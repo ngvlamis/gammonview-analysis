@@ -4,7 +4,7 @@
 """GammonView Analysis (GVA) codec — pure-stdlib OGXM reader/writer/tools.
 
 Engine-free: no bgsage, no C++ extension, no third-party deps. This package
-is the reusable format layer — convert an analysis result to OGXM-JSON,
+is the reusable format layer — convert an analysis result to GVA JSON,
 serialize it to the compact ``.gvab`` binary, read it back, derive OGID
 position strings, and compute the compute-on-read aggregates (PR, luck,
 MWC). The bgsage-powered *analysis* that produces the input lives in a
@@ -13,11 +13,11 @@ separate layer (it depends on this one, not the other way around).
 Public API::
 
     from gvformat import (
-        write_gvab,        # OGXM-JSON dict -> .gvab bytes (OGXM v2)
-        read_gvab,         # .gvab bytes -> OGXM-JSON dict
-        canonicalize,      # normalize an OGXM-JSON dict to read_gvab's form
-        to_ogxm_json,      # analyzer result -> OGXM-JSON dict
-        compute_aggregates,# OGXM-JSON dict -> PR/luck/MWC stats
+        write_gvab,        # GVA document -> .gvab bytes (OGXM v2)
+        read_gvab,         # .gvab bytes -> GVA document
+        canonicalize,      # normalize a GVA document to read_gvab's form
+        to_ogxm_json,      # analyzer result -> GVA document
+        compute_aggregates,# GVA document -> PR/luck/MWC stats
         board_to_ogid,     # board -> OGID position string
         parse_ogid,        # OGID position string -> OgidState (board + fields)
         looks_like_ogid,   # tell an OGID from an XGID

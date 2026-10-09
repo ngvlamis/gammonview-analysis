@@ -77,7 +77,7 @@ naturally from either side of the Python/JS boundary.
 |---|---|
 | `src/` | The library. Browser-safe: no `node:*` imports, no `import.meta`. |
 | `cli/` | Node front ends for the converters — executed, never imported. |
-| `test/` | 30 standalone test scripts, chained by `npm test`. |
+| `test/` | 31 standalone test scripts, chained by `npm test`. |
 
 The `src/` / `cli/` split is load-bearing rather than cosmetic: `import.meta` is
 a syntax error once a toolchain rewrites the module to CommonJS, and `node:*`
@@ -86,7 +86,7 @@ consumers' builds. `test/test-robustness.js` fails if either pattern reappears.
 See [`cli/README.md`](cli/README.md).
 
 ```bash
-npm test        # all 30, no network and no fixtures outside the repo
+npm test        # all 31, no network and no fixtures outside the repo
 ```
 
 Each script is standalone and runnable on its own (`node test/test-ogid.js`);

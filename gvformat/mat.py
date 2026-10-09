@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 # Copyright (C) 2026 Nicholas Vlamis
 
-"""Convert a Jellyfish/GNUbg ``.mat`` match into an OGXM-JSON dict — **no
+"""Convert a Jellyfish/GNUbg ``.mat`` match into a GVA document — **no
 analysis**.
 
 The ``.mat`` sibling of ``convert_xg`` / ``convert_bgf``: it parses the ``.mat``
@@ -128,12 +128,12 @@ def mat_to_data(match_data: dict) -> dict:
 
 
 def mat_to_ogxm(text: str) -> dict:
-    """Jellyfish/GNUbg ``.mat`` text -> canonical OGXM-JSON dict, no analysis."""
+    """Jellyfish/GNUbg ``.mat`` text -> canonical GVA document, no analysis."""
     return to_ogxm_json(mat_to_data(parse_mat_file(text)))
 
 
 def convert_mat(mat_path: Path) -> dict:
-    """Convert a Jellyfish/GNUbg ``.mat`` file to OGXM JSON.
+    """Convert a Jellyfish/GNUbg ``.mat`` file to GVA JSON.
 
     Returns a dict conforming to ``OGXM_JSON_SPEC_GAMMONVIEW.md``. Sibling of
     ``convert_xg``/``convert_bgf``: same path-in, OGXM-out shape. Unlike those

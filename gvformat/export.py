@@ -5,7 +5,7 @@
 # (MIT, Copyright (c) 2026 Eran Lambooij). See THIRD-PARTY-NOTICES.md,
 # whose notices must be preserved in copies of this file.
 
-"""Pure-Python converter: this repo's match-analysis result -> OGXM-JSON.
+"""Pure-Python converter: this repo's match-analysis result -> GVA JSON.
 
 ``to_ogxm_json(result)`` takes exactly what ``gvan_match.analyze_mat(...)``
 returns (the ad-hoc GVA-shaped dict: a top-level ``"summary"`` plus
@@ -1443,7 +1443,7 @@ def _convert_game(game: dict, player_white: str, player_black: str, match_length
 
 
 def to_ogxm_json(result: dict, *, keep_orientation: bool = False) -> dict:
-    """Convert an ``analyze_mat(...)``-shaped result dict into OGXM-JSON.
+    """Convert an ``analyze_mat(...)``-shaped result dict into GVA JSON.
 
     Pure function: performs no bgsage/engine calls. ``result`` must have the
     GVA shape produced by ``gvan_match.analyze_mat`` (top-level ``summary``

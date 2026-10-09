@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Copyright (C) 2026 Nicholas Vlamis
 
-// Pure-JS converter: BGBlitz .bgf match files -> OGXM JSON.
+// Pure-JS converter: BGBlitz .bgf match files -> GVA JSON.
 // No third-party dependencies — Smile decoder covers BGBlitz's subset.
 
 import {
@@ -920,7 +920,7 @@ function attachFrames(plies, altSources, cubeSources) {
 // ---------------------------------------------------------------------------
 
 /**
- * Convert a BGBlitz .bgf file (as File/Blob) to OGXM JSON.
+ * Convert a BGBlitz .bgf file (as File/Blob) to GVA JSON.
  * @param {File|Blob|Uint8Array} fileInput
  * @returns {Promise<object>}
  */

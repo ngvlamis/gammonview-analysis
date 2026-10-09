@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 # Copyright (C) 2026 Nicholas Vlamis
 
-"""Pure-stdlib converter: BGBlitz ``.bgf`` match files → OGXM JSON.
+"""Pure-stdlib converter: BGBlitz ``.bgf`` match files → GVA JSON.
 
 Reads a ``.bgf`` file (UTF-8 JSON header + gzip/zlib Smile payload), decodes
 the Smile binary JSON, and produces a dict conforming to
@@ -1099,7 +1099,7 @@ def _bgf_played_pairs(from_pts: list, to_pts: list) -> list[tuple[int, int]]:
 
 
 def convert_bgf(source: "Path | str | bytes") -> dict:
-    """Convert a BGBlitz ``.bgf`` file -- a path, or its bytes -- to OGXM JSON.
+    """Convert a BGBlitz ``.bgf`` file -- a path, or its bytes -- to GVA JSON.
 
     Returns a dict conforming to ``OGXM_JSON_SPEC_GAMMONVIEW.md``.
     """
@@ -1656,7 +1656,7 @@ def convert_bgf(source: "Path | str | bytes") -> dict:
 def main() -> None:
     import argparse
 
-    parser = argparse.ArgumentParser(description="Convert a BGBlitz .bgf file to OGXM JSON.")
+    parser = argparse.ArgumentParser(description="Convert a BGBlitz .bgf file to GVA JSON.")
     parser.add_argument("bgf_file", help="Input .bgf file")
     parser.add_argument(
         "output",

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 // Copyright (C) 2026 Nicholas Vlamis
 
-// Convert an eXtreme Gammon `.xg` to OGXM JSON. See ./README.md for why the
+// Convert an eXtreme Gammon `.xg` to GVA JSON. See ./README.md for why the
 // whole CLI -- not just its entry guard -- lives outside src/.
 import { convertXg } from '../src/xg2gva.js';
 

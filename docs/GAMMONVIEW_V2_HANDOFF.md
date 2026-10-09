@@ -1,11 +1,10 @@
 # Handoff to GammonView: `.gvab` becomes OGXM v2
 
-*Draft, started 2026-10-08, on `feat/ogxm-v2`.
-Ships as gammonview / `@gammonview/gvformat` **2.0.0**, not yet tagged.*
+*2026-10-08. Ships as gammonview / `@gammonview/gvformat` **2.0.0**.*
 
-This is what the GammonView repo needs to know and do when it takes 2.0.0. It is a major version because both the file format and
-the document shape change (see *The document gained every v2 field*). The
-format itself is specified in [`OGXM_V2_PROFILE.md`](OGXM_V2_PROFILE.md); this
+This is what the GammonView repo needs to know and do when it takes 2.0.0. It
+is a major version because both the file format and the document shape change
+(see *The document gained every v2 field*). The format itself is specified in [`OGXM_V2_PROFILE.md`](OGXM_V2_PROFILE.md); this
 note covers only what touches the site, the analysis service and stored data.
 
 ## What changes

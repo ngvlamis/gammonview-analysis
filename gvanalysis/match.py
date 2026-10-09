@@ -746,7 +746,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "input_file", nargs="?", type=Path,
-        help="Match file to analyze: .xg, .bgf, .mat, .gva/.ogxm (OGXM JSON), "
+        help="Match file to analyze: .xg, .bgf, .mat, .gva/.ogxm (GVA JSON), "
              "or .gvab (OGXM binary), optionally .gz. An input that carries its "
              "own analysis keeps it; ours is appended.",
     )
@@ -878,7 +878,7 @@ def main() -> None:
         sys.exit(1)
 
     # The .gvab bytes back the on-disk outputs and the --link/--browser payload,
-    # so compute them whenever any is needed. Emit the *canonical* OGXM JSON --
+    # so compute them whenever any is needed. Emit the *canonical* GVA JSON --
     # exactly what read_gvab yields from the .gvab -- so the JSON, binary, and
     # link all describe identical data. The .gva is literally read back from the
     # same bytes we write to the .gvab (one write_gvab, so the two can never

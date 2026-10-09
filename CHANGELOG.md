@@ -13,7 +13,7 @@ when the repository was opened; they are kept because they record why things
 are the way they are — particularly the breaking changes and the measurements
 behind several design decisions. Dates are the tag dates.
 
-## 2.0.0 — unreleased
+## 2.0.0 — 2026-10-08
 
 **`.gvab` is OGXM v2** *(format change)*
 

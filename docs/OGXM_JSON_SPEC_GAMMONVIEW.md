@@ -1,4 +1,4 @@
-# The GammonView document — OGXM JSON, as of 2.0
+# The GammonView document (`.gva`), as of 2.0
 
 This page is the reference for **the document**: the Python dict that
 `gvformat.read_gvab` returns and `write_gvab` takes, the JSON a `.gva` file

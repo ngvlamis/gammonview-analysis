@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 // Copyright (C) 2026 Nicholas Vlamis
 
-// Convert a BGBlitz `.bgf` to OGXM JSON. See ./README.md for why the whole
+// Convert a BGBlitz `.bgf` to GVA JSON. See ./README.md for why the whole
 // CLI -- not just its entry guard -- lives outside src/.
 import { convertBgf } from '../src/bgf2gva.js';
 

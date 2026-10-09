@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 // Copyright (C) 2026 Nicholas Vlamis
 
-// Convert a JellyFish `.mat` to OGXM JSON. See ./README.md for why the whole
+// Convert a JellyFish `.mat` to GVA JSON. See ./README.md for why the whole
 // CLI -- not just its entry guard -- lives outside src/.
 import { convertMat } from '../src/mat2gva.js';
 

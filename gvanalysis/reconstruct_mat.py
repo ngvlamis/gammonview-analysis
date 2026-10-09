@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 # Copyright (C) 2026 Nicholas Vlamis
 
-"""Reconstruct a Jellyfish/OpenGammon .mat match file from OGXM-JSON analysis output.
+"""Reconstruct a Jellyfish/OpenGammon .mat match file from GVA JSON analysis output.
 
 The input is the hierarchical match -> game -> ply -> analysis JSON produced
 by ``ogxm_export.to_ogxm_json`` (conforming to ``OGXM_JSON_SPEC_GAMMONVIEW.md``),
@@ -276,7 +276,7 @@ def reconstruct_mat(data: dict) -> str:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("bgs_file", type=Path, help=".gva or .gva.gz file (OGXM-JSON)")
+    parser.add_argument("bgs_file", type=Path, help=".gva or .gva.gz file (GVA JSON)")
     parser.add_argument(
         "-o", "--output", type=Path, default=None,
         help="Output .mat file (default: <bgs_file>.mat)",

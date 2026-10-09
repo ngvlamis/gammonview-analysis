@@ -39,7 +39,7 @@ def _base64url_to_bytes(payload: str) -> bytes:
 def encode_match(match: dict) -> str:
     """Encode an OGXM match into a URL-safe base64url string.
 
-    ``match`` is an OGXM-JSON dict (as produced by :func:`gvformat.to_ogxm_json`
+    ``match`` is a GVA document (as produced by :func:`gvformat.to_ogxm_json`
     or returned by :func:`gvformat.read_gvab`).
     """
     return _bytes_to_base64url(zlib.compress(write_gvab(match)))

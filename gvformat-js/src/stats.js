@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Nicholas Vlamis
 
 /**
- * Pure-stdlib "compute-on-read" aggregates for an OGXM-JSON match dict.
+ * Pure-stdlib "compute-on-read" aggregates for a GVA match dict.
  *
  * Computes PR / error / decision / luck / illegal-move aggregates from the
  * per-ply ``analysis`` records OGXM stores. No engine calls; the only

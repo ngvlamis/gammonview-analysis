@@ -912,7 +912,7 @@ function _deriveOgids(ogxm) {
 // ---------------------------------------------------------------------------
 
 /**
- * Parse `.gvab` binary bytes into an OGXM-JSON object.
+ * Parse `.gvab` binary bytes into a GVA document.
  *
  * Every failure on malformed input arrives as a `GvabError`. That is a
  * guarantee, not a best effort: callers hand this untrusted files, so a stray

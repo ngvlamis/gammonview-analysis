@@ -5,7 +5,7 @@
 // (MIT, Copyright (c) 2026 Eran Lambooij). See THIRD-PARTY-NOTICES.md,
 // whose notices must be preserved in copies of this file.
 
-// ESM port of gvformat/export.py — GVA analysis result dicts -> OGXM-JSON.
+// ESM port of gvformat/export.py — GVA analysis result dicts -> GVA JSON.
 // Pure conversion layer: no bgsage / engine calls.
 
 import { MAX_STEP_PIPS, RESIGN_ACTIONS } from "./constants.js";
@@ -1130,7 +1130,7 @@ function _convertGame(game, playerWhite, playerBlack, matchLength, basePly) {
 }
 
 /**
- * Convert an analyze_mat()-shaped result dict into OGXM-JSON.
+ * Convert an analyze_mat()-shaped result dict into GVA JSON.
  *
  * @param {object} result
  * @returns {object}

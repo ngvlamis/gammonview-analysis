@@ -6,7 +6,7 @@
 Thin driver over `gvanalysis.match.analyze_file`: each input (`.xg`, `.bgf`,
 `.mat`, `.gva`/`.ogxm`, or `.gvab` -- OGXM is the internal representation, so a
 source format is converted first) is analyzed quietly and written beside it with
-the extension swapped to `.gva` (canonical OGXM JSON) or, with --gvab/--binary,
+the extension swapped to `.gva` (canonical GVA JSON) or, with --gvab/--binary,
 `.gvab` (the compact binary encoding). An input's existing analysis blocks are
 preserved and ours is appended. The terminal shows only a progress bar; per-file
 analysis output is suppressed.

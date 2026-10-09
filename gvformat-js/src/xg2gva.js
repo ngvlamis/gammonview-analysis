@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Copyright (C) 2026 Nicholas Vlamis
 
-// Pure-JS converter: eXtreme Gammon .xg match files -> OGXM JSON.
+// Pure-JS converter: eXtreme Gammon .xg match files -> GVA JSON.
 // Binary parsing via DataView; zlib decompression via pako.
 
 import {
@@ -657,7 +657,7 @@ function emitDoubleResponse(cd, board, turn, scoreWhite, scoreBlack, matchLength
 // ---------------------------------------------------------------------------
 
 /**
- * Convert an eXtreme Gammon .xg file (as ArrayBuffer) to OGXM JSON.
+ * Convert an eXtreme Gammon .xg file (as ArrayBuffer) to GVA JSON.
  * @param {Uint8Array} fileBytes - Raw file bytes
  * @returns {Promise<object>}
  */

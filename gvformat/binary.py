@@ -5,7 +5,7 @@
 # (MIT, Copyright (c) 2026 Eran Lambooij). See THIRD-PARTY-NOTICES.md,
 # whose notices must be preserved in copies of this file.
 
-"""Pure-Python OGXM **v1** binary WRITER: OGXM-JSON dict -> v1 ``.gvab`` bytes.
+"""Pure-Python OGXM **v1** binary WRITER: GVA document -> v1 ``.gvab`` bytes.
 
 Since 2.0.0 ``write_gvab`` writes OGXM v2 (``ogxm2_writer``; profile in
 ``docs/OGXM_V2_PROFILE.md``) and is defined at the bottom of this module only
@@ -18,8 +18,8 @@ What follows describes v1.
 produces into the compact OGXM binary format. Pure stdlib -- no bgsage/engine
 calls, no C++ extension.
 
-This module writes only. The inverse -- parsing ``.gvab`` bytes back into an
-OGXM-JSON dict -- lives in ``read_gvab.py`` (``read_gvab(data)``), defined as
+This module writes only. The inverse -- parsing ``.gvab`` bytes back into a
+GVA document -- lives in ``read_gvab.py`` (``read_gvab(data)``), defined as
 this writer's byte-level inverse (``write_gvab(read_gvab(b)) == b``).
 
 HedgeHog is the reference implementation and the format's origin:
@@ -407,7 +407,7 @@ def _encode_ply(ply: dict, action_id: int) -> bytes:
 
 
 # ---------------------------------------------------------------------------
-# Analysis-record builders: reshape a ply's inline `analysis` dict (OGXM-JSON
+# Analysis-record builders: reshape a ply's inline `analysis` dict (GVA JSON
 # shape, see OGXM_JSON_SPEC_GAMMONVIEW.md) into the flat records the base
 # EVAL/ALTS/CUBE writers and the GVAN writer both consume. These mirror
 # ogxm_json.cpp's parse_ply_analysis_json() field-for-field (including its
@@ -894,7 +894,7 @@ def write_gvab(ogxm: dict) -> bytes:
 
 
 def write_gvab_v1(ogxm: dict) -> bytes:
-    """Serialize an OGXM-JSON dict (``ogxm_export.to_ogxm_json(...)`` shape)
+    """Serialize a GVA document (``ogxm_export.to_ogxm_json(...)`` shape)
     to OGXM **v1** + GVAN bytes, the format ``write_gvab`` wrote until 2.0.0.
 
     Emits, in order: File Header -> MHDR -> GAME (per game) -> one

@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 # Copyright (C) 2026 Nicholas Vlamis
 
-"""Pure-stdlib converter: eXtreme Gammon ``.xg`` match files → OGXM JSON.
+"""Pure-stdlib converter: eXtreme Gammon ``.xg`` match files → GVA JSON.
 
 Reads an ``.xg`` file (fixed-size header + JPEG thumbnail + zlib-compressed
 record stream), decodes the record stream, and produces a dict conforming to
@@ -1463,7 +1463,7 @@ def convert_xg(source: "Path | str | bytes") -> dict:
 def main() -> None:
     import argparse
 
-    parser = argparse.ArgumentParser(description="Convert an eXtreme Gammon .xg file to OGXM JSON.")
+    parser = argparse.ArgumentParser(description="Convert an eXtreme Gammon .xg file to GVA JSON.")
     parser.add_argument("xg_file", help="Input .xg file")
     parser.add_argument(
         "output",

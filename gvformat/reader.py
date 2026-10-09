@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 # Copyright (C) 2026 Nicholas Vlamis
 
-"""Pure-Python OGXM binary READER: ``.gvab`` bytes -> OGXM-JSON dict.
+"""Pure-Python OGXM binary READER: ``.gvab`` bytes -> GVA document.
 
 ``read_gvab(data)`` is the inverse of ``gvab.write_gvab``: it parses the
 compact OGXM binary back into a dict shaped like
@@ -799,7 +799,7 @@ def _derive_ogids(ogxm: dict) -> None:
 # ---------------------------------------------------------------------------
 
 def read_gvab(data: bytes, *, verify_crc: bool = True, derive_ogids: bool = True) -> dict:
-    """Parse ``.gvab`` binary bytes into an OGXM-JSON dict (the inverse of
+    """Parse ``.gvab`` binary bytes into a GVA document (the inverse of
     ``gvab.write_gvab``).
 
     Args:
@@ -1080,10 +1080,10 @@ def _attach_blocks(ogxm: dict, games: list[dict], blocks: list, ply_by_key: dict
 
 
 def canonicalize(ogxm: dict) -> dict:
-    """Return the *canonical* form of an OGXM-JSON dict: exactly the dict a
+    """Return the *canonical* form of a GVA document: exactly the dict a
     later ``read_gvab`` of the stored ``.gvab`` will produce.
 
-    The ``.gvab`` binary is a lossy encoding of OGXM-JSON: it quantizes every
+    The ``.gvab`` binary is a lossy encoding of GVA JSON: it quantizes every
     probability/equity to 1/10000, clamps equities to +/-3, stores the dice
     pair unordered, and carries no derived/display fields (``notation``,
     ``diff``, ``preset``, ...). So a freshly generated dict and the dict you
@@ -1122,7 +1122,7 @@ def main(argv: list[str] | None = None) -> int:
     import sys
 
     parser = argparse.ArgumentParser(
-        description="Decode a .gvab (OGXM binary) file to OGXM-JSON.")
+        description="Decode a .gvab (OGXM binary) file to GVA JSON.")
     parser.add_argument("path", help="path to a .gvab file")
     parser.add_argument("-o", "--output", help="write JSON here (default: stdout)")
     parser.add_argument("--no-verify", action="store_true",
