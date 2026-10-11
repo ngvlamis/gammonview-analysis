@@ -354,9 +354,8 @@ def _field_rules() -> None:
                if p["action_id"] == R.ACTION_SETTLE)["settle_value"] == 4.0,
           "6. settle-millionths: a settlement is held to a millionth of a point")
     ctx = C.context()
-    del ctx["site"]
-    check(read_gvab(write_gvab(ctx))["site"] == "Oslo",
-          "6. site-follows-place: no site, a city: the city is the site")
+    check(read_gvab(write_gvab(ctx)).get("site") is None,
+          "6. site-is-stated: no site, a city: still no site")
     plain = C.midmatch()
     padded = copy.deepcopy(plain)
     padded.update(variant=0, rated=False, crawford_before_start=False, auto_doubles=False,

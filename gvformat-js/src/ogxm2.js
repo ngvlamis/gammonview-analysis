@@ -1196,9 +1196,7 @@ function _v1Match(mtch, v2games) {
     raccoon: Boolean(rules & 0x08),
     cube_limit: mtch.cube_limit || 0,
     event: mtch.event || null,
-    // Our `site` is where the match was played: v2's `city`, else the platform
-    // it was played on (`_readOgxm2` settles it, an annotation of ours winning
-    // over both).
+    // Our `site` has no v2 field; `_readOgxm2` restores it from our annotation.
     site: null,
   };
   if (mtch.variant) top.variant = mtch.variant;
@@ -1807,10 +1805,11 @@ export function _readOgxm2(data, options) {
     if (Object.keys(restored).length) ogxm[name] = { ...(ogxm[name] || {}), ...restored };
   }
   ogxm.games.forEach((game, gi) => _restoreFields(game, gvGame, gi, GV_GAME_FIELDS));
-  // `site` is where the match was played: our annotation, else v2's `city`,
-  // else the platform's host name.
+  // `site` is ours, free text, and v2 has no field for it: it is what our
+  // annotation says, or nothing. It is never derived from `city` or the
+  // platform -- that is a display choice, and the codec makes none.
   const site = _gvGet(gvMatch, 0, GV_KEY_SITE);
-  ogxm.site = site !== undefined ? site : (ogxm.city || ogxm.platform || null);
+  ogxm.site = site !== undefined ? site : null;
   const score = _gvGet(gvMatch, 0, GV_KEY_SCORE);
   if (score !== undefined) {
     const parts = score.split(',');

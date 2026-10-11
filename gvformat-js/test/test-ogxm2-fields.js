@@ -114,8 +114,8 @@ assert(startedAt(out) === BigInt(back.timestamp) * 1000n, 'and a changed second 
 assert(!back.event && back.event_year === 2026 && gvKeys(out).has(`${SCOPE_MATCH}/0/x-gammonview-event_year`),
   'an event removed keeps its year, in an annotation (a year needs an event)');
 [out, back] = edited((d) => { d.city = 'X'.repeat(90); });
-assert(back.city === 'X'.repeat(90) && back.site === 'Oslo',
-  'a city too long for v2 comes back whole; the site has its own record');
+assert(back.city === 'X'.repeat(90) && back.site == null,
+  'a city too long for v2 comes back whole, and gives no site');
 [out, back] = edited((d) => { delete d.platform; });
 assert(back.platform === undefined && back.match_ref === 'm-2026.10_7'
   && back.white_profile.user_id === 'u-1001',
@@ -148,8 +148,8 @@ assert(hyper.variant === 2 && hyper.games[0].plies[0].ogid_before.endsWith(':3')
   && nack.games[0].plies[0].ogid_before.startsWith('1122cccchhhjjjj:6666888ddddnnoo:'),
   "a variant opens from its own position; only hypergammon's OGID states its checker count");
 const ctxData = write_gvab(docs.context);
-assert(gvKeys(ctxData).size === 0 && readGvab(ctxData).site === 'Oslo',
-  'a context that v2 holds needs no annotation, and the site is the city');
+assert(gvKeys(ctxData).size === 0 && readGvab(ctxData).site == null,
+  'a context that v2 holds needs no annotation, and a city is not a site');
 
 const un = gvKeys(write_gvab(docs.unholdable));
 const expected = new Set([
@@ -177,10 +177,10 @@ assert(un.size === expected.size && [...expected].every((k) => un.has(k)),
   'rule resign-derived: a resign_value the points and cube give is not kept; another is');
   assert(exBack.games[0].plies.find((p) => p.action_id === 34).settle_value === 4,
     'rule settle-millionths: a settlement is held to a millionth of a point');
-  const bare = structuredClone(docs.context);
-  delete bare.site;
-  assert(readGvab(write_gvab(bare)).site === 'Oslo',
-    'rule site-follows-place: a document with a city and no site reads with the city as its site');
+  const same = structuredClone(docs.context);
+  same.site = same.city;
+  assert(readGvab(write_gvab(same)).site === 'Oslo',
+    'rule site-is-stated: a site is read back as written, even when it repeats the city');
 }
 
 // defaults are not written

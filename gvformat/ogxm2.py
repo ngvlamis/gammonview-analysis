@@ -1878,10 +1878,10 @@ def read_ogxm2(data: bytes, *, verify_crc: bool = True, derive_ogids: bool = Tru
             ogxm[name] = {**ogxm.get(name, {}), **restored}
     for gi, game in enumerate(games):
         _restore_fields(game, gv_game, gi, GV_GAME_FIELDS)
-    # `site` is where the match was played: our annotation, else v2's `city`,
-    # else the platform's host name.
-    ogxm["site"] = (gv_match[(0, GV_KEY_SITE)] if (0, GV_KEY_SITE) in gv_match
-                    else ogxm.get("city") or ogxm.get("platform") or None)
+    # `site` is ours, free text, and v2 has no field for it: it is what our
+    # annotation says, or nothing. It is never derived from `city` or the
+    # platform -- that is a display choice, and the codec makes none.
+    ogxm["site"] = gv_match.get((0, GV_KEY_SITE))
     if (0, GV_KEY_SCORE) in gv_match:
         try:
             ogxm["white_score"], ogxm["black_score"] = (

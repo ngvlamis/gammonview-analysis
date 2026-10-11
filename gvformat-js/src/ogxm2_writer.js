@@ -29,8 +29,8 @@
 // `x-gammonview-illegal-ply` (ply scope)
 //     The steps of an illegal play that our document holds as a dice ply.
 // `x-gammonview-site`, `x-gammonview-event` (match scope)
-//     A `site` that is neither the city nor the platform (v2's own `site` is a
-//     host name), and an over-long `event`.
+//     Our free-text `site`, which v2 has no field for (v2's own `site` is a
+//     platform's host name), and an over-long `event`.
 // `x-gammonview-<field>` (match scope), `x-gammonview-<side>_profile.<field>`,
 // and `x-gammonview-<field>` at game scope
 //     A value v2 cannot hold (a string past its cap or outside its byte set, a
@@ -991,11 +991,11 @@ class _Match {
     }
     if (doc.crawford_before_start) fields[11] = new Uint8Array(0);
     if (doc.rated) fields[25] = new Uint8Array(0);
-    // Our `site` is where the match was played, free text; v2 states the same
-    // in `city` (or names the platform). Only a `site` that is neither needs
-    // its own record.
+    // Our `site` is free text with no v2 field, so it always rides in its own
+    // record -- even when it repeats the city, since the reader no longer
+    // derives one from the other.
     const site = doc.site;
-    if (site && site !== (doc.city || doc.platform)) {
+    if (site) {
       this.annos.push([SCOPE_MATCH, 0, GV_KEY_SITE, GV_FORMAT + site]);
     }
     const variant = doc.variant || 0;

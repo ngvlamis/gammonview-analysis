@@ -37,7 +37,7 @@ below over the whole sample corpus and against the reference codec.
 | `stage`, `round`, `table`, `city`, `country`, `event_url`, `match_ref` | the same fields |
 | `platform` | v2's `site`: the platform's host name. Renamed because our `site` predates it |
 | `white_profile`, `black_profile` | the `player` records (4.1): `user_id`, `rating` (a float, to 0.01), `rating_system`, `country`, `kind` |
-| `site` | `x-gammonview-site`, unless it is what the reader would derive anyway: `city`, else `platform`. Ours is whatever the source called the place, sometimes a city and sometimes a platform, and nothing tells which |
+| `site` | `x-gammonview-site`, always. Ours is whatever the source or the user called the place, sometimes a city and sometimes a platform, and nothing tells which; it is never derived from `city` or `platform`, and a reader showing a place may fall back to them itself |
 | `games[].winner`, `points_won`, `is_lastgame` | `GAME` bits 0-2; `points_won` is written exactly when `winner` is |
 | `games[].termination`, `initial_cube_value`, `initial_cube_owner`, `auto_doubles` | the same `GAME` fields. The game's cube starts at `initial_cube_value · 2^auto_doubles`, owned by `initial_cube_owner` (5.3), in the OGIDs and in `gvanalysis` |
 | `games[].first_to_move`, `is_crawford`, `game_index` | derived, not stored |
@@ -246,7 +246,7 @@ decisions where the document says otherwise, each as its `ply_ref` and a letter:
 | met-id | a match block names its table: `kazaross-xg2` when the document named none |
 | mwc-frame | a source's frame (`mwc_frame`, §2) is carried by v2 only; v1 loses it |
 | default-omitted | a value equal to v2's default is not written, so it reads back absent: `variant` 0, a 0-0 `score_start`, `initial_cube_value` 1, `initial_cube_owner` 2 (centred), `auto_doubles` 0 or false, `rules_other` 0, a false flag, an empty string |
-| site-follows-place | a document with a `city` (else a `platform`) and no `site` reads back with that place as its `site` |
+| site-is-stated | `site` reads back exactly as written, and a document with none reads back with none, whatever its `city` or `platform` |
 | resign-derived | a `resign_value` equal to what the game's points and the cube give is not kept; only a different one is |
 | settle-millionths | a `settle_value` is held to a millionth of a point |
 | block-provenance | what v2's block record states (producer, completeness, coverage, model name, identifier and digest, engine build, currency, cube efficiency, tables, dials, completion time, sources, a level beyond the labels) is in the v2 read-back only; v1 has no field for it |

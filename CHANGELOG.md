@@ -26,6 +26,15 @@ players use. A file of ours written by 2.0.0 still reads as it did: blocks
 written since carry `plies=gnubg` in their `x-gammonview-analysis` annotation,
 and a block of ours without it is read unshifted.
 
+**`site` is never derived** *(change)*
+
+The reader filled a missing `site` in from `city`, else the platform, and the
+writer left out a `site` that matched them. Choosing a place to show is the
+viewer's call, not the codec's, so `site` now reads back exactly as written,
+and none when none was: a document with a city and no site keeps no site. The
+writer stores any `site` in `x-gammonview-site`. A 2.0.0 file that left out a
+site equal to its city now reads with no site.
+
 **Our analysis is named in other readers** *(change)*
 
 An analysis block now carries `model_name` "GammonView bgsage" beside its

@@ -198,8 +198,8 @@ def main() -> int:
     ctx = read_gvab(ctx_data)
     check(all(ctx[k] == v for k, v in C.CONTEXT.items()),
           "3. every context field is a key, the profiles with their ratings")
-    check(ctx["site"] == "Oslo" and not any(k[2] == R.GV_KEY_SITE for k in gv_keys(ctx_data)),
-          "3. site is the city, and stated nowhere else")
+    check(ctx.get("site") is None and not any(k[2] == R.GV_KEY_SITE for k in gv_keys(ctx_data)),
+          "3. a city is not a site: none is stated, and none is read back")
     check(gv_keys(ctx_data) == set(), "3. nothing needed an annotation")
     if "context" in refs:
         j = refs["context"]
@@ -273,10 +273,10 @@ def main() -> int:
     check(next(p for p in ex_back["games"][0]["plies"]
                if p["action_id"] == R.ACTION_SETTLE)["settle_value"] == 4.0,
           "5. rule settle-millionths: a settlement is held to a millionth of a point")
-    bare = copy.deepcopy(cases["context"])
-    del bare["site"]
-    check(read_gvab(write_gvab(bare))["site"] == "Oslo",
-          "5. rule site-follows-place: a document with a city and no site reads with the city as its site")
+    same = copy.deepcopy(cases["context"])
+    same["site"] = same["city"]
+    check(read_gvab(write_gvab(same))["site"] == "Oslo",
+          "5. rule site-is-stated: a site is read back as written, even when it repeats the city")
 
     # --- 6. a file from the reference ----------------------------------------
     print("\n--- 6. a file the reference wrote, with every field ---")
@@ -341,8 +341,8 @@ def main() -> int:
     valid("6. no event", out)
 
     out, back = edited(lambda d: d.update(city="X" * 90))
-    check(back["city"] == "X" * 90 and back["site"] == "Oslo",
-          "6. a city too long for v2 comes back whole; the site, now another text, has its own record")
+    check(back["city"] == "X" * 90 and back.get("site") is None,
+          "6. a city too long for v2 comes back whole, and gives no site")
     valid("6. a long city", out)
 
     out, back = edited(lambda d: d.pop("platform"))

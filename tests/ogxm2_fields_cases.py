@@ -125,7 +125,7 @@ def context() -> dict:
     """Every match-level field v2 defines, each one valid."""
     games = _games(QUIET_GAME)
     games[0]["termination"] = 2
-    return _shell(games, timestamp=1790380800, site="Oslo", rules_other=0x20,
+    return _shell(games, timestamp=1790380800, site=None, rules_other=0x20,
                   crawford_before_start=True, auto_doubles=True, white_score=0, black_score=1,
                   result=0, **copy.deepcopy(CONTEXT))
 
@@ -243,7 +243,7 @@ def foreign_doc() -> dict:
                   black_score=5, result=0, auto_doubles=True,
                   **{k: v for k, v in CONTEXT.items() if k != "date_precision"},
                   timestamp=1790380800 + 7200, player_white="Astrid", player_black="Bjorn",
-                  crawford=True, jacoby=False, site="Oslo")
+                  crawford=True, jacoby=False, site=None)
 
 
 def foreign_json(oracle) -> dict:
