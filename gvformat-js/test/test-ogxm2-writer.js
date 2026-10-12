@@ -110,5 +110,18 @@ for (const name of bgfs) {
     "a bare initial_board (a v1 read's set-up start) is written as the game's start");
 }
 
+// ...but not when the game already opens on a set-up ply that carries dice.
+// That ply is kept as a ply, so it states the start, and taking
+// `initial_board` as a second start shifted every ply after it by one.
+{
+  const setup = readGvab(toU8(readFileSync(join(here, 'fixtures', 'ogxm2', 'set-up.ogxm'))));
+  const rolled = structuredClone(setup);
+  Object.assign(rolled.games[1].plies[0], { d1: 3, d2: 1 });
+  const back = readGvab(write_gvab(rolled));
+  assert(back.games[1].plies.length === rolled.games[1].plies.length
+    && back.games[1].plies[0].d1 === 3,
+    'a set-up ply with dice beside initial_board is written once, not twice');
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

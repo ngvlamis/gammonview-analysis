@@ -466,9 +466,14 @@ def _bare_initial_board(g: dict, opening_abs: list, start: int):
     board in the GAME header), so a v1 file rewritten as v2 would otherwise
     lose its start -- and its plies, replayed from the opening, would be
     flagged illegal. A leading set-up ply, where there is one, wins: a v2 read
-    states the board both ways."""
+    states the board both ways. So does one *with* dice, which `_game_start`
+    keeps as a ply: the document already states its start, and taking
+    ``initial_board`` too would write that start twice."""
     ib = g.get("initial_board")
     if start or not isinstance(ib, list) or len(ib) != 26:
+        return None
+    plies = g.get("plies") or []
+    if plies and plies[0].get("action_id") == R.ACTION_SET_POSITION:
         return None
     board_abs = [int(v) for v in ib]
     return None if board_abs == opening_abs else board_abs

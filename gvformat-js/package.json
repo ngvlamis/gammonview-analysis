@@ -1,6 +1,6 @@
 {
   "name": "@gammonview/gvformat",
-  "version": "2.0.1",
+  "version": "2.0.2",
   "type": "module",
   "exports": {
     ".": "./src/index.js",

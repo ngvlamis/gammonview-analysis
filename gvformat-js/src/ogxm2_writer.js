@@ -592,10 +592,14 @@ function _gameStart(g, openingAbs) {
  *  board in the GAME header), so a v1 file rewritten as v2 would otherwise lose
  *  its start -- and its plies, replayed from the opening, would be flagged
  *  illegal. A leading set-up ply, where there is one, wins: a v2 read states
- *  the board both ways. */
+ *  the board both ways. So does one *with* dice, which `_gameStart` keeps as a
+ *  ply: the document already states its start, and taking `initial_board` too
+ *  would write that start twice. */
 function _bareInitialBoard(g, openingAbs, start) {
   const ib = g.initial_board;
   if (start || !Array.isArray(ib) || ib.length !== 26) return null;
+  const plies = g.plies || [];
+  if (plies.length && plies[0].action_id === ACTION_SET_POSITION) return null;
   const boardAbs = ib.map(_int);
   return boardAbs.every((v, i) => v === openingAbs[i]) ? null : boardAbs;
 }

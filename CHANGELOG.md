@@ -13,7 +13,18 @@ when the repository was opened; they are kept because they record why things
 are the way they are — particularly the breaking changes and the measurements
 behind several design decisions. Dates are the tag dates.
 
-## 2.0.1 — Unreleased
+## 2.0.2 — 2026-10-12
+
+**A set-up start is written once** *(fix)*
+
+2.0.1's fix for v1 set-up starts went too far. A game whose first ply sets up
+the board *with* dice keeps that ply as a ply, and the writers then also took
+the game's `initial_board` as a second start, so a rewritten file read back
+with an extra set-up ply in front and every later ply one place out. Both
+writers now take `initial_board` as the start only when the game has no
+leading set-up ply of either kind, which is the v1 case 2.0.1 was for.
+
+## 2.0.1 — 2026-10-10
 
 **Plies are counted the way v2 counts them** *(fix)*
 
