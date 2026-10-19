@@ -61,6 +61,18 @@ It was `ceil(cpu / 7)`. A staged decision keeps fewer cores busy, so 4 workers
 left a 24-core machine short: 8 workers ran 162.6s against 171.4s. On 8 and 4
 cores the count is unchanged, at 2. Output is identical at any setting.
 
+**An XG match's header names the deepest level it was read at** *(fix)*
+
+`convert_xg` / `convertXg` set the block's `eval_level` to the plain n-ply
+depth, which ignored XG Roller levels (and full rollouts) altogether. Since XG
+stamps no analysis time -- `timestamp` is the match's date -- two runs of one
+match that differed only in sending the doubtful plays to Roller+ or to
+Roller++ converted to identical headers, and GammonView's library took the
+second for the first. The header now names the deepest level any decision in
+the document reports (`truncated2`, `truncated3`, `rollout`), with `ply`
+unchanged. Every decision's own level is untouched; across the 13-file XG
+corpus only headers moved.
+
 ## 2.0.2 — 2026-10-12
 
 **A set-up start is written once** *(fix)*

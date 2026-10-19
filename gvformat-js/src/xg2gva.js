@@ -165,6 +165,48 @@ function evalLevelName(code) {
 
 export { evalLevelName as _evalLevelName };
 
+// Where a canonical level sits in the strength order: plain depths by depth,
+// the truncated rollouts above every depth, a full rollout above those. The
+// opening book is unranked -- a lookup is exact rather than deep, so it raises
+// no ceiling.
+function levelRank(level) {
+  const ply = /^(\d+)ply$/.exec(level ?? "");
+  if (ply) return Number(ply[1]);
+  const trunc = /^truncated(\d+)$/.exec(level ?? "");
+  if (trunc) return 100 + Number(trunc[1]);
+  return level === "rollout" ? 1000 : null;
+}
+
+// The block's `eval_level`: the deepest level any decision in the document
+// reports, or the plain ply depth when nothing went past it. Read off the
+// document rather than the records, which hold levels for positions no
+// decision is made from. A ceiling, the way a bgsage header names its top
+// tier above the `ply` it screened at.
+//
+// It is what tells two XG runs of one match apart. XG stamps no analysis time
+// -- `timestamp` is the match's date -- and `ply` counts only the n-ply
+// levels, so a run that sent its doubtful plays to XG Roller+ and a re-run
+// that sent them to Roller++ used to write identical headers, and a library
+// saving the second took it for the first.
+function deepestLevel(games, base) {
+  let best = base;
+  const consider = (level) => {
+    const rank = levelRank(level);
+    if (rank != null && rank > levelRank(best)) best = level;
+  };
+  for (const game of games) {
+    for (const ply of game.plies ?? []) {
+      const a = ply.analysis;
+      if (!a) continue;
+      consider(a.eval_level);
+      for (const alt of a.alternatives ?? []) consider(alt.eval_level);
+      consider(a.cube_decision?.eval_level);
+      consider(a.missed_double?.eval_level);
+    }
+  }
+  return best;
+}
+
 // Minimum spread (max - min) across a ply's candidate equities for the checker
 // play to count as a PR decision. Not a triviality threshold: XG counts
 // essentially every play with a real choice, and only drops the ones where the
@@ -1222,6 +1264,7 @@ export async function convertXg(fileBytes) {
     if (rtype === "move" && rdata.level > maxPly && rdata.level < 100) maxPly = rdata.level;
   }
   const plyDepth = maxPly > 0 ? maxPly + 1 : 3;
+  const headerLevel = deepestLevel(gamesOut, `${plyDepth}ply`);
 
   return {
     match_length: matchLength,
@@ -1240,7 +1283,7 @@ export async function convertXg(fileBytes) {
     site: siteStr,
     analysis_info: {
       ply: plyDepth,
-      eval_level: `${plyDepth}ply`,
+      eval_level: headerLevel,
       model_id: "xg",
       timestamp,
     },
