@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import gzip
 import json
+import re
 import struct
 import sys
 import zlib
@@ -401,6 +402,53 @@ def _eval_level_name(code: int) -> str | None:
     # honest answer and the one every caller here already handles -- each
     # assigns ``eval_level`` only if this returns something.
     return _LEVEL_NAMES.get(code)
+
+
+def _level_rank(level: str | None) -> int | None:
+    # Where a canonical level sits in the strength order: plain depths by
+    # depth, the truncated rollouts above every depth, a full rollout above
+    # those. The opening book is unranked -- a lookup is exact rather than
+    # deep, so it raises no ceiling.
+    m = re.match(r"^(\d+)ply$", level or "")
+    if m:
+        return int(m.group(1))
+    m = re.match(r"^truncated(\d+)$", level or "")
+    if m:
+        return 100 + int(m.group(1))
+    return 1000 if level == "rollout" else None
+
+
+def _deepest_level(games: list, base: str) -> str:
+    # The block's ``eval_level``: the deepest level any decision in the
+    # document reports, or the plain ply depth when nothing went past it. Read
+    # off the document rather than the records, which hold levels for positions
+    # no decision is made from. A ceiling, the way a bgsage header names its
+    # top tier above the ``ply`` it screened at.
+    #
+    # It is what tells two XG runs of one match apart. XG stamps no analysis
+    # time -- ``timestamp`` is the match's date -- and ``ply`` counts only the
+    # n-ply levels, so a run that sent its doubtful plays to XG Roller+ and a
+    # re-run that sent them to Roller++ used to write identical headers, and a
+    # library saving the second took it for the first.
+    best = base
+
+    def consider(level):
+        nonlocal best
+        rank = _level_rank(level)
+        if rank is not None and rank > _level_rank(best):
+            best = level
+
+    for game in games:
+        for ply in game.get("plies") or []:
+            a = ply.get("analysis")
+            if not a:
+                continue
+            consider(a.get("eval_level"))
+            for alt in a.get("alternatives") or []:
+                consider(alt.get("eval_level"))
+            consider((a.get("cube_decision") or {}).get("eval_level"))
+            consider((a.get("missed_double") or {}).get("eval_level"))
+    return best
 
 
 # Minimum spread (max - min) across a ply's candidate equities for the checker
@@ -1429,6 +1477,7 @@ def convert_xg(source: "Path | str | bytes") -> dict:
                 max_ply = lvl
 
     ply_depth = max_ply + 1 if max_ply > 0 else 3
+    header_level = _deepest_level(games_out, f"{ply_depth}ply")
 
     ogxm: dict = {
         "match_length": match_length,
@@ -1447,7 +1496,7 @@ def convert_xg(source: "Path | str | bytes") -> dict:
         "site": site_str,
         "analysis_info": {
             "ply": ply_depth,
-            "eval_level": f"{ply_depth}ply",
+            "eval_level": header_level,
             "model_id": "xg",
             "timestamp": timestamp,
         },

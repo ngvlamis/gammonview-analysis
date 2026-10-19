@@ -201,5 +201,37 @@ if (xgFiles.length === 0) {
          + `(${deeperCube} of ${triples} disagree)`);
 }
 
+// --- 4. The header names the deepest level the match was read at ----------
+//
+// XG records no analysis time, and `ply` counts only the n-ply levels, so the
+// header's `eval_level` is the one thing that tells a Roller+ run of a match
+// from a Roller++ re-run of it. It has to be the ceiling of what the decisions
+// themselves report, and it has to survive `.gvab`.
+if (xgFiles.length) {
+  const rank = (l) => {
+    const p = /^(\d+)ply$/.exec(l ?? ''); if (p) return Number(p[1]);
+    const t = /^truncated(\d+)$/.exec(l ?? ''); if (t) return 100 + Number(t[1]);
+    return l === 'rollout' ? 1000 : -1;
+  };
+  const wrong = [];
+  const lost = [];
+  const headers = new Set();
+  for (const file of xgFiles) {
+    const doc = await convertXg(new Uint8Array(fs.readFileSync(path.join(SAMPLES_DIR, file))));
+    const info = doc.analysis_info;
+    const levels = [...altLevels(doc), ...cubeLevels(doc).map(([, l]) => l), `${info.ply}ply`];
+    const top = levels.reduce((best, l) => (rank(l) > rank(best) ? l : best));
+    headers.add(info.eval_level);
+    if (info.eval_level !== top) wrong.push(`${file}: header ${info.eval_level}, deepest ${top}`);
+    const back = readGvab(write_gvab(doc));
+    const backInfo = back.analysis_info ?? back.analyses_info?.[0];
+    if (backInfo?.eval_level !== info.eval_level) lost.push(`${file}: ${info.eval_level} -> ${backInfo?.eval_level}`);
+  }
+  assert(wrong.length === 0, `the header names the deepest level read (${wrong.slice(0, 3).join('; ')})`);
+  assert(lost.length === 0, `the header level survives write+read (${lost.slice(0, 3).join('; ')})`);
+  assert([...headers].some((l) => /^truncated/.test(l)),
+         `the corpus has a match whose ceiling is an XG Roller level (saw: ${[...headers].sort().join(', ')})`);
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);

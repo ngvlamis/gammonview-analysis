@@ -217,6 +217,40 @@ def main() -> int:
     check(any(not lvl.endswith("ply") or not lvl[:-3].isdigit() for lvl in cube_seen),
           f"the corpus exercises a non-ply level on a cube row (saw: {sorted(cube_seen)})")
 
+    # --- 4. The header names the deepest level the match was read at -------
+    #
+    # XG records no analysis time, and `ply` counts only the n-ply levels, so
+    # the header's `eval_level` is the one thing that tells a Roller+ run of a
+    # match from a Roller++ re-run of it. It has to be the ceiling of what the
+    # decisions themselves report, and it has to survive `.gvab`.
+    def rank(level):
+        if level and level.endswith("ply") and level[:-3].isdigit():
+            return int(level[:-3])
+        if level and level.startswith("truncated") and level[9:].isdigit():
+            return 100 + int(level[9:])
+        return 1000 if level == "rollout" else -1
+
+    wrong: list[str] = []
+    lost: list[str] = []
+    headers: set[str] = set()
+    for path in files:
+        doc = convert_xg(path)
+        info = doc["analysis_info"]
+        levels = (_alt_levels(doc) + [lvl for _, lvl in _cube_levels(doc)]
+                  + [f"{info['ply']}ply"])
+        top = max(levels, key=rank)
+        headers.add(info["eval_level"])
+        if info["eval_level"] != top:
+            wrong.append(f"{path.name}: header {info['eval_level']}, deepest {top}")
+        back = read_gvab(write_gvab(doc))
+        back_info = back.get("analysis_info") or (back.get("analyses_info") or [{}])[0]
+        if back_info.get("eval_level") != info["eval_level"]:
+            lost.append(f"{path.name}: {info['eval_level']} -> {back_info.get('eval_level')}")
+    check(not wrong, f"the header names the deepest level read ({wrong[:3]})")
+    check(not lost, f"the header level survives write+read ({lost[:3]})")
+    check(any(lvl.startswith("truncated") for lvl in headers),
+          f"the corpus has a match whose ceiling is an XG Roller level (saw: {sorted(headers)})")
+
     print(f"\n{_checks - len(_failures)}/{_checks} checks passed")
     return 1 if _failures else 0
 
