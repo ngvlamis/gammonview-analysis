@@ -123,5 +123,21 @@ for (const name of bgfs) {
     'a set-up ply with dice beside initial_board is written once, not twice');
 }
 
+// A block's analysis preset label travels in its x-gammonview-analysis annotation.
+{
+  const base = readGvab(toU8(readFileSync(join(goldenDir, goldens[0]))));
+  for (const label of ['world_class@2', 'custom/my deep;x@3f9a1c', 'caf\u00e9=1%']) {
+    const d = structuredClone(base);
+    d.analysis_info.preset = label;
+    const data = write_gvab(d);
+    const back = readGvab(data);
+    assert(back.analysis_info.preset === label && bytesEqual(write_gvab(back), data),
+      `preset ${JSON.stringify(label)} travels in the block annotation, byte-stably`);
+  }
+  const d = structuredClone(base);
+  delete d.analysis_info.preset;
+  assert(!('preset' in readGvab(write_gvab(d)).analysis_info), 'a block with no preset reads back with none');
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

@@ -1656,6 +1656,8 @@ def _v1_block(anal: dict, decisions: list[dict], ply_at: list, match_length: int
             info["eval_level"] = label
         if luck_levels and ours.get("luck"):
             luck_levels = {ours["luck"]}
+        if ours.get("preset"):
+            info["preset"] = ours["preset"]
     elif block_level.get("rollout") is not None:
         info["eval_level"] = "rollout"
     if "model_id" in anal:
@@ -1979,6 +1981,8 @@ def read_ogxm2(data: bytes, *, verify_crc: bool = True, derive_ogids: bool = Tru
                 ours["level"] = unquote(items["level"]) or None
             if "luck" in items:
                 ours["luck"] = unquote(items["luck"])
+            if items.get("preset"):
+                ours["preset"] = unquote(items["preset"])
             ours["frames"] = _parse_frames(items.get("frame", ""))
             ours["fields"] = _block_items(items)
         info, block_obj, has_luck = _v1_block(

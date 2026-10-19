@@ -10,17 +10,32 @@ rolls out cube decisions on a cube error). A preset with no second pass is a
 single-pass scheme that judges everything at the first-pass level.
 
 The canonical presets are defined in code here (`_BUILTIN_SPECS`), so they
-are always available and can never be broken by editing. Users customize by
-creating an optional `presets.yaml` next to this file: entries there override a
-built-in preset by key or add brand-new presets, and the file's `default:` key
-overrides the default preset. To restore defaults, just delete presets.yaml; to
-start one, run `gvan-match --init-presets`. A malformed presets.yaml is
-ignored with a warning (the built-ins still load).
+are always available and can never be broken by editing. Users add their own in
+an optional `presets.yaml`, under names of their own, and the file's `default:`
+key overrides the default preset. A built-in cannot be overridden: an entry
+reusing a built-in's name or alias is skipped with a warning. To restore
+defaults, just delete presets.yaml; to start one, run `gvan-match
+--init-presets`. A malformed presets.yaml is ignored with a warning (the
+built-ins still load).
+
+**Every preset names one method, and its label says which.** An analysis
+records `Preset.label`: `world_class@2` for a built-in at revision 2, or
+`custom/<name>@<digest>` for a user preset, where the digest is of its whole
+definition. A built-in's revision is bumped whenever anything that can move its
+results changes -- its levels and thresholds, and the screening constants in
+`checker_eval` -- and `_REVISIONS` pins the digest each revision stood for, so
+`test_presets` fails if a definition changes without a new revision. Two
+analyses with the same label and the same `engine_build` were produced the same
+way; a caller that needs that guarantee passes `name@revision` and is refused
+if this install runs anything else.
 """
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
+import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -39,7 +54,7 @@ VALID_LEVELS: frozenset[str] = frozenset({
 # close_threshold add the optional 3-tier scheme (checker plays and cubes);
 # error_threshold is what a decision has to cost to earn the second pass.
 _BUILTIN_SPECS: dict[str, dict] = {
-    "very_quick": {"display": "Very quick", "first_pass": "2ply", "second_pass": None, "aliases": ["vq"]},
+    "very_quick": {"display": "Very quick", "revision": 1, "first_pass": "2ply", "second_pass": None, "aliases": ["vq"]},
     # error_threshold 0, not the 0.02 default, because `fast`'s second pass is
     # 3-ply rather than a rollout. The default exists to RATION ROLLOUTS -- on a
     # checker move list a rollout costs ~1.2s against a 3-ply look's ~0.036s, so
@@ -48,9 +63,9 @@ _BUILTIN_SPECS: dict[str, dict] = {
     # trade goes the other way: measured over the five golden matches, 0.02 saves
     # 6% of wall clock (40.7s -> 38.2s) and moves PR by a mean of 0.14 (max
     # 0.35). Cheap depth is worth taking on every error.
-    "fast": {"display": "Fast", "first_pass": "2ply", "second_pass": "3ply",
+    "fast": {"display": "Fast", "revision": 2, "first_pass": "2ply", "second_pass": "3ply",
              "error_threshold": 0.0, "aliases": ["f"]},
-    "deep": {"display": "Deep", "first_pass": "3ply", "second_pass": None, "aliases": ["d"]},
+    "deep": {"display": "Deep", "revision": 2, "first_pass": "3ply", "second_pass": None, "aliases": ["d"]},
     # XG World Class, modelled on XG's ROUTING rather than on a single depth.
     # This shipped for a long time as a flat 4-ply screen, which was never what
     # XG does. Mining 63,548 XG World Class checker decisions for the level it
@@ -90,7 +105,7 @@ _BUILTIN_SPECS: dict[str, dict] = {
     # 0.0127, against truncated2's 12%/0.0091) was scoring it as a TERMINAL
     # tier, which it no longer is. A borderline cube the 4-ply tier then sizes
     # above error_threshold goes to truncated2 on 4-ply's own numbers.
-    "world_class": {"display": "World Class", "first_pass": "3ply",
+    "world_class": {"display": "World Class", "revision": 2, "first_pass": "3ply",
                     "mid_pass": "4ply", "second_pass": "truncated2",
                     "close_threshold": 0.08, "aliases": ["wc", "worldclass"]},
     # 3-tier XG World Class analog: 3-ply screen, truncated2 rollout on error,
@@ -134,7 +149,7 @@ _BUILTIN_SPECS: dict[str, dict] = {
     # about one per match that widening can touch. What the test does establish
     # is that it is not harmful. The corpus mining points the same way: missed
     # errors fall from 7.2% of mid-tier cubes at 0.04 to 3.3% at 0.08.
-    "world_class_fast": {"display": "World Class Fast", "first_pass": "3ply",
+    "world_class_fast": {"display": "World Class Fast", "revision": 2, "first_pass": "3ply",
                          "mid_pass": {"cube": "truncated2"},
                          "second_pass": "truncated2", "close_threshold": 0.08, "aliases": ["wcf"]},
     # TODO Extensive: needs a full-completion `rollout` second pass plus a tiered
@@ -157,6 +172,31 @@ _RETIRED: dict[str, str] = {
     "b": "balanced",   # its alias, resolved to the entry above
 }
 
+#: The definition digest (`Preset.digest`, first 12 hex) of every revision each
+#: built-in has shipped, oldest first; the last is the revision that runs. A
+#: revision is a promise that its label means one method, so a digest here is
+#: never edited -- a change to a definition appends a revision, and
+#: `test_presets` fails until it does. Old revisions are kept so a file that
+#: names one can be told what it was, not so they can be run: a revision
+#: includes code paths (the screening in `checker_eval`) that are not kept.
+#
+#: 1 -- the definitions as they stood when revisions were introduced.
+#: 2 -- staged checker screening (1 -> 2 -> N-ply, the 2-ply stage widened to
+#:      the 1-ply window on a crowded field, and a middle tier deepening only
+#:      the screen's close moves); very_quick never goes past 2-ply, so it
+#:      is unchanged and stays at 1.
+_REVISIONS: dict[str, dict[int, str]] = {
+    "very_quick": {1: "454c535ddc16"},
+    "fast": {1: "7030cc90eace", 2: "a44dc6c17c2f"},
+    "deep": {1: "f0d71d4caf31", 2: "062a598d4e7f"},
+    "world_class": {1: "e5b1989b5c6c", 2: "7427f6583314"},
+    "world_class_fast": {1: "7914909ce57a", 2: "075ea0886200"},
+}
+
+#: What a custom preset's name may be: it is written into the label, so it
+#: must stay readable and never carry the label's own separators.
+_CUSTOM_NAME = re.compile(r"[a-z0-9][a-z0-9_-]*")
+
 # Optional user overrides are read from two locations, lowest precedence first:
 #   1. a global per-user file (~/.config/bgsage/presets.yaml, or $XDG_CONFIG_HOME)
 #   2. a project-local file next to this module (./presets.yaml)
@@ -176,9 +216,14 @@ PRESET_FILES: list[Path] = [GLOBAL_PRESETS_FILE, PROJECT_PRESETS_FILE]  # low ->
 TEMPLATE = """\
 # Custom analysis presets for gvan-match (optional).
 #
-# The built-in presets always apply, so this file is only for OVERRIDING a
-# built-in (reuse its key) or ADDING your own. Delete this file to restore
-# defaults. A malformed file is ignored with a warning.
+# The built-in presets always apply and cannot be changed: each names one
+# method, recorded with its revision (e.g. world_class@2) in every analysis.
+# This file is for ADDING your own, under names of your own; an entry reusing a
+# built-in's name or alias is skipped with a warning. Your preset is recorded as
+# custom/<name>@<digest>, the digest being of its whole definition, so the same
+# definition always carries the same label and any edit gives it a new one.
+# Delete this file to restore defaults. A malformed file is ignored with a
+# warning.
 #
 # This file is read from two locations (project-local wins over global):
 #   - global:  ~/.config/bgsage/presets.yaml
@@ -283,6 +328,50 @@ class Preset:
     close_threshold_cube: float | None = None
     error_threshold_checker: float = 0.02
     error_threshold_cube: float = 0.02
+    # The built-in's revision (see `_REVISIONS`); None for a custom preset.
+    revision: int | None = None
+
+    def definition(self) -> dict:
+        """Everything that decides this preset's results, as plain data.
+
+        The levels and thresholds, plus the screening constants the levels it
+        names actually reach (`checker_eval.screening`), read at call time so
+        an environment override (GVAN_NO_SCREEN, GVAN_STAGED) shows up here
+        instead of running under a label that says otherwise. Not the display
+        name or aliases: renaming a preset does not change what it computes.
+        """
+        from .checker_eval import screening   # lazy: pulls in bgsage
+        levels = [lv for lv in (self.first_pass, self.mid_pass_checker,
+                                self.mid_pass_cube, self.second_pass) if lv]
+        return {
+            "first_pass": self.first_pass,
+            "mid_pass": [self.mid_pass_checker, self.mid_pass_cube],
+            "second_pass": self.second_pass,
+            "close_threshold": [self.close_threshold_checker, self.close_threshold_cube],
+            "error_threshold": [self.error_threshold_checker, self.error_threshold_cube],
+            "screening": screening(levels, has_mid=self.mid_pass_checker is not None),
+        }
+
+    def digest(self) -> str:
+        """SHA-256 (hex) of `definition()`, canonically serialised."""
+        text = json.dumps(self.definition(), sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+    @property
+    def label(self) -> str:
+        """What an analysis records as having produced it.
+
+        `world_class@2` for a built-in running its pinned definition;
+        `world_class@2+<digest>` for one whose definition has been changed
+        under it (an environment override), so it is never mistaken for the
+        real revision; `custom/<name>@<digest>` for a user preset.
+        """
+        d = self.digest()[:12]
+        if self.revision is None:
+            return f"custom/{self.key}@{d[:6]}"
+        if _REVISIONS.get(self.key, {}).get(self.revision) == d:
+            return f"{self.key}@{self.revision}"
+        return f"{self.key}@{self.revision}+{d[:6]}"
 
     @property
     def has_mid(self) -> bool:
@@ -431,11 +520,16 @@ def _make_preset(key: str, spec: dict) -> Preset:
         close_checker = None
     if mid_cube is None:
         close_cube = None
+    revision = spec.get("revision")
+    if revision is not None and (isinstance(revision, bool) or not isinstance(revision, int)
+                                 or revision < 1):
+        raise PresetConfigError(f"preset {key!r}: revision must be a positive integer")
     return Preset(key, str(spec.get("display", key)), first_pass, second_pass,
                   mid_checker, mid_cube,
                   close_checker, close_cube,
                   0.0 if err_checker is None else err_checker,
-                  0.0 if err_cube is None else err_cube)
+                  0.0 if err_cube is None else err_cube,
+                  revision)
 
 
 def _assemble(specs: dict[str, dict], default: str) -> tuple[dict[str, Preset], dict[str, str], str]:
@@ -484,12 +578,40 @@ def _overlay_file(specs: dict[str, dict], default: str, path: Path) -> tuple[dic
     if not isinstance(user_presets, dict):
         raise PresetConfigError("'presets:' must be a mapping")
     merged = dict(specs)
+    reserved = _reserved_names()
     for key, spec in user_presets.items():
         key = str(key).strip().lower()
         if not isinstance(spec, dict):
             raise PresetConfigError(f"preset {key!r} must be a mapping")
-        merged[key] = {**merged[key], **spec} if key in merged else spec
+        # A built-in names one method, so it cannot be redefined -- not even a
+        # field of it. Skipped, not fatal, so the file's other presets load.
+        if key in reserved:
+            print(f"warning: {path}: preset {key!r} is a built-in name and cannot "
+                  f"be overridden; skipping it (give your preset a name of its own)",
+                  file=sys.stderr)
+            continue
+        if not _CUSTOM_NAME.fullmatch(key):
+            raise PresetConfigError(
+                f"preset {key!r}: a custom preset's name must be lowercase letters, "
+                f"digits, '_' and '-', starting with a letter or digit")
+        if "revision" in spec:
+            raise PresetConfigError(
+                f"preset {key!r}: revision is for built-ins; a custom preset is "
+                f"identified by the digest of its definition")
+        for alias in spec.get("aliases") or []:
+            if str(alias).strip().lower() in reserved:
+                raise PresetConfigError(
+                    f"preset {key!r}: alias {alias!r} is a built-in name")
+        merged[key] = spec
     return merged, raw.get("default", default)
+
+
+def _reserved_names() -> set[str]:
+    """Built-in keys and aliases, and retired names: none can be redefined."""
+    names = set(_BUILTIN_SPECS) | set(_RETIRED)
+    for spec in _BUILTIN_SPECS.values():
+        names.update(str(a).strip().lower() for a in spec.get("aliases") or [])
+    return names
 
 
 def _build_config(paths: list[Path]) -> tuple[dict[str, Preset], dict[str, str], str]:
@@ -535,6 +657,9 @@ def resolve_preset(name: str | None) -> Preset:
     if name is None:
         return PRESETS[DEFAULT_PRESET]
     key = name.strip().lower()
+    key, _, pin = key.partition("@")
+    if key.startswith("custom/"):
+        key = key[len("custom/"):]
     key = _ALIASES.get(key, key)
     if key not in PRESETS:
         valid = ", ".join(sorted(PRESETS))
@@ -544,4 +669,42 @@ def resolve_preset(name: str | None) -> Preset:
             raise ValueError(
                 f"Preset {name!r} is {note} Valid presets: {valid}")
         raise ValueError(f"Unknown preset {name!r}. Valid presets: {valid}")
-    return PRESETS[key]
+    p = PRESETS[key]
+    if pin:
+        _check_pin(name, p, pin)
+    return p
+
+
+def _check_pin(name: str, p: Preset, pin: str) -> None:
+    """Refuse to run anything but the pinned method.
+
+    `world_class@2` runs only if this install's world_class is revision 2 and
+    unmodified; a custom preset's pin is a prefix of its definition digest. A
+    pin is how a caller who must compare like with like -- a title-granting
+    body, a league -- says so, and a silent upgrade is exactly what it rules
+    out.
+    """
+    if p.revision is None:
+        if not p.digest().startswith(pin):
+            raise ValueError(
+                f"Preset {name!r}: this install's {p.key!r} is {p.label}, a "
+                f"different definition")
+        return
+    if not pin.isdigit():
+        raise ValueError(f"Preset {name!r}: a built-in is pinned by revision number, "
+                         f"e.g. {p.key}@{p.revision}")
+    want = int(pin)
+    history = _REVISIONS.get(p.key, {})
+    if want != p.revision:
+        when = ("an earlier revision" if want in history
+                else "a newer revision than this install has" if want > p.revision
+                else "not a revision")
+        raise ValueError(
+            f"Preset {name!r} is {when} of {p.key}; this install runs "
+            f"{p.key}@{p.revision}. Install the release that shipped "
+            f"{p.key}@{want} to reproduce it.")
+    if p.label != f"{p.key}@{p.revision}":
+        raise ValueError(
+            f"Preset {name!r}: this install's {p.key} has been modified "
+            f"({p.label}), so it is not revision {want} -- check GVAN_STAGED / "
+            f"GVAN_NO_SCREEN in the environment.")

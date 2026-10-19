@@ -13,6 +13,54 @@ when the repository was opened; they are kept because they record why things
 are the way they are — particularly the breaking changes and the measurements
 behind several design decisions. Dates are the tag dates.
 
+## Unreleased
+
+**Presets are versioned, and a built-in cannot be changed** *(breaking)*
+
+An analysis now records which version of a preset produced it: `world_class@2`
+for a built-in, `custom/<name>@<digest>` for a preset from `presets.yaml`. Two
+analyses with the same label used the same method, so a player comparing
+matches, or a title-granting body requiring one method, can check that.
+Locking the built-ins is what makes that hold. A `presets.yaml` entry that
+reuses a built-in's name or alias is now skipped with a warning, where it used
+to override the built-in. A custom preset's label comes from a digest of its
+whole definition, screening constants included, so renaming it changes nothing
+and a changed threshold changes the label. An environment override
+(`GVAN_STAGED=0`, `GVAN_NO_SCREEN`) runs as `world_class@2+<digest>` rather
+than under the real label. `--preset world_class@2` runs exactly that revision,
+and refuses if anything else would run. The label travels in the block's
+`x-gammonview-analysis` annotation (`preset=`), in Python and JS; older files
+carry none.
+
+**Checker plays are screened in stages, as XG screens them** *(change)*
+
+`fast`, `deep`, `world_class` and `world_class_fast` move to revision 2:
+
+1. Every move is screened at 1-ply.
+2. The top 14 are rescored at 2-ply, or every move within 0.2 of the 1-ply
+   leader when that is more (at most 40). A fixed count ignored a crowded
+   field: on 10,715 decisions the 3-ply best ranked 14th or worse at 1-ply on
+   0.19% of them, and the window recovers what that cost.
+3. Moves within 0.16 of the 2-ply leader, at most 12, are evaluated at full
+   depth, along with the played move.
+
+A middle tier now starts from the screen's numbers, and deepens only the moves
+within `close_threshold` of the best, at most 8. That is XG's search interval,
+4 moves within 0.080. The top-two gap is measured between moves at the same
+depth, so a lone deep move is never "close", and it stays at the screen's
+depth as XG's does. 4-ply checker work falls to about 36% of its cost.
+`world_class` ran 1.31x faster end to end on 12 matches on a 24-core machine,
+and 1.45x on an 8-core one. PR is identical to two decimals on 24 players, and
+8 of 2,323 best moves differ, every one of them a tie. `very_quick` never
+reaches the staged screen and stays at revision 1.
+
+**Auto `--jobs` is `cpu // 3` workers, at least 2** *(behaviour change on
+`--jobs 0`)*
+
+It was `ceil(cpu / 7)`. A staged decision keeps fewer cores busy, so 4 workers
+left a 24-core machine short: 8 workers ran 162.6s against 171.4s. On 8 and 4
+cores the count is unchanged, at 2. Output is identical at any setting.
+
 ## 2.0.2 — 2026-10-12
 
 **A set-up start is written once** *(fix)*

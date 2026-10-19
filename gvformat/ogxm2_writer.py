@@ -1897,6 +1897,8 @@ def _encode(ogxm: dict) -> _Parts:
         if any(k == R.KIND_ROLL for _r, k, _b in decs) or any(
                 k == R.KIND_ROLL for recs in extra.values() for k, _b in recs):
             items.append("luck=" + quote(luck_label, safe=_SAFE))
+        if isinstance(info.get("preset"), str) and info["preset"]:
+            items.append("preset=" + quote(info["preset"], safe=_SAFE))
         items.append("pr=" + ",".join(tokens))
         items.append(f"{R.GV_ITEM_PLIES}={R.GV_PLIES_GNUBG}")
         if frames:

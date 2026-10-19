@@ -60,6 +60,8 @@ unchanged. Set ``GVAN_NO_SCREEN=1`` to force the fallback everywhere.
 from __future__ import annotations
 
 import os
+import re
+from dataclasses import replace
 from functools import lru_cache
 from concurrent.futures import ThreadPoolExecutor
 
@@ -137,6 +139,45 @@ ELEVATE_MAX_MOVES = 12
 # this -- it is a display-quality dial, and that is why it is set generously.
 ELEVATE_MIN_MOVES = 14
 
+# Staged screening (the default; GVAN_STAGED=0 turns it off). XG works up through the depths and
+# drops moves at each one; the flat screen above jumps from 1-ply straight to
+# N-ply on 14+ moves, and a middle tier then repeats that from a fresh 1-ply
+# screen. Staged, a decision costs:
+#
+#   1-ply on every move -> 2-ply on the top STAGE_SCREEN_MOVES (the display
+#   floor, paid at the cheapest real depth), or on every move within
+#   STAGE_SCREEN_WINDOW of the 1-ply leader when that is more, at most
+#   STAGE_SCREEN_CAP -> N-ply on the 2-ply moves within STAGE_THRESHOLD of the
+#   2-ply leader, at most STAGE_MAX_MOVES.
+#
+# A deeper tier given the shallower tier's result (`seed=`) deepens only the
+# seed's moves within its close window of the seed's best, at most
+# DEEPEN_MAX_MOVES -- XG's search interval, "4 moves within 0.080 at 3-ply" --
+# and keeps the seed's numbers for everything else.
+#
+# Measured offline 2026-10-18 on 1,964 checker decisions (11 sample matches +
+# a BMAB-analysed one), single-thread CPU, against world_class as it was:
+# 4-ply was 90% of the non-rollout checker cost (5,627s of 6,227s). Staged with
+# these constants: 36% of that cost, the best move different on 6 decisions,
+# each an exact tie under the old numbers, and no decision routed differently
+# to the rollout tier. DEEPEN_MAX_MOVES = 4, XG's own cap, saved 6% more and
+# cost 0.015 equity over 7 changed best moves; 8 was free.
+#
+# The window under the floor: a fixed 14 ignores how crowded the field is. On
+# 10,715 decisions (73 matches) the 3-ply best ranked 14th or worse at 1-ply on
+# 20 of them (0.19%; worst 30th, one 17th at 0.005 behind the leader), and the
+# top-14 cut cost 0.175 equity in total against a 3-ply reference. Top 14 or
+# within 0.2 cost 0.130, the same as sending every move to 2-ply, for 1.4 more
+# 2-ply evaluations a decision; 0.3-0.5 changed nothing. The 0.130 left is
+# 2-ply misjudging past STAGE_THRESHOLD, not the screen.
+STAGE_SCREEN_PLY = 2
+STAGE_SCREEN_MOVES = 14
+STAGE_SCREEN_WINDOW = 0.2
+STAGE_SCREEN_CAP = 40
+STAGE_THRESHOLD = 0.16
+STAGE_MAX_MOVES = 12
+DEEPEN_MAX_MOVES = 8
+
 
 @lru_cache(maxsize=1)
 def _has_root_routing() -> bool:
@@ -156,6 +197,43 @@ def _has_root_routing() -> bool:
 
 def _env_disabled() -> bool:
     return os.environ.get("GVAN_NO_SCREEN", "").strip() not in ("", "0")
+
+
+def _staged_enabled() -> bool:
+    # On by default since the presets' @2 revisions; GVAN_STAGED=0 restores the
+    # flat screen, for A/B measurement (and labels the preset as modified).
+    return os.environ.get("GVAN_STAGED", "").strip() != "0"
+
+
+def _ply(level: str) -> int | None:
+    m = re.fullmatch(r"(\d+)ply", level)
+    return int(m.group(1)) if m else None
+
+
+def screening(levels: list[str], has_mid: bool) -> dict:
+    """The constants of this module that can move the results of a preset
+    naming `levels`, as plain data, for `Preset.definition`.
+
+    Only what those levels reach: a multi-ply level is screened (rollout and
+    1-ply levels fall back to bgsage untouched), and the staged constants only
+    matter past `STAGE_SCREEN_PLY`, so a preset that never goes deeper keeps
+    its digest when they change. `has_mid` says whether a checker middle tier
+    exists to take a seed (`DEEPEN_MAX_MOVES`).
+    """
+    plies = [p for p in map(_ply, levels) if p is not None and p > 1]
+    if not plies:
+        return {}
+    if _env_disabled():
+        return {"screen": "off"}
+    out = {"screen": "flat",
+           "elevate": [ELEVATE_THRESHOLD, ELEVATE_MAX_MOVES, ELEVATE_MIN_MOVES]}
+    if _staged_enabled() and max(plies) > STAGE_SCREEN_PLY:
+        out["screen"] = "staged"
+        out["stage"] = [STAGE_SCREEN_PLY, STAGE_SCREEN_MOVES, STAGE_SCREEN_WINDOW,
+                        STAGE_SCREEN_CAP, STAGE_THRESHOLD, STAGE_MAX_MOVES]
+        if has_mid:
+            out["deepen"] = DEEPEN_MAX_MOVES
+    return out
 
 
 class _ScreenContext:
@@ -237,7 +315,7 @@ def _select(scored, ctx: _ScreenContext, force_boards) -> list[int]:
 
 
 def _elevate(board_after, board, ctx, cube_value, away1, away2, is_crawford,
-             jacoby, beaver) -> tuple[list[float], float, float]:
+             jacoby, beaver, n_plies=None) -> tuple[list[float], float, float]:
     """Full-depth probs + equities for one post-move board.
 
     Byte-for-byte the call ``_CubefulAnalyzer._convert_move`` makes: flip to the
@@ -251,10 +329,13 @@ def _elevate(board_after, board, ctx, cube_value, away1, away2, is_crawford,
     different function. Measured on eight snake seeds at 3-ply: the best move
     disagreed with ``analyzer.checker_play`` on five of them, by up to 0.19
     equity, with elevated rows off by as much as 0.70.
+
+    ``n_plies`` overrides the analyzer's own depth, for the staged screen's
+    2-ply stage; the strategy is the same either way.
     """
     r = bgbot_cpp.cubeful_probs_and_equity_nply(
         bgbot_cpp.flip_board(board_after), ctx.opp_owner,
-        ctx.strategy, ctx.n_plies,
+        ctx.strategy, ctx.n_plies if n_plies is None else n_plies,
         n_threads=1,
         cube_value=cube_value,
         away1=away2, away2=away1, is_crawford=is_crawford,
@@ -293,17 +374,24 @@ def checker_play(
     jacoby: bool = True,
     beaver: bool = True,
     force_boards: list[list[int]] | None = None,
+    seed: CheckerPlayResult | None = None,
+    seed_window: float | None = None,
 ) -> CheckerPlayResult:
     """``analyzer.checker_play`` with the elevation capped at a chosen set.
 
     Same return type and the same guarantees callers actually rely on:
     ``moves[0]`` is the best move, ``equity_diff`` is relative to it, and every
     legal move appears exactly once. It differs from bgsage in one way worth
-    knowing: the list is two sorted groups, not one. The elevated moves come
-    first in N-ply order, then the 1-ply tail in its own order, so a shallow
-    equity can read higher than a deep one further up. Merging them is what
-    lets a screened number take rank 0 -- measured at 1.4% of decisions -- and
-    rank 0 is what feeds PR.
+    knowing: the list is sorted groups, deepest first, not one. The elevated
+    moves come first in N-ply order, then any shallower groups each in its own
+    order, so a shallow equity can read higher than a deep one further up.
+    Merging them is what lets a screened number take rank 0 -- measured at 1.4%
+    of decisions -- and rank 0 is what feeds PR.
+
+    When staging is on (the default), ``seed`` (a shallower tier's result for the same
+    decision) and ``seed_window`` make this a deepening pass: only the seed's
+    deepest moves within ``seed_window`` of its best are re-evaluated, at most
+    DEEPEN_MAX_MOVES, plus ``force_boards``; the rest keep the seed's numbers.
 
     Falls back to ``analyzer.checker_play`` whenever the screen-then-elevate
     path does not apply.
@@ -321,11 +409,49 @@ def checker_play(
             jacoby=jacoby, beaver=beaver, force_boards=force_boards,
         )
 
+    deep_level = f"{ctx.n_plies}-ply"
+
+    def run(boards, n_plies=None):
+        def one(b):
+            return _elevate(b, board, ctx, cube_value, away1, away2,
+                            is_crawford, jacoby, beaver, n_plies)
+        if len(boards) > 1 and ctx.threads > 1:
+            # One thread per candidate, one thread inside each call: the
+            # cube-aware tree for a single move is small enough that outer
+            # parallelism overlaps better than inner, and this avoids
+            # oversubscribing.
+            with ThreadPoolExecutor(max_workers=min(ctx.threads, len(boards))) as pool:
+                return list(pool.map(one, boards))
+        return [one(b) for b in boards]
+
+    def group(boards, results, level):
+        ms = [_move(b, eq, cl_eq, probs, level)
+              for b, (probs, cl_eq, eq) in zip(boards, results)]
+        ms.sort(key=lambda m: -m.equity)
+        return ms
+
+    def finish(moves):
+        best = moves[0].equity
+        for m in moves:
+            m.equity_diff = m.equity - best
+        return CheckerPlayResult(
+            moves=moves, board=list(board), die1=die1, die2=die2,
+            eval_level=deep_level,
+        )
+
+    wanted = [tuple(b) for b in (force_boards or [])]
+
+    if seed is not None and seed_window is not None and _staged_enabled():
+        deepened = _deepen(seed, ctx, seed_window, wanted)
+        if deepened is not None:
+            picked, rest = deepened
+            return finish(group(picked, run(picked), deep_level) + rest)
+
     candidates = bgbot_cpp.possible_moves(board, die1, die2)
     if not candidates:
         return CheckerPlayResult(
             moves=[], board=list(board), die1=die1, die2=die2,
-            eval_level=f"{ctx.n_plies}-ply",
+            eval_level=deep_level,
         )
 
     scored = ctx.inner._score_candidates(
@@ -333,46 +459,83 @@ def checker_play(
         cube_value=cube_value, away1=away1, away2=away2,
         is_crawford=is_crawford, jacoby=jacoby,
     )
+
+    def tail_of(chosen_set):
+        # The tail keeps the screen's own numbers and says so. It is NOT merged
+        # into the sorts above: a 1-ply cubeful equity and an N-ply one are
+        # different estimators, and ordering them against each other is what
+        # lets a shallow number displace a deep one. Everything here ranked
+        # below every elevated move on the screen, so under the deeper groups
+        # is where it belongs.
+        return [
+            _move(item[2], item[0], item[1], item[3], "1-ply")
+            for i, item in enumerate(scored) if i not in chosen_set
+        ]
+
+    if _staged_enabled() and ctx.n_plies > STAGE_SCREEN_PLY:
+        # 2-ply on the display floor (wider when the field is crowded), then
+        # full depth on the 2-ply leaders.
+        lead1 = scored[0][0]
+        near = sum(1 for item in scored if lead1 - item[0] < STAGE_SCREEN_WINDOW)
+        n2 = max(STAGE_SCREEN_MOVES, min(near, STAGE_SCREEN_CAP))
+        s2 = _with_forced(list(range(min(n2, len(scored)))), scored, wanted)
+        b2 = [scored[i][2] for i in s2]
+        mid = group(b2, run(b2, STAGE_SCREEN_PLY), f"{STAGE_SCREEN_PLY}-ply")
+        lead = mid[0].equity
+        keep = [m for m in mid if lead - m.equity < STAGE_THRESHOLD][:STAGE_MAX_MOVES]
+        kept = {tuple(m.board) for m in keep}
+        for m in mid:
+            if tuple(m.board) in wanted and tuple(m.board) not in kept:
+                keep.append(m)
+                kept.add(tuple(m.board))
+        b3 = [m.board for m in keep]
+        deep = group(b3, run(b3), deep_level)
+        mid = [m for m in mid if tuple(m.board) not in kept]
+        return finish(deep + mid + tail_of(set(s2)))
+
     chosen = _select(scored, ctx, force_boards)
+    boards = [scored[i][2] for i in chosen]
+    deep = group(boards, run(boards), deep_level)
+    return finish(deep + tail_of(set(chosen)))
 
-    def _run(i):
-        return _elevate(scored[i][2], board, ctx, cube_value, away1, away2,
-                        is_crawford, jacoby, beaver)
 
-    if len(chosen) > 1 and ctx.threads > 1:
-        # One thread per candidate, one thread inside each call: the cube-aware
-        # tree for a single move is small enough that outer parallelism overlaps
-        # better than inner, and this avoids oversubscribing.
-        with ThreadPoolExecutor(max_workers=min(ctx.threads, len(chosen))) as pool:
-            elevated = list(pool.map(_run, chosen))
-    else:
-        elevated = [_run(i) for i in chosen]
+def _with_forced(chosen: list[int], scored, wanted) -> list[int]:
+    """`chosen` plus the index of every wanted board not already in it."""
+    taken = {tuple(scored[i][2]) for i in chosen}
+    for i, item in enumerate(scored):
+        key = tuple(item[2])
+        if key in wanted and key not in taken:
+            chosen.append(i)
+            taken.add(key)
+    return chosen
 
-    deep_level = f"{ctx.n_plies}-ply"
-    deep = [
-        _move(scored[i][2], eq, cl_eq, probs, deep_level)
-        for i, (probs, cl_eq, eq) in zip(chosen, elevated)
-    ]
-    deep.sort(key=lambda m: -m.equity)
 
-    # The tail keeps the screen's own numbers and says so. It is NOT merged into
-    # the sort above: a 1-ply cubeful equity and an N-ply one are different
-    # estimators, and ordering them against each other is what lets a shallow
-    # number displace a deep one. Everything here ranked below every elevated
-    # move on the screen, and below the display window besides, so under the
-    # deep group is where it belongs.
-    chosen_set = set(chosen)
-    tail = [
-        _move(item[2], item[0], item[1], item[3], "1-ply")
-        for i, item in enumerate(scored) if i not in chosen_set
-    ]
+def _depth(label: str) -> int | None:
+    head = label.split("-", 1)[0]
+    return int(head) if head.isdigit() else None
 
-    moves = deep + tail
+
+def _deepen(seed: CheckerPlayResult, ctx, window: float, wanted):
+    """Split a shallower tier's moves into the boards to re-evaluate and the
+    rows to keep: the seed's deepest moves within `window` of its best (at most
+    DEEPEN_MAX_MOVES) plus the wanted boards, and everything else as it was.
+    None if the seed is not a shallower ply list for us to build on."""
+    moves = list(seed.moves)
+    if len(moves) < 2:
+        return None
+    top = moves[0].eval_level
+    d = _depth(top)
+    if d is None or d >= ctx.n_plies:
+        return None
     best = moves[0].equity
+    picked = [m for m in moves if m.eval_level == top
+              and best - m.equity <= window][:DEEPEN_MAX_MOVES]
+    taken = {tuple(m.board) for m in picked}
     for m in moves:
-        m.equity_diff = m.equity - best
-
-    return CheckerPlayResult(
-        moves=moves, board=list(board), die1=die1, die2=die2,
-        eval_level=deep_level,
-    )
+        if tuple(m.board) in wanted and tuple(m.board) not in taken:
+            picked.append(m)
+            taken.add(tuple(m.board))
+    # Copies, so the seed's own rows (which a caller may still hold) are left
+    # with the equity_diff they were computed with.
+    rest = [replace(m) for m in moves if tuple(m.board) not in taken]
+    return [m.board for m in picked], rest

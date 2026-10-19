@@ -19,7 +19,10 @@ What must hold:
   * the played move is elevated when forced, whatever the screen thought of it;
   * an analyzer we cannot screen (rollout level, cubeless, 1-ply) falls back to
     `checker_play` and is unchanged;
-  * GVAN_NO_SCREEN=1 forces that fallback everywhere.
+  * GVAN_NO_SCREEN=1 forces that fallback everywhere;
+  * staging (the default; GVAN_STAGED=0 turns it off) stages the screen (1 -> 2 -> N-ply) and lets a deeper tier
+    deepen only a shallower result's close moves, every row still exact at
+    the depth its label names.
 
 Calling the same C++ entry point is what makes exact parity a fair thing to
 demand -- and what makes a *signature* change (bgsage 2.0's `root_board=`) a
@@ -45,6 +48,11 @@ from gvanalysis import checker_eval
 from gvanalysis.checker_eval import checker_play as screened
 
 EPS = 1e-9
+
+# The parity checks below pin the FLAT screen (1-ply -> N-ply, ELEVATE_*);
+# staging is the default, and `check_staged` / `check_seeded_deepening` turn it
+# back on explicitly.
+os.environ["GVAN_STAGED"] = "0"
 
 
 def _spread_board() -> list[int]:
@@ -355,6 +363,128 @@ def check_no_legal_moves() -> int:
     return 0 if ok else 1
 
 
+class _staged:
+    """Staging on (GVAN_STAGED=1) for the duration of a `with` block."""
+
+    def __enter__(self):
+        self.prev = os.environ.get("GVAN_STAGED")
+        os.environ["GVAN_STAGED"] = "1"
+
+    def __exit__(self, *exc):
+        if self.prev is None:
+            os.environ.pop("GVAN_STAGED", None)
+        else:
+            os.environ["GVAN_STAGED"] = self.prev
+
+
+def _groups_ok(moves) -> bool:
+    """Deepest group first, shallower groups after, each sorted best-first."""
+    depths = [int(m.eval_level.split("-")[0]) for m in moves]
+    if depths != sorted(depths, reverse=True):
+        return False
+    return all(a.equity >= b.equity - EPS for a, b in zip(moves, moves[1:])
+               if a.eval_level == b.eval_level)
+
+
+def check_staged() -> int:
+    """GVAN_STAGED=1: 1-ply on all, 2-ply on the display floor, N-ply on the
+    2-ply leaders. Every row's numbers are bgsage's own at the depth its label
+    names, and the played move reaches full depth wherever it screened."""
+    failures = 0
+    a3 = BgBotAnalyzer(eval_level="3ply", cubeful=True)
+    a2 = BgBotAnalyzer(eval_level="2ply", cubeful=True)
+    board, (d1, d2) = _spread_board(), (2, 2)
+    plain = screened(a3, board, d1, d2)
+    worst = plain.moves[-1].board
+    with _staged():
+        got = screened(a3, board, d1, d2, force_boards=[worst])
+    ref3 = {tuple(m.board): m for m in _ref(a3, board, d1, d2, {}).moves}
+    ref2 = {tuple(m.board): m for m in _ref(a2, board, d1, d2, {}).moves}
+    n_legal = len(possible_moves(board, d1, d2))
+
+    ok_set = (len(got.moves) == n_legal
+              and {tuple(m.board) for m in got.moves} == set(ref3))
+    labels = {m.eval_level for m in got.moves}
+    deep = [m for m in got.moves if m.eval_level == "3-ply"]
+    mid = [m for m in got.moves if m.eval_level == "2-ply"]
+    d3 = max(abs(m.equity - ref3[tuple(m.board)].equity) for m in deep)
+    d2_ = max(abs(m.equity - ref2[tuple(m.board)].equity) for m in mid)
+    played = next(m for m in got.moves if tuple(m.board) == tuple(worst))
+    floor = min(n_legal, checker_eval.STAGE_SCREEN_MOVES)
+    ok = (ok_set and labels <= {"1-ply", "2-ply", "3-ply"} and _groups_ok(got.moves)
+          and d3 < EPS and d2_ < EPS and played.eval_level == "3-ply"
+          and len(deep) <= checker_eval.STAGE_MAX_MOVES + 1
+          and all(m.eval_level != "1-ply" for m in got.moves[:floor])
+          and abs(got.moves[0].equity_diff) < EPS)
+    failures += not ok
+    print(f"{'PASS' if ok else 'FAIL'}  staged: {len(deep)} at 3-ply, {len(mid)} at "
+          f"2-ply, {n_legal - len(deep) - len(mid)} at 1-ply; max|delta| vs bgsage "
+          f"3-ply={d3:.1e} 2-ply={d2_:.1e}; played at {played.eval_level}")
+
+    # A 2-ply analyzer has nothing to stage through: the flat screen as before.
+    with _staged():
+        flat2 = screened(a2, board, d1, d2)
+    ok = ([(tuple(m.board), m.equity) for m in flat2.moves]
+          == [(tuple(m.board), m.equity) for m in screened(a2, board, d1, d2).moves])
+    failures += not ok
+    print(f"{'PASS' if ok else 'FAIL'}  staged is a no-op at 2-ply")
+    return failures
+
+
+def check_seeded_deepening() -> int:
+    """A deeper tier given the shallower result re-evaluates only the seed's
+    close moves (XG's search interval) plus the played move, keeps the rest as
+    they were, leaves the seed untouched, and is ignored with the flag off."""
+    failures = 0
+    a3 = BgBotAnalyzer(eval_level="3ply", cubeful=True)
+    a4 = BgBotAnalyzer(eval_level="4ply", cubeful=True)
+    board, (d1, d2) = list(STARTING_BOARD), (4, 3)
+    window = 0.08
+    with _staged():
+        seed = screened(a3, board, d1, d2)
+        worst = seed.moves[-1].board
+        before = [(m.equity, m.equity_diff, m.eval_level) for m in seed.moves]
+        got = screened(a4, board, d1, d2, force_boards=[worst],
+                       seed=seed, seed_window=window)
+    best = seed.moves[0].equity
+    want = [tuple(m.board) for m in seed.moves if m.eval_level == "3-ply"
+            and best - m.equity <= window][:checker_eval.DEEPEN_MAX_MOVES]
+    want = set(want) | {tuple(worst)}
+    deep = [m for m in got.moves if m.eval_level == "4-ply"]
+    ref4 = {tuple(m.board): m for m in _ref(a4, board, d1, d2, {}).moves}
+    d4 = max(abs(m.equity - ref4[tuple(m.board)].equity) for m in deep)
+    seedmap = {tuple(m.board): m for m in seed.moves}
+    kept_same = all(m.equity == seedmap[tuple(m.board)].equity
+                    and m.eval_level == seedmap[tuple(m.board)].eval_level
+                    for m in got.moves if m.eval_level != "4-ply")
+    after = [(m.equity, m.equity_diff, m.eval_level) for m in seed.moves]
+    ok = ({tuple(m.board) for m in deep} == want and d4 < EPS and kept_same
+          and len(got.moves) == len(seed.moves) and _groups_ok(got.moves)
+          and before == after and abs(got.moves[0].equity_diff) < EPS)
+    failures += not ok
+    print(f"{'PASS' if ok else 'FAIL'}  seeded 4-ply: {len(deep)} deepened "
+          f"(window {window}, cap {checker_eval.DEEPEN_MAX_MOVES}, +played), "
+          f"max|delta| vs bgsage={d4:.1e}, rest kept, seed untouched")
+
+    # Flag off: the seed is ignored and the flat screen runs as it always has.
+    off = screened(a4, board, d1, d2, seed=seed, seed_window=window)
+    plain = screened(a4, board, d1, d2)
+    ok = ([(tuple(m.board), m.equity) for m in off.moves]
+          == [(tuple(m.board), m.equity) for m in plain.moves])
+    failures += not ok
+    print(f"{'PASS' if ok else 'FAIL'}  seed ignored with GVAN_STAGED=0")
+
+    # A seed at the analyzer's own depth is not shallower: evaluated afresh.
+    with _staged():
+        same = screened(a3, board, d1, d2, seed=seed, seed_window=window)
+        fresh = screened(a3, board, d1, d2)
+    ok = ([(tuple(m.board), m.equity) for m in same.moves]
+          == [(tuple(m.board), m.equity) for m in fresh.moves])
+    failures += not ok
+    print(f"{'PASS' if ok else 'FAIL'}  a same-depth seed is ignored")
+    return failures
+
+
 def main() -> int:
     failures = 0
     failures += check_parity()
@@ -363,6 +493,8 @@ def main() -> int:
     failures += check_fallbacks()
     failures += check_root_routing()
     failures += check_no_legal_moves()
+    failures += check_staged()
+    failures += check_seeded_deepening()
     print(f"\n{'all passed' if not failures else str(failures) + ' failed'}")
     return 1 if failures else 0
 

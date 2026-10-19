@@ -409,15 +409,15 @@ def analyze_ogxm(
                               if thr is not None))
             err_desc = (f"{err_checker}" if err_checker == err_cube
                         else f"checker {err_checker} / cube {err_cube}")
-            print(f"Preset: {p.display} ({base_level_r} screen -> {mid_desc} on close "
+            print(f"Preset: {p.display} [{p.label}] ({base_level_r} screen -> {mid_desc} on close "
                   f"(<= {close_desc}) -> {level} on error (> {err_desc}))")
         elif base_level_r:
             err_desc = (f"{err_checker}" if err_checker == err_cube
                         else f"checker {err_checker} / cube {err_cube}")
-            print(f"Preset: {p.display} ({base_level_r} screen, upgrade to {level} "
+            print(f"Preset: {p.display} [{p.label}] ({base_level_r} screen, upgrade to {level} "
                   f"on error (> {err_desc}))")
         else:
-            print(f"Preset: {p.display} ({level})")
+            print(f"Preset: {p.display} [{p.label}] ({level})")
         print()
 
     if on_progress is not None:
@@ -455,13 +455,27 @@ def analyze_ogxm(
     # floor picks 3 workers, which measured +2.3%.
     #
     # Measured at 4, 8 and 24 cores. 9-21 cores is interpolation.
+    #
+    # RE-SIZED 2026-10-18 for staged screening (`checker_eval`, presets @2). A
+    # decision now works on <=14 moves at 2-ply, <=12 at N-ply and <=8 at the
+    # middle tier, so one worker draws fewer cores and `cpu / 7` left the Studio
+    # short. `world_class`, 3 matches, CLI defaults otherwise:
+    #
+    #     24-core M2 Ultra:  4x0 171.4s, 21.3 cores busy | 8x0 162.6s, 23.0
+    #                        (best) | 6x4 179.4 | 8x3 178.4 | 12x2 182.4 | 24x1 221.2
+    #      8-core M3:        2x0 644.5s (best) | 3x0 661.3 | 4x0 674.6
+    #
+    # Capping threads below every core always lost: it saved 5-7% of the CPU
+    # and idled more than that. Unstaged, 8x0 and 4x0 tie on 24 cores, so the
+    # new count costs nothing when staging is off. Hence `cpu // 3`, floor 2:
+    # 24 -> 8, 8 -> 2, 4 -> 2 (the 8- and 4-core counts are unchanged).
     cpu = os.cpu_count() or 1
     if jobs == 1:
         worker_threads = threads
         n_jobs = 1
     else:
         worker_threads = threads if threads > 0 else 0   # 0 = every core
-        n_jobs = jobs if jobs > 0 else max(2, (cpu + 6) // 7)
+        n_jobs = jobs if jobs > 0 else max(2, cpu // 3)
 
     # Serial builds analyzers once here; parallel workers build their own (they
     # can't cross the process boundary), so skip the main-process build then.
@@ -656,7 +670,9 @@ def analyze_ogxm(
             # strings are already folded into it); to_ogxm_json uses this
             # directly rather than re-parsing a header.
             "timestamp": timestamp,
-            "preset": p.key,
+            # The versioned label (`world_class@2`, `custom/<name>@<digest>`):
+            # what makes two analyses comparable, so what the file records.
+            "preset": p.label,
             "first_pass_level": p.first_pass,
             # Kept scalar for the checker tier (its meaning before the tier
             # became per-kind, so every preset naming one level still reports
@@ -765,7 +781,7 @@ def main() -> None:
     parser.add_argument(
         "--preset", default=None,
         help="Analysis preset ("
-             f"{'|'.join(PRESETS)}; built-ins overridable in presets.yaml). "
+             f"{'|'.join(PRESETS)}; custom presets in presets.yaml; pin a revision with NAME@N, e.g. world_class@2). "
              f"Default: {DEFAULT_PRESET}",
     )
     parser.add_argument(
@@ -789,7 +805,7 @@ def main() -> None:
     parser.add_argument(
         "--jobs", type=int, default=0,
         help="Decision-level parallel worker PROCESSES (Axis B; default: 0 = "
-             "auto = ceil(cpu/7), at least 2). Each checker/cube decision is "
+             "auto = cpu // 3, at least 2). Each checker/cube decision is "
              "analyzed in its own process. Processes rather than threads "
              "because thread scaling is capped by the ~15 candidates in one "
              "decision (~7 cores), not by the GIL; output is byte-identical to "

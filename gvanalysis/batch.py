@@ -141,7 +141,7 @@ def main() -> None:
     parser.add_argument(
         "--preset", default=None,
         help="Analysis preset ("
-             f"{'|'.join(PRESETS)}; built-ins overridable in presets.yaml). "
+             f"{'|'.join(PRESETS)}; custom presets in presets.yaml; pin a revision with NAME@N, e.g. world_class@2). "
              f"Default: {DEFAULT_PRESET}",
     )
     parser.add_argument(

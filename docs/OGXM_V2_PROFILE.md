@@ -202,7 +202,7 @@ holds is split over `key`, `key~1`, `key~2`, ... and joined in that order.
 
 | Key | Scope | Value after `1:` |
 |---|---|---|
-| `x-gammonview-analysis/<analysis_id>` | match | `;`-separated items: `level=<label>` (the block's own level, when it is not the block preset; empty for none), `luck=<label>` (when the block has luck), `pr=<tokens>` (always present; it marks the block as ours), `plies=gnubg` (since gvformat 2.0.1: the block's levels count plies v2's way; see *Counting plies*), `frame=<entries>` (when plies carry a source frame) |
+| `x-gammonview-analysis/<analysis_id>` | match | `;`-separated items: `level=<label>` (the block's own level, when it is not the block preset; empty for none), `luck=<label>` (when the block has luck), `preset=<label>` (the analysis preset that produced the block, e.g. `world_class@2`; only when the block states one), `pr=<tokens>` (always present; it marks the block as ours), `plies=gnubg` (since gvformat 2.0.1: the block's levels count plies v2's way; see *Counting plies*), `frame=<entries>` (when plies carry a source frame) |
 | `x-gammonview-decisions/<analysis_id>` | ply | base64 of `DECS` records for this ply, in kind order. They stand in for `DECS`'s records of the same kind at that ply |
 | `x-gammonview-illegal-ply` | ply | the steps of the illegal play, `from/pips` joined by `,` (empty for a dance) |
 | `x-gammonview-site` | match | `site` |
@@ -249,6 +249,7 @@ decisions where the document says otherwise, each as its `ply_ref` and a letter:
 | site-is-stated | `site` reads back exactly as written, and a document with none reads back with none, whatever its `city` or `platform` |
 | resign-derived | a `resign_value` equal to what the game's points and the cube give is not kept; only a different one is |
 | settle-millionths | a `settle_value` is held to a millionth of a point |
+| preset-label | the preset that produced a block (`world_class@1`, `custom/<name>@<digest>`), carried in its `x-gammonview-analysis` annotation as `preset=`, is in the v2 read-back only; the v1 writer never stored it |
 | block-provenance | what v2's block record states (producer, completeness, coverage, model name, identifier and digest, engine build, currency, cube efficiency, tables, dials, completion time, sources, a level beyond the labels) is in the v2 read-back only; v1 has no field for it |
 | block-currency | a block's `currency` equal to the match's default (match winning chances in a match, cubeful money in a money game) is not a key; match winning chances stated for a money game are written, and read back, as cubeful money |
 | cube-currency | a cube decision's `currency` equal to its block's, or match winning chances in a money game, is not written and reads back absent |

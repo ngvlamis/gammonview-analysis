@@ -142,6 +142,8 @@ def _rule(path: list, key: str, v1, v2, ctx: dict) -> str | None:
         return "met-id"                            # the table a block's equities come from, v2's ANAL
     if key == "mwc_frame" and v1 is None and isinstance(v2, list):
         return "mwc-frame"                         # a source's own MWC frame, in the block annotation
+    if key == "preset" and v1 is None and isinstance(v2, str):
+        return "preset-label"                      # the block's preset, in its annotation; v1 never wrote it
     if key in _V2_BLOCK_KEYS and v1 is None and v2 is not None:
         return "block-provenance"                  # what v2's block record states and v1's has no field for
     return None
@@ -436,6 +438,18 @@ def _block_rules() -> None:
     check(back["analysis_info"]["cube_efficiency"] == 0.6123 and bsub["take_point"] == 0.3125
           and "tables" not in back["analysis_info"],
           "7. probability-places: a cube efficiency and a take point are held to a ten-thousandth; an empty string is no key")
+
+    for label in ("world_class@2", "custom/my deep;x@3f9a1c", "caf\u00e9=1%"):
+        d = C.golden(C.MONEY)
+        d["analysis_info"]["preset"] = label
+        data = write_gvab(d)
+        back = read_gvab(data)
+        check(back["analysis_info"].get("preset") == label and write_gvab(back) == data,
+              f"7. preset: {label!r} travels in the block's annotation, byte-stably")
+    d = C.golden(C.MONEY)
+    d["analysis_info"].pop("preset", None)
+    check("preset" not in read_gvab(write_gvab(d))["analysis_info"],
+          "7. preset: a block that states none reads back with no preset key")
 
 
 def main() -> int:

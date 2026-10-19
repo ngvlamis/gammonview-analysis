@@ -1579,6 +1579,7 @@ export function _v1Block(anal, decisions, plyAt, matchLength, ours = null) {
     const label = 'level' in ours ? ours.level : (blockLevel.preset === undefined ? null : blockLevel.preset);
     if (label !== null) info.eval_level = label;
     if (luckLevels.size && ours.luck) luckLevels = new Set([ours.luck]);
+    if (ours.preset) info.preset = ours.preset;
   } else if (blockLevel.rollout) {
     info.eval_level = 'rollout';
   }
@@ -1914,6 +1915,7 @@ export function _readOgxm2(data, options) {
       };
       if (items.has('level')) ours.level = _unquote(items.get('level')) || null;
       if (items.has('luck')) ours.luck = _unquote(items.get('luck'));
+      if (items.get('preset')) ours.preset = _unquote(items.get('preset'));
       ours.frames = _parseFrames(items.get('frame') || '');
       ours.fields = _blockItems(items);
     }

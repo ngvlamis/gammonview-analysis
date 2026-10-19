@@ -93,20 +93,23 @@ Two independent axes. **Threads fill a decision; processes fill a machine.**
 
 | Flag | Axis | Meaning |
 |---|---|---|
-| `--threads N` | A | How many of a decision's ~15 candidate moves are evaluated at once. `0` (default) = every core. |
-| `--jobs N` | B | Worker **processes**, one decision each. `0` (default) = auto = `ceil(cpu/7)`, at least 2. `1` = serial. |
+| `--threads N` | A | How many of a decision's candidate moves are evaluated at once. `0` (default) = every core. |
+| `--jobs N` | B | Worker **processes**, one decision each. `0` (default) = auto = `cpu // 3`, at least 2. `1` = serial. |
 
 Both axes exist because thread scaling has a ceiling that is not the GIL.
-Analysis elevates about fifteen candidate moves per decision and overlaps them,
-so a single decision draws roughly **seven cores and no more** — enough to fill
-a laptop, not enough to fill a workstation. Processes supply the rest by
-putting several decisions in flight at once.
+Analysis works up through the depths, evaluating at most a dozen or so candidate
+moves at each and overlapping them, so a single decision draws only a few cores
+— enough to keep a laptop busy, not enough to fill a workstation. Processes
+supply the rest by putting several decisions in flight at once.
 
-Defaults are sized from that: `ceil(cpu/7)` workers, each using every core. The
-floor of two is deliberate — the fifteen candidates finish unevenly, so a
-second decision in flight covers the first's tail, which is worth ~4% even on a
-4-core machine and makes timings markedly more stable when something else
-(a browser, say) is competing for cores.
+Defaults are sized from that: `cpu // 3` workers, each using every core — 2 on
+4 or 8 cores, 8 on 24. Measured on a 24-core Mac Studio, that keeps 23 of 24
+cores busy where 4 workers left about 3 idle; on an 8-core laptop, 3 or 4
+workers were no faster than 2. Capping threads per worker always lost. The
+floor of two is deliberate — candidates finish unevenly, so a second decision
+in flight covers the first's tail, which is worth ~4% even on a 4-core machine
+and makes timings markedly more stable when something else (a browser, say) is
+competing for cores.
 
 `--jobs 1` forces the old serial path. It costs about 4% on 8 cores and 44% on
 24, because one decision cannot fill a large machine.
@@ -354,10 +357,26 @@ slows measurably as it heats — a MacBook Air drifted 2% per hour under
 sustained analysis — so compare runs taken at the same temperature, not an hour
 apart.
 
+### Preset versions
+
+Every analysis records which preset produced it, with a version: `world_class@2`
+is revision 2 of World Class. A built-in's revision changes whenever anything
+that can move its results changes, so two analyses with the same label, run on
+the same engine version, were produced the same way. A program that must not
+drift -- a league, a title-granting body -- can pin a revision:
+
+```bash
+uv run gvan-match match.xg --preset world_class@2   # refused if this install runs another revision
+```
+
+A pin is refused, not quietly upgraded, when the installed preset is a different
+revision. Reproducing an older revision means installing the release that shipped
+it.
+
 ### Custom presets
 
-Built-ins always exist. Optional `presets.yaml` overrides layer on top, from two
-locations, project-local winning over global:
+Built-ins always exist and cannot be changed. Optional `presets.yaml` files add
+your own presets, from two locations, project-local winning over global:
 
 1. `~/.config/bgsage/presets.yaml`
 2. `./presets.yaml`
@@ -368,7 +387,11 @@ uv run gvan-match --init-presets --global   # write the config-dir one
 uv run gvan-match --init-presets --force    # overwrite an existing file
 ```
 
-Overrides merge into a built-in field-by-field, or add new presets; `default:`
-sets which preset is used when `--preset` is omitted. Delete the file to restore
-defaults. A malformed file is skipped with a warning, and the other layer still
-loads.
+A custom preset needs a name of its own -- lowercase letters, digits, `_` and
+`-`. An entry that reuses a built-in's name or alias is skipped with a warning,
+since a built-in's name has to mean the same thing everywhere. A custom preset is
+recorded as `custom/<name>@<digest>`, where the digest is of its whole
+definition: the same definition always gets the same label, on any machine, and
+editing it gives it a new one. `default:` sets which preset is used when
+`--preset` is omitted. Delete the file to restore defaults. A malformed file is
+skipped with a warning, and the other layer still loads.

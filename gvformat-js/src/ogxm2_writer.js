@@ -2072,6 +2072,7 @@ export function _encode(ogxm) {
         || [...extra.values()].some((recs) => recs.some(([kind]) => kind === KIND_ROLL))) {
       items.push(`luck=${_quote(luckLabel, _SAFE)}`);
     }
+    if (typeof info.preset === 'string' && info.preset) items.push(`preset=${_quote(info.preset, _SAFE)}`);
     items.push(`pr=${tokens.join(',')}`);
     items.push(`${GV_ITEM_PLIES}=${GV_PLIES_GNUBG}`);
     if (frames.length) items.push(`frame=${frames.join(',')}`);

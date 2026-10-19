@@ -243,9 +243,10 @@ experiment: how the presets split on checker play versus the cube, why rolling
 out *costs* agreement with XG, and the evidence that the residual disagreement
 is systematic rather than noise.
 
-Presets live in `gvanalysis/presets.py` and are overridable via `presets.yaml`.
+Presets live in `gvanalysis/presets.py`; every analysis records the preset's
+version (`world_class@2`), and custom presets can be added via `presets.yaml`.
 See **[`docs/CLI.md`](docs/CLI.md)** for the full reference — every flag, how the
-tiers fire, parallelism, and preset overrides.
+tiers fire, parallelism, preset versions and custom presets.
 
 ## Documentation
 

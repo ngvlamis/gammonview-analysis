@@ -698,9 +698,16 @@ def _eval_checker_decision(dec: dict, ctx: _EvalCtx) -> _DecResult:
                     # (used below to re-evaluate the played move at the
                     # same depth). Defaults to the authoritative level.
                     tier_analyzer = ctx.analyzer
-                    top2_gap = abs(best_eq_b - float(cheap_moves[1].equity))
+                    # Best vs the next move evaluated at the SAME depth. A
+                    # shallower row is a different estimator, so a lone deep
+                    # move is not "close" to anything -- XG's rule too: with no
+                    # other move in its window at 3-ply, it stays at 3-ply.
+                    top_level = cheap_moves[0].eval_level
+                    peers = [m for m in cheap_moves[1:] if m.eval_level == top_level]
+                    top2_gap = (abs(best_eq_b - float(peers[0].equity))
+                                if peers else float("inf"))
 
-                    def play_at(analyzer):
+                    def play_at(analyzer, seed=None):
                         return _checker_play(
                             analyzer,
                             dec["board"], die1, die2,
@@ -710,6 +717,8 @@ def _eval_checker_decision(dec: dict, ctx: _EvalCtx) -> _DecResult:
                             away2=dec["away2"],
                             is_crawford=dec["is_crawford"],
                             force_boards=[dec["board_played"]],
+                            seed=seed,
+                            seed_window=close_thr if seed is not None else None,
                         )
 
                     def played_error(move_list) -> float | None:
@@ -741,7 +750,10 @@ def _eval_checker_decision(dec: dict, ctx: _EvalCtx) -> _DecResult:
                         # 3-tier: near-tied decision -> middle tier. The top
                         # moves are ~equal, so depth is what settles it and a
                         # rollout would be waste.
-                        full_result = play_at(ctx.mid_analyzer_checker)
+                        # The screen's own result seeds the middle tier, which
+                        # (staged) deepens only the screen's close moves.
+                        full_result = play_at(ctx.mid_analyzer_checker,
+                                              seed=cheap_result)
                         moves = list(full_result.moves)
                         checker_upgraded = True
                         tier_analyzer = ctx.mid_analyzer_checker

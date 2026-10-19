@@ -14,7 +14,7 @@ The expectations below are pinned deliberately, never edited to make a run pass.
 Each refusal is a v2 item with a reason, and a conversion that starts failing is
 a regression in what we write.
 
-One golden is expected to be refused, and a second shape is known but not pinned
+Before ``@2``, one golden was expected to be refused, and a second shape is known but not pinned
 here -- both are the same subject: how an illegal play is recorded. See
 ``samples/README.md`` for the three distinct shapes the corpus keeps.
 
@@ -35,6 +35,17 @@ here -- both are the same subject: how an illegal play is recorded. See
   it -- the refusal was found by analysing every ``samples/mat/*.mat`` and
   converting the results, and it stays unpinned until the writer reaches it or a
   golden is added for that match.
+
+Since the presets' ``@2`` revisions every golden is refused with
+``alternatives``, and that is v1's limit, not a fault in what we write. The
+staged screen leaves a top-ten list of 3-ply plays followed by 2-ply plays.
+Our v1 writer stores each alternative's level, but the reference's frozen v1
+reader gives every alternative the decision's level, so the 2-ply tail reads
+as 3-ply plays out of equity order and A1 breaks. Written as v2, which keeps
+each alternative's level, the same content passes the reference.
+``test_ogxm2_writer`` checks that on every golden: it loads, replays and
+re-encodes to the same bytes. So the ``ok`` branch below no longer runs on any
+golden. It stays for a v1 round trip that can still convert.
 
 Needs the reference library; skips without one. See ``tests/ogxm2_oracle.py``.
 
@@ -59,11 +70,11 @@ _GOLDEN = _REPO_ROOT / "tests" / "golden"
 #: match stem -> the rule the reference names, or "ok". Pinned; see the module
 #: docstring before changing a row.
 _EXPECTED = {
-    "3WNK_g1Z-PLsh_HyvQ5j4a": "ok",
+    "3WNK_g1Z-PLsh_HyvQ5j4a": "alternatives",
     "5nqfGw9bWG3deTaU": "alternatives",
-    "B4_SrGcsKAQmoTyHlgJCbM": "ok",
-    "MYdvw1qGuyaRUH__": "ok",
-    "baR-U643iUDpvzTC": "ok",
+    "B4_SrGcsKAQmoTyHlgJCbM": "alternatives",
+    "MYdvw1qGuyaRUH__": "alternatives",
+    "baR-U643iUDpvzTC": "alternatives",
 }
 
 _checks = 0

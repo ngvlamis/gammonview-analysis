@@ -218,13 +218,30 @@ in step when a flag changes; the rationale belongs only here.
   two-pass scheme: a cheap first pass screens every decision, a stronger second
   pass runs only on an error (the played checker move or cube action disagrees
   with the first pass). Single-pass presets judge everything at the first pass.
-  The five built-in presets live in `gvanalysis/presets.py` (always available). Optional
-  `presets.yaml` overrides are layered on top from two locations, project-local
-  winning over global: `~/.config/bgsage/presets.yaml` then `./presets.yaml`.
-  Create either with `--init-presets` (add `--global` for the config-dir one).
-  Overrides merge into a built-in by key (field-by-field) or add new presets;
-  `default:` sets the default. Restore defaults by deleting the file(s); a
-  malformed file is skipped with a warning (the other layer still loads).
+  The five built-in presets live in `gvanalysis/presets.py` (always available)
+  and **cannot be overridden**. Optional `presets.yaml` files add custom presets
+  from two locations, project-local winning over global:
+  `~/.config/bgsage/presets.yaml` then `./presets.yaml`. Create either with
+  `--init-presets` (add `--global` for the config-dir one). An entry reusing a
+  built-in's name or alias is skipped with a warning; `default:` sets the
+  default. Restore defaults by deleting the file(s); a malformed file is skipped
+  with a warning (the other layer still loads).
+
+  **A preset label names one method.** Output records `Preset.label`:
+  `world_class@2` for a built-in, `custom/<name>@<digest>` for a user preset
+  (digest of its whole definition). The point is comparability -- a user, or a
+  title-granting body, must be able to tell and require that analyses used the
+  same version; it is not an anti-tampering measure. `Preset.definition()`
+  includes the screening constants from `checker_eval.screening()`, so any
+  change that can move results changes the digest, and `_REVISIONS` pins the
+  digest of every shipped revision: **`test_presets` fails until a changed
+  definition appends a new revision -- append a row, never edit one.** An
+  environment override (`GVAN_STAGED`, `GVAN_NO_SCREEN`) shows as
+  `world_class@2+<digest>` rather than running under the real label, and
+  `--preset world_class@2` is refused unless that exact revision is what runs.
+  Old revisions are listed, not runnable. The label travels in the block's
+  `x-gammonview-analysis` annotation (`preset=`); before that it was not
+  written to `.gvab` at all, so older files carry no preset.
 
   | Preset (aliases) | 1st pass | 2nd pass | XG equivalent |
   |---|---|---|---|
@@ -455,7 +472,10 @@ legal — our `.mat` path put bar entries last) and the duplicate played move.
 
 `tests/test_ogxm2_reference.py` is the older ratchet: the reference `v1_to_v2`
 over each golden's content written as v1, against a **pinned** table. Never edit
-a row to make a run pass. The goldens themselves are v2 now.
+a row to make a run pass. The goldens themselves are v2 now. Since the staged screen every row
+reads `alternatives`: a top-ten list mixes 3-ply and 2-ply plays, and the
+reference's frozen v1 reader gives every alternative the decision's level.
+That is v1's limit; the v2 files we write pass (`test_ogxm2_writer`).
 
 The two v1 parity suites, `test_gvab_writer` and `test_ogxm_conformance`,
 compare against libogxm's *v1* writer and projection, and skip — saying so —
@@ -523,13 +543,40 @@ label. The best move agrees with bgsage's full-width answer on every decision
 measured — 4 differences in 1567, all exact ties — while evaluating 1.8x fewer
 moves.
 
-Three constants tune it, all documented with their measurements in the module:
-`ELEVATE_THRESHOLD` / `ELEVATE_MAX_MOVES` (the accuracy filter) and
-`ELEVATE_MIN_MOVES` (a display-quality floor, so the top ten a viewer reads is
-always N-ply). Rollout tiers, cubeless and 1-ply analyzers, and any bgsage whose
-internals have moved all fall back to `analyzer.checker_play` unchanged;
-`GVAN_NO_SCREEN=1` forces that fallback everywhere, which is how the A/B
-measurements above were taken.
+**The screen is staged, as XG's is** (since the presets' `@2` revisions). A
+decision goes 1-ply on every move -> 2-ply on the top `STAGE_SCREEN_MOVES` (14:
+the display floor, paid at the cheapest real depth), widened to every move
+within `STAGE_SCREEN_WINDOW` (0.2) of the 1-ply leader on a crowded field, at
+most `STAGE_SCREEN_CAP` (40) -> N-ply on the 2-ply moves
+within `STAGE_THRESHOLD` (0.16) of the leader, at most `STAGE_MAX_MOVES` (12),
+plus the played move. A middle tier is handed the screen's result (`seed=`) and
+deepens only its moves within `close_threshold` of the best, at most
+`DEEPEN_MAX_MOVES` (8) -- XG's search interval, "4 moves within 0.080 at
+3-ply" -- keeping the screen's numbers for the rest. `game_eval` measures the
+top-two gap only between moves at the same depth, so a lone deep move is never
+"close" (XG's rule: nothing in the window, it stays at 3-ply). Why: 4-ply was
+90% of world_class's non-rollout checker CPU, re-screened from 1-ply on 14+
+moves; staged it is 36% of that cost, PR identical to two decimals on 24
+players, 8 of 2,323 best moves different and every one a tie, and
+world_class 1.31x faster end to end (727s -> 554s, 12 matches), 1.45x on the
+8-core M3. The XG facts behind it (window AND cap, no display floor -- a
+quarter of XG World Class's listed moves are 1-ply) were read off the corpus.
+A fixed 14 ignores how crowded the field is: on 10,715 decisions the 3-ply best
+ranked 14th or worse at 1-ply on 0.19% of them, and the window recovers all that
+loss (0.175 -> 0.130 total equity, the floor of sending every move to 2-ply) for
+1.4 more 2-ply evaluations a decision. It went into `@2` before `@2` shipped.
+`GVAN_STAGED=0` restores the flat screen for A/B work, and the preset label
+then says `@2+<digest>`.
+
+The flat screen's constants, still used at 2-ply and with `GVAN_STAGED=0`, are
+documented with their measurements in the module: `ELEVATE_THRESHOLD` /
+`ELEVATE_MAX_MOVES` (the accuracy filter) and `ELEVATE_MIN_MOVES` (a
+display-quality floor). **Every one of these constants is part of a preset's
+definition** (`checker_eval.screening()` feeds `Preset.digest()`), so changing
+one fails `test_presets` until the affected presets get a new revision. Rollout
+tiers, cubeless and 1-ply analyzers, and any bgsage whose internals have moved
+all fall back to `analyzer.checker_play` unchanged; `GVAN_NO_SCREEN=1` forces
+that fallback everywhere, which is how the A/B measurements above were taken.
 
 **Because it duplicates a bgsage call site, it inherits that call's signature.**
 bgsage 2.0 added `root_board=` to `cubeful_probs_and_equity_nply` — Stage 11's
