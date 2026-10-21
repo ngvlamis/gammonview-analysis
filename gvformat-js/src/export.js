@@ -855,6 +855,23 @@ function _cubeResponseAnalysis(entry, noDoubleEquity) {
   return analysis;
 }
 
+// The analysis of an accepted resignation (a `resign` entry), for the game's
+// resign ply. `resign_error` is the resigner's signed error (positive: they
+// conceded more than the position was worth), `take_resign_error` the
+// acceptor's, so exactly one can be an error and `equity_loss` is its size.
+function _resignAnalysis(entry) {
+  const analysis = {
+    resign_error: entry.resign_error,
+    take_resign_error: entry.take_resign_error,
+    equity_loss: Math.round(Math.max(0.0, entry.lost_equity || 0.0) * 10000) / 10000,
+    decision: Boolean(entry.counted),
+  };
+  if ("probs" in entry) analysis.eval = _probsToEval(entry.probs);
+  const lvl = _normalizeEvalLevel(entry.eval_level);
+  if (lvl != null) analysis.eval_level = lvl;
+  return analysis;
+}
+
 // ---------------------------------------------------------------------------
 // Game-end ply
 // ---------------------------------------------------------------------------
@@ -1049,10 +1066,13 @@ function _convertGame(game, playerWhite, playerBlack, matchLength, basePly) {
   let board = [..._STARTING_BOARD_P1];
   let pendingNdEquity = null;
   const turn = new _TurnState();
+  let resignEntry = null;
 
   for (const entry of game.moves) {
     const kind = entry.kind;
-    if (kind === "checker") {
+    if (kind === "resign") {            // judged on the game's own resign ply
+      resignEntry = entry;
+    } else if (kind === "checker") {
       const boardBefore = entry.board_before;
       plies.push(_convertCheckerPly(
         entry, playerWhite, scoreWhite, scoreBlack,
@@ -1109,12 +1129,16 @@ function _convertGame(game, playerWhite, playerBlack, matchLength, basePly) {
       gameState: endState, scoreWhite, scoreBlack,
       matchLength, crawford: isCrawford, moveId: turn.moveId,
     };
-    plies.push({
+    const endPly = {
       color: actorIsWhite ? 1 : 0,
       action_id: actionId,
       ogid_before: _ogid(board, { onRoll, ...endKwargs }),
       ogid_after: _ogid(board, { onRoll: actorIsWhite ? "B" : "W", ...endKwargs }),
-    });
+    };
+    if (resignEntry != null && RESIGN_ACTIONS.has(actionId)) {
+      endPly.analysis = _resignAnalysis(resignEntry);
+    }
+    plies.push(endPly);
     winnerCode = winnerIsWhite ? 0 : 1;
   } else {
     winnerCode = 255;

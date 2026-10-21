@@ -249,6 +249,7 @@ decisions where the document says otherwise, each as its `ply_ref` and a letter:
 | site-is-stated | `site` reads back exactly as written, and a document with none reads back with none, whatever its `city` or `platform` |
 | resign-derived | a `resign_value` equal to what the game's points and the cube give is not kept; only a different one is |
 | settle-millionths | a `settle_value` is held to a millionth of a point |
+| resign-level | a resignation's level labels (`eval_level`, `ply`), where it was judged at another level than its block's, are in the v2 read-back only; v1's resign record has no level |
 | preset-label | the preset that produced a block (`world_class@1`, `custom/<name>@<digest>`), carried in its `x-gammonview-analysis` annotation as `preset=`, is in the v2 read-back only; the v1 writer never stored it |
 | block-provenance | what v2's block record states (producer, completeness, coverage, model name, identifier and digest, engine build, currency, cube efficiency, tables, dials, completion time, sources, a level beyond the labels) is in the v2 read-back only; v1 has no field for it |
 | block-currency | a block's `currency` equal to the match's default (match winning chances in a match, cubeful money in a money game) is not a key; match winning chances stated for a money game are written, and read back, as cubeful money |

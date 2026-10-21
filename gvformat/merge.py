@@ -43,9 +43,11 @@ def _decision_plies(game: dict) -> list[dict]:
     the pairing stays 1:1: ``our`` has a take where the base has a beaver.
 
     A beaver is answered at most once: the raccoon that follows it answers the
-    beaver, not a double, and the engine has no decision for it. Terminal plies
-    (24-30) hold no decision at all, and a set-position ply with *no* dice states
-    where a game starts rather than a turn taken."""
+    beaver, not a double, and the engine has no decision for it. A resignation
+    (27, 28) is a decision -- whether to concede, and whether to accept -- and
+    both documents end a resigned game on one. The other terminal plies (24-26,
+    29, 30) hold no decision at all, and a set-position ply with *no* dice
+    states where a game starts rather than a turn taken."""
     out = []
     pending = False                  # a double that has not been answered
     for ply in game.get("plies") or []:
@@ -62,7 +64,8 @@ def _decision_plies(game: dict) -> list[dict]:
             if pending:
                 out.append(ply)
             pending = False
-        elif 0 <= aid <= 20 or (aid == 31 and ply.get("d1") is not None):
+        elif (0 <= aid <= 20 or aid in (27, 28)
+              or (aid == 31 and ply.get("d1") is not None)):
             out.append(ply)
     return out
 

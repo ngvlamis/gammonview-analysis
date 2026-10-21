@@ -142,6 +142,8 @@ def _rule(path: list, key: str, v1, v2, ctx: dict) -> str | None:
         return "met-id"                            # the table a block's equities come from, v2's ANAL
     if key == "mwc_frame" and v1 is None and isinstance(v2, list):
         return "mwc-frame"                         # a source's own MWC frame, in the block annotation
+    if key in ("eval_level", "ply") and v1 is None and ctx.get("resign"):
+        return "resign-level"                      # v1's resign record has no level
     if key == "preset" and v1 is None and isinstance(v2, str):
         return "preset-label"                      # the block's preset, in its annotation; v1 never wrote it
     if key in _V2_BLOCK_KEYS and v1 is None and v2 is not None:
@@ -205,7 +207,10 @@ def _context_walk(v1: dict, v2: dict, unexplained: list, used: dict) -> None:
                 continue
             for k, (ia, ib) in enumerate(_ply_blocks(p1, p2)):
                 level = (infos[k] if k < len(infos) else {}).get("eval_level")
-                _compare(ia, ib, ["games", gi, "plies", pi, k], {"block_level": level},
+                _compare(ia, ib, ["games", gi, "plies", pi, k],
+                         {"block_level": level,
+                          "resign": p1.get("action_id") in (R.ACTION_RESIGN_GAME,
+                                                           R.ACTION_RESIGN_MATCH)},
                          unexplained, used)
             rest1 = {k: v for k, v in p1.items() if k not in ("analysis", "analyses")}
             rest2 = {k: v for k, v in p2.items() if k not in ("analysis", "analyses")}

@@ -41,9 +41,11 @@ import { MAX_ANALYSES } from './constants.js';
  *  the pairing stays 1:1: `our` has a take where the base has a beaver.
  *
  *  A beaver is answered at most once: the raccoon that follows it answers the
- *  beaver, not a double, and the engine has no decision for it. Terminal plies
- *  (24-30) hold no decision at all, and a set-position ply with *no* dice states
- *  where a game starts rather than a turn taken. */
+ *  beaver, not a double, and the engine has no decision for it. A resignation
+ *  (27, 28) is a decision -- whether to concede, and whether to accept -- and
+ *  both documents end a resigned game on one. The other terminal plies (24-26,
+ *  29, 30) hold no decision at all, and a set-position ply with *no* dice
+ *  states where a game starts rather than a turn taken. */
 function _decisionPlies(game) {
   const out = [];
   let pending = false;                   // a double that has not been answered
@@ -59,7 +61,8 @@ function _decisionPlies(game) {
     } else if (aid === 32 || aid === 33) {
       if (pending) out.push(ply);
       pending = false;
-    } else if ((aid >= 0 && aid <= 20) || (aid === 31 && ply.d1 !== null && ply.d1 !== undefined)) {
+    } else if ((aid >= 0 && aid <= 20) || aid === 27 || aid === 28   // 27/28: a resignation
+               || (aid === 31 && ply.d1 !== null && ply.d1 !== undefined)) {
       out.push(ply);
     }
   }

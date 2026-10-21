@@ -1481,7 +1481,8 @@ def _cube_ply(d: dict, action: int, block_level: dict, frame, ours: bool = False
     return analysis
 
 
-def _resign(d: dict, frame, level: dict) -> dict:
+def _resign(d: dict, frame, block_level: dict, ours: bool = False) -> dict:
+    level = _resolve(block_level, d.get("level"))
     to_delta = frame[1]
     analysis: dict = {
         "resign_error": to_delta(d.get("resign_error", 0.0)),
@@ -1491,6 +1492,13 @@ def _resign(d: dict, frame, level: dict) -> dict:
     }
     if "probs" in d:
         analysis["eval"] = _eval_from_probs(*d["probs"])
+    # The level's labels, as a cube ply's (`_cube_ply`) -- but only a level the
+    # record states: a resignation the document gave no label reads back with
+    # none, which is also what v1 (whose record has no level) gives.
+    if ours and "level" in d and "preset" in level:
+        analysis["eval_level"] = level["preset"]
+    if "cube_ply" in level and level["cube_ply"] != block_level.get("cube_ply"):
+        analysis["ply"] = level["cube_ply"]
     for k in RESIGN_KEYS:
         if k in d:
             analysis[k] = d[k]
@@ -1632,7 +1640,7 @@ def _v1_block(anal: dict, decisions: list[dict], ply_at: list, match_length: int
             obj[_LV_LUCK] = lv
             luck_levels.add(_label(lv, mine))
         elif kind == KIND_RESIGN and action in (ACTION_RESIGN_GAME, ACTION_RESIGN_MATCH):
-            block_obj[key] = _resign(d, frame, _resolve(block_level, d.get("level")))
+            block_obj[key] = _resign(d, frame, block_level, mine)
 
     if mine:
         ref_of = {k: i for i, (k, _p) in enumerate(ply_at)}

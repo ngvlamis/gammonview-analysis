@@ -45,6 +45,10 @@ const _ACTION_SET_POSITION = 31;
 
 const _CUBE_ACTION_IDS = new Set([21, 22, 23, 32]);
 
+// Resign-game / resign-match plies: an accepted resignation, a decision for
+// both players when it is analyzed (see `_accumulate_ply`).
+const _RESIGN_ACTION_IDS = new Set([27, 28]);
+
 const _COLOR_NAME = { 1: "white", 0: "black" };
 
 // ---------------------------------------------------------------------------
@@ -248,6 +252,27 @@ function _accumulate_ply(ply, totals, illegal_counter) {
       if (emwc != null) {
         t.error_mwc += emwc;
         t.has_mwc = true;
+      }
+    }
+    return;
+  }
+
+  if (_RESIGN_ACTION_IDS.has(action_id)) {
+    // An accepted resignation is one decision for each side: the resigner's
+    // to concede, the acceptor's to accept. Its two signed errors are equal
+    // and opposite, so at most one side is charged, by its positive part.
+    if (analysis.decision) {
+      const other = totals[_COLOR_NAME[1 - ply.color]];
+      for (const [side, err] of [[t, analysis.resign_error],
+                                 [other, analysis.take_resign_error]]) {
+        const loss = Math.max(0.0, err || 0.0);
+        side.error += loss;
+        side.decisions += 1;
+        const emwc = _eqDeltaToMwc(ply, loss);
+        if (emwc != null) {
+          side.error_mwc += emwc;
+          side.has_mwc = true;
+        }
       }
     }
     return;

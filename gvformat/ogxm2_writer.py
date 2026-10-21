@@ -1289,7 +1289,10 @@ def _block_records(match: _Match, select, ctx: _Ctx):
                 fields[0] = _varint(_uint_field(a["correct_value"], "correct_value"))
             if "eval" in a:
                 fields[3] = _probs(a["eval"])
-            override, _eff = _tier(ctx.block_eff, a.get("level"))
+            # Labelled as a cube ply is: a resignation is judged by the same
+            # pre-roll evaluation, so its level has the same two labels.
+            override, _eff = _tier(ctx.block_eff, a.get("level"),
+                                   preset=a.get("eval_level"), cube_ply=a.get("ply"))
             if override:
                 fields[5] = _level_bytes(override)
             ok = True

@@ -21,7 +21,7 @@
   },
   "resigned": {
     "length": 607,
-    "settled_sha256": "6da5f4dabf2a32f1b9dcd815964b745c8e8f4a25e814bf752d9d38c75bbaa657",
+    "settled_sha256": "49eef5b1fd6c6a60d6ed93b0087dc72b9ceec59a36b7436b09b2ca95621a40a4",
     "sha256": "fcfc15c84dc1f0dd6e42ede8d9c9ad2e9a1c8e6e6ed26cbe75feb49558a65dbf"
   },
   "rich-money": {

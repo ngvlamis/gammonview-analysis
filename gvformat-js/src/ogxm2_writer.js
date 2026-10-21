@@ -1437,7 +1437,10 @@ function _blockRecords(match, select, ctx) {
       };
       if (_present(a.correct_value)) fields[0] = _varint(_uintField(a.correct_value, 'correct_value'));
       if ('eval' in a) fields[3] = _probs(a.eval);
-      const [override] = _tier(ctx.blockEff, _nn(a.level));
+      // Labelled as a cube ply is: a resignation is judged by the same
+      // pre-roll evaluation, so its level has the same two labels.
+      const [override] = _tier(ctx.blockEff, _nn(a.level),
+                               { preset: _nn(a.eval_level), cube_ply: a.ply || null });
       if (Object.keys(override).length) fields[5] = _levelBytes(override);
       let ok = true;
       if (_present(a.producer_ref)) {

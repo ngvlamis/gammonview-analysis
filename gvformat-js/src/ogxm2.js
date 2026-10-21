@@ -1390,7 +1390,8 @@ function _cubePly(d, action, blockLevel, frame, ours = false) {
   return analysis;
 }
 
-function _resign(d, frame, level) {
+function _resign(d, frame, blockLevel, ours = false) {
+  const level = _resolve(blockLevel, d.level);
   const analysis = {
     resign_error: frame.toDelta(d.resign_error || 0),
     take_resign_error: frame.toDelta(d.take_resign_error || 0),
@@ -1398,6 +1399,15 @@ function _resign(d, frame, level) {
     decision: false,
   };
   if (d.probs) analysis.eval = _evalFromProbs(...d.probs);
+  // The level's labels, as a cube ply's (`_cubePly`) -- but only a level the
+  // record states: a resignation the document gave no label reads back with
+  // none, which is also what v1 (whose record has no level) gives.
+  if (ours && d.level !== undefined && level.preset !== undefined) {
+    analysis.eval_level = level.preset;
+  }
+  if (level.cube_ply !== undefined && level.cube_ply !== blockLevel.cube_ply) {
+    analysis.ply = level.cube_ply;
+  }
   for (const k of RESIGN_KEYS) if (d[k] !== undefined) analysis[k] = d[k];
   analysis[_LV] = [KIND_RESIGN, level];
   return analysis;
@@ -1549,7 +1559,7 @@ export function _v1Block(anal, decisions, plyAt, matchLength, ours = null) {
       luckLevels.add(_label(lv, mine));
     } else if (d.kind === KIND_RESIGN
                && (action === ACTION_RESIGN_GAME || action === ACTION_RESIGN_MATCH)) {
-      blockObj.set(key, _resign(d, frame, _resolve(blockLevel, d.level)));
+      blockObj.set(key, _resign(d, frame, blockLevel, mine));
     }
   }
 

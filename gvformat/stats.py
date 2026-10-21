@@ -137,6 +137,10 @@ _ACTION_SET_POSITION = 31
 #: there; the raccoon after it answers the beaver and holds no decision).
 _CUBE_ACTION_IDS = frozenset({21, 22, 23, 32})
 
+#: Resign-game / resign-match plies: an accepted resignation, a decision for
+#: both players when it is analyzed (see ``_accumulate_ply``).
+_RESIGN_ACTION_IDS = frozenset({27, 28})
+
 #: color -> player key, per the White = Player 1 / Black = Player 2 convention.
 _COLOR_NAME = {1: "white", 0: "black"}
 
@@ -348,11 +352,28 @@ def _accumulate_ply(ply: dict, totals: dict, illegal_counter: list) -> None:
                 t.has_mwc = True
         return
 
+    if action_id in _RESIGN_ACTION_IDS:
+        # An accepted resignation is one decision for each side: the resigner's
+        # to concede, the acceptor's to accept. Its two signed errors are equal
+        # and opposite, so at most one side is charged, by its positive part.
+        if analysis.get("decision"):
+            other = totals[_COLOR_NAME[1 - ply["color"]]]
+            for side, err in ((t, analysis.get("resign_error")),
+                              (other, analysis.get("take_resign_error"))):
+                loss = max(0.0, err or 0.0)
+                side.error += loss
+                side.decisions += 1
+                emwc = _eq_delta_to_mwc(ply, loss)
+                if emwc is not None:
+                    side.error_mwc += emwc
+                    side.has_mwc = True
+        return
+
     is_restated_play = (action_id == _ACTION_SET_POSITION
                         and ply.get("d1") is not None)
     if (action_id is None
             or (action_id > _MAX_CHECKER_ACTION_ID and not is_restated_play)):
-        return  # game-over/match-over/final/resign/forfeit ply: not a PR/luck decision
+        return  # game-over/match-over/final/forfeit ply: not a PR/luck decision
 
     # Checker-move ply (or a restated play -- see _ACTION_SET_POSITION).
     if analysis.get("decision"):

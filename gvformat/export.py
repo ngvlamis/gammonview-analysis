@@ -1060,6 +1060,27 @@ def _cube_analysis_ply(analysis: dict, base_ply: int) -> None:
         analysis["ply"] = depth
 
 
+def _resign_analysis(entry: dict, base_ply: int = 0) -> dict:
+    """The analysis of an accepted resignation (a ``resign`` entry), for the
+    game's resign ply. ``resign_error`` is the resigner's signed error (positive:
+    they conceded more than the position was worth), ``take_resign_error`` the
+    acceptor's (positive: they took less), so exactly one of the two can be an
+    error and ``equity_loss`` is its size."""
+    analysis = {
+        "resign_error": entry["resign_error"],
+        "take_resign_error": entry["take_resign_error"],
+        "equity_loss": round(max(0.0, entry.get("lost_equity", 0.0)), 4),
+        "decision": bool(entry.get("counted", False)),
+    }
+    if "probs" in entry:
+        analysis["eval"] = _probs_to_eval(entry["probs"])
+    lvl = _normalize_eval_level(entry.get("eval_level"))
+    if lvl is not None:
+        analysis["eval_level"] = lvl
+    _cube_analysis_ply(analysis, base_ply)
+    return analysis
+
+
 def _cube_decision_analysis(entry: dict, base_ply: int = 0) -> dict | None:
     # An unanalyzed cube-decision entry (e.g. from the engine-free mat->OGXM
     # path) carries no analysis payload; there is nothing to emit.
@@ -1337,9 +1358,13 @@ def _convert_game(game: dict, player_white: str, player_black: str, match_length
     board = list(_STARTING_BOARD_P1)
     pending_nd_equity: float | None = None
     turn = _TurnState()
+    resign_entry: dict | None = None
 
     for entry in game["moves"]:
         kind = entry["kind"]
+        if kind == "resign":            # judged on the game's own resign ply
+            resign_entry = entry
+            continue
         if kind == "checker":
             board_before = entry["board_before"]
             ply = _convert_checker_ply(
@@ -1427,6 +1452,8 @@ def _convert_game(game: dict, player_white: str, player_black: str, match_length
             "ogid_after": _ogid(
                 board, on_roll=("B" if actor_is_white else "W"), **end_kwargs),
         }
+        if resign_entry is not None and action_id in RESIGN_ACTIONS:
+            end_ply["analysis"] = _resign_analysis(resign_entry, base_ply)
         plies.append(end_ply)
         winner_code = 0 if winner_is_white else 1
     else:
