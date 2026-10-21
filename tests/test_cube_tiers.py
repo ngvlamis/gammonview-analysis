@@ -4,7 +4,7 @@
 """A 3-tier preset tiers cube decisions, not just checker plays.
 
 `mid_pass` + the thresholds used to gate the middle tier on checker plays
-alone, so under world_class_fast a cube sitting right on its double point was
+alone, so under the (since retired) world_class_fast a cube sitting right on its double point was
 judged at the 3-ply screen -- less depth than a near-tied checker play got --
 unless the player happened to get it wrong, in which case it jumped straight to
 the rollout. Borderline is exactly where the screen is least reliable, so the
@@ -244,7 +244,7 @@ def main() -> int:
     got, log = tier_used(0.20, 0.19, 1.0, True, "take", mid_equities=(0.20, 0.195, 1.0))
     check("mid tier confirms borderline -> stays", got, "4ply")
 
-    # world_class_fast names second_pass's own level in mid_pass, so the middle
+    # A preset may name second_pass's own level in mid_pass, so the middle
     # tier IS the authoritative analyzer. Re-running it would buy the same
     # object's same answer twice; the identity guard must skip it.
     got, log = tier_used(0.20, 0.19, 1.0, True, "take", mid_is_second=True)

@@ -460,8 +460,8 @@ def _eval_cube_decision(dec: dict, ctx: _EvalCtx) -> _DecResult:
                 #
                 # Skipped when the middle tier IS the authoritative analyzer --
                 # a preset may name second_pass's level in mid_pass to mean
-                # "borderline as well as wrong earns the top tier", as
-                # world_class_fast does for cubes. Analyzers are memoized by
+                # "borderline as well as wrong earns the top tier", as the
+                # retired world_class_fast did for cubes. Analyzers are memoized by
                 # level (see match.py), so identity is exact, and re-running
                 # would buy the same object's same answer twice.
                 if ctx.mid_analyzer_cube is not ctx.analyzer and verdict(

@@ -218,7 +218,7 @@ in step when a flag changes; the rationale belongs only here.
   two-pass scheme: a cheap first pass screens every decision, a stronger second
   pass runs only on an error (the played checker move or cube action disagrees
   with the first pass). Single-pass presets judge everything at the first pass.
-  The five built-in presets live in `gvanalysis/presets.py` (always available)
+  The four built-in presets live in `gvanalysis/presets.py` (always available)
   and **cannot be overridden**. Optional `presets.yaml` files add custom presets
   from two locations, project-local winning over global:
   `~/.config/bgsage/presets.yaml` then `./presets.yaml`. Create either with
@@ -249,7 +249,6 @@ in step when a flag changes; the rationale belongs only here.
   | `fast` (`f`) | `2ply` | `3ply` | Fast |
   | `deep` (`d`) | `3ply` | — | Deep |
   | `world_class` (`wc`) | `3ply` → `4ply` on close (cube: within 0.12) | `truncated2` | World Class (XG Roller+) |
-  | `world_class_fast` (`wcf`) | `3ply` (cube: → rollout on close too) | `truncated2` | World Class (3-tier) |
 
   `world_class`'s cubes: a 3-ply screen, 4-ply within 0.12 of the double or
   take point (`close_threshold: {checker: 0.08, cube: 0.12}`), and cube
@@ -287,42 +286,32 @@ in step when a flag changes; the rationale belongs only here.
   makes both 0. A roll seen but not recorded cannot be detected; XG does record
   one.
 
-  `world_class_fast` is a 3-tier scheme (`mid_pass` + `close_threshold` on the
-  preset): `3ply` baseline, `truncated2` rollout on error, and a middle tier on
-  borderline decisions — but only for cubes. A middle tier is added on top of
-  the screen — it fires on decisions the screen would otherwise have settled —
-  so what decides whether it pays is its cost against the *screen below*, not
-  against the tier above. Measured per decision off a `3ply` screen, 4-ply is
-  19x the screen on a move list (25ms → 467ms) and only 4x on one pre-roll cube
-  (24ms → 100ms). Dropping the checker middle tier made the preset ~36%
-  faster while it ran twice as many rollouts, so borderline checker plays now go
-  straight from the 3-ply screen to `truncated2` when they are wrong, and are
-  left at the screen when they are right. The argument now rests on the
-  borderline *rate* alone: at a 0.04 window a cube is borderline ~5% of the time
-  and a checker play 53.8%, so the same rule costs ~0.4s per match on one and
-  tens of seconds on the other. The old second argument — that restoring the
-  tier "diverts 65 of the 83 checker rollouts into 4-ply, the weaker estimator"
-  — described the **escalation defect**, not the tier: a borderline decision
-  used to be capped at the middle tier however large its error proved. It
-  escalates now, so a middle tier no longer steals rollouts (it would still
-  cost, and more, since those decisions pay both tiers). Note also that the cost
-  order has flipped since that measurement: on 760 paired checker decisions
-  4-ply beats `truncated2` on 710, median 2.23x, because `checker_eval.py`
-  screens candidates before the full-width pass. `mid_pass` takes a
-  `{checker, cube}` mapping as well as a bare level (which still sets both); an
-  omitted kind is plain 2-tier.
+  **`world_class_fast` was retired 2026-10-21**, before any release carried
+  preset labels. It was `world_class` without the checker middle tier: a 3-ply
+  screen, `truncated2` on error, and cubes that were merely borderline also
+  rolled out. Once seeded rollouts and the staged screen made `world_class`
+  cheap, it stopped earning a place. Paired on 11 matches it took 234s against
+  `world_class`'s 318s, for PR 0.13 away from it (mean; max 0.38). Cube verdicts
+  matched on all but 5 of 1,164, and 98 of 1,937 best moves differed, nearly
+  all near-ties that `world_class` deepens. `deep` took 29s. A second
+  world-class method also splits the pool that preset labels exist to keep
+  comparable, and analysis runs in the helper, not on a server, so there is no
+  hosting bill to save. Like `balanced`, it stays in `_RETIRED` and is not
+  aliased.
 
-  The cube middle tier names `truncated2` — the same level as `second_pass`, so
-  the cube rule reads "borderline **or** wrong → roll it out". It was `4ply`
-  until 632 borderline cubes from XG-analyzed matches were scored against an
-  independent `truncated3` arbiter: 4-ply disagreed with the arbiter's verdict
-  on 14% of them (mean gap error 0.0127) against 12%/0.0091 for a single
-  `truncated2` run, and averaging ten `truncated2` seeds improved that to only
-  0.0090 — so a 360-trial rollout is limited by its horizon, not its variance,
-  and 4-ply's zero variance buys nothing back. Naming an existing level in
-  `mid_pass` costs no extra analyzer (levels are built once and shared), and
-  routing the ~6% of cubes that are borderline to the rollout adds roughly
-  0.4s per match.
+  What its design established still holds for any 3-tier preset. A middle tier
+  pays against the *screen below* it, not the tier above, because it fires on
+  decisions the screen would otherwise have settled. Measured off a `3ply`
+  screen, 4-ply is 19x the screen on a move list (25ms → 467ms) and only 4x on
+  one pre-roll cube (24ms → 100ms). At a 0.04 window a cube is borderline ~5%
+  of the time and a checker play 53.8%. `mid_pass` takes a `{checker, cube}`
+  mapping as well as a bare level for that reason; no built-in uses it now. On
+  632 borderline cubes from XG-analyzed matches scored against an independent
+  `truncated3` arbiter, 4-ply disagreed with the arbiter's verdict on 14% of
+  them (mean gap error 0.0127) against 12%/0.0091 for a single `truncated2`
+  run. Averaging ten `truncated2` seeds improved that only to 0.0090, so a
+  360-trial rollout is limited by its horizon, not its variance, and 4-ply's
+  zero variance buys nothing back.
 
   **Two thresholds, not one — they answer different questions.**
   `close_threshold` gates the *middle* tier: how near a tie before the screen's
@@ -350,8 +339,8 @@ in step when a flag changes; the rationale belongs only here.
   threshold, worst 0.56) and a borderline cube was re-checked never (0.4% of
   cubes, median 0.07, max 0.22). The escalation is skipped when `mid_pass` names
   `second_pass`'s own level — analyzers are memoized by level, so identity is
-  exact and re-running would buy the same answer twice. That makes it a no-op
-  for `world_class_fast`'s cube tier by construction.
+  exact and re-running would buy the same answer twice. That made it a no-op
+  for the retired `world_class_fast`'s cube tier by construction.
 
   **Every sizing tier is `truncated2`, never `4ply`, and that holds for both
   decision kinds.** The cube half is the arbiter test above (12%/0.0091 against
@@ -377,8 +366,8 @@ in step when a flag changes; the rationale belongs only here.
   name in `_RETIRED` and fails with an explanation rather than a bare "unknown
   preset"; it is deliberately **not** aliased to `world_class_fast`, since the
   preset name is written into the output document and a silent redirect would
-  mislabel the analysis. The gap below `world_class_fast` is now `deep`, an
-  order of magnitude cheaper. Don't reinvent it without a sizing tier cheaper
+  mislabel the analysis. With `world_class_fast` retired too, the gap below
+  `world_class` is `deep`, an order of magnitude cheaper. Don't reinvent it without a sizing tier cheaper
   than `truncated2`, because that is the whole of what went wrong.
 
 - **`gvan-batch`** (`gvanalysis/batch.py`) — Batch-analyze many match files

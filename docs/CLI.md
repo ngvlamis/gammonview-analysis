@@ -218,7 +218,6 @@ presets judge everything at the first pass.
 | `fast` (`f`) | `2ply` | — | `3ply` | Fast |
 | `deep` (`d`) | `3ply` | — | — | Deep |
 | `world_class` (`wc`) | `3ply` | `4ply` | `truncated2` | World Class (XG Roller+) |
-| `world_class_fast` (`wcf`) | `3ply` | `truncated2` (**cube only**) | `truncated2` | World Class (3-tier) |
 
 `fast` is the default.
 
@@ -271,8 +270,8 @@ middle tier when the closer look is what revealed the error.
 
 Three consequences worth knowing:
 
-- A close decision deepens **without** an error, but only on the three-tier
-  presets. Two-tier presets leave it at the screen on purpose.
+- A close decision deepens **without** an error, but only in a preset with a
+  middle tier (`world_class`). The others leave it at the screen on purpose.
 - An error at or under `error_threshold` stays at the screen — or takes the
   middle tier where one exists. There is nothing inside that margin for a
   rollout to size.
@@ -289,54 +288,39 @@ error.
 Both thresholds take either a single number or a `{checker, cube}` mapping,
 the same shape `mid_pass` takes.
 
-`world_class_fast`'s middle tier is **cube-only**, and names the same level as
-its second pass — so the cube rule reads "borderline *or* wrong → roll it out".
-Checker plays go straight from the 3-ply screen to `truncated2` when they are
-wrong, and stay at the screen when they are right.
-
-That asymmetry is measured, not arbitrary, and what measures it is how often
-"borderline" fires. At a 0.04 window a cube is borderline about 5% of the time
-and a checker play 53.8% of the time — so the same "borderline or wrong → roll
-it out" rule costs well under a second per match on cubes and tens of seconds
-per match on checker plays. `gvanalysis/presets.py` records the measurements
-beside the constants they set.
+In a custom preset, `mid_pass` can name a level for one kind only, or the
+second pass's own level, which makes the rule "borderline *or* wrong → roll it
+out". How often "borderline" fires is what decides whether that pays: at a 0.04
+window a cube is borderline about 5% of the time and a checker play 53.8% of
+the time, so the same rule costs well under a second per match on cubes and
+tens of seconds per match on checker plays.
 
 ### Choosing one
 
 `fast` is a good default for a quick look. For analysis you intend to trust,
-the strong presets were compared against eXtreme Gammon over 493 matches:
+use `world_class`. It was compared against eXtreme Gammon over 493 matches:
 
-| | mean gap to XG's match PR | same checker play as XG | PR within 1 of XG |
+| | mean gap to XG's match PR | PR within 1 of XG | same cube action as XG |
 |---|---|---|---|
-| `world_class` | 0.423 | 90.3% | 91.7% |
-| `world_class_fast` | 0.431 | 90.0% | 91.3% |
+| `world_class@2` | 0.420 | 92.0% | 96.2% |
 
-Re-measured over the same 493 matches on 2026-09-20, after the retune. Both
-presets moved about 0.01 PR closer to XG and neither move is significant — the
-paired intervals span zero — so the retune is established as *harmless* rather
-than as an improvement. The checker-play column is carried over from the
-original study: re-measuring it like-for-like shows the retune moving it by at
-most 0.6 points, but the study's exact figure could not be reproduced, which
-[the write-up](../experiments/2026-09-20-corpus-rerun.md) documents.
+Measured 2026-10-21. Against the September 2026 `world_class` on the same
+matches the gap moved by −0.003, inside the noise (95% CI [−0.010, +0.004]).
+[The write-up](../experiments/2026-10-21-wc2-corpus.md) has the checker and
+cube detail.
 
-- **`world_class_fast`** is the recommended analysis — 0.008 PR behind the
-  deepest preset, and indistinguishable from it on checker play. That 0.008 is
-  itself not separable from zero on 493 matches (95% CI [−0.020, +0.004]). The
-  two sit far closer to each other than either does to XG: the remaining gap is
-  the engine difference, not the search depth.
-- **`world_class`** matches XG's *search routing* — a 3-ply pass that deepens to
-  4-ply on near-ties, which is what XG World Class actually does, with every
-  cube judged at 4-ply and any wrong cube action rolled out — so it is the
-  one to reach for when reproducing XG is itself the goal. It is not more
-  accurate than `world_class_fast` in any way that experiment demonstrates, and
-  the experiment predates its current cube routing.
-- **A `balanced` preset used to sit between `deep` and these two** — a 2-ply
-  screen with a 3-ply middle tier. It was retired after the retune, when it
-  turned out to cost about what `world_class_fast` costs (see *What they cost*)
-  while agreeing with XG less often. `--preset balanced` now fails with a
-  message saying so rather than silently running something else. Below
-  `world_class_fast` the next step down is `deep`, an order of magnitude
-  cheaper.
+- **`world_class`** matches XG's *search routing*: a 3-ply pass that deepens to
+  4-ply on near-ties, which is what XG World Class actually does, with cubes
+  deepened within 0.12 of their double or take point and any wrong cube action
+  rolled out. What separates it from XG is mostly the engine, not the depth.
+- **`deep`** is the cheap strong option, at about a tenth of the cost.
+- **Two presets used to sit between them, and both are retired.** `balanced`
+  (a 2-ply screen with a 3-ply middle tier) cost about what the preset above it
+  cost while agreeing with XG less often. `world_class_fast` (`world_class`
+  without the checker middle tier) took 74% of `world_class@2`'s time, on 11
+  matches, for a PR 0.13 away from it. `--preset balanced` and
+  `--preset world_class_fast` now fail with a message saying so rather than
+  silently running something else.
 
 These are agreement numbers, not accuracy numbers — where bgsage and XG differ,
 neither is the arbiter. **[`PRESET_ACCURACY.md`](PRESET_ACCURACY.md)** is the
@@ -346,43 +330,37 @@ evidence that the residual difference is systematic.
 ### What they cost
 
 The other half of the dial. Six tournament matches — 84 to 459 plies, 1,429 in
-all — analyzed end to end at the default `--jobs`, on three machines.
-**Milliseconds per ply**, because the per-match figure depends entirely on how
-long your matches are:
+all — analyzed end to end at the default `--jobs`, on three machines, on
+2026-10-21. **Milliseconds per ply**, because the per-match figure depends
+entirely on how long your matches are:
 
 | Preset | M2 Ultra (24c) | M3 (8c) | i5-7600 (4c) |
 |---|---|---|---|
-| `very_quick` | 5.8 ms | 11.6 ms | 40.8 ms |
-| `fast` | 9.6 ms | 31.4 ms | 75.5 ms |
-| `deep` | 18.0 ms | 65.5 ms | 143.0 ms |
-| `world_class_fast` | 165.6 ms | 611.0 ms | 1016 ms |
-| `world_class` | 291.3 ms | 1371 ms | 2048 ms |
+| `very_quick` | 6.9 ms | 11.6 ms* | 40.9 ms |
+| `fast` | 9.4 ms | 27.0 ms | 62.6 ms |
+| `deep` | 13.2 ms | 44.1 ms | 97.0 ms |
+| `world_class` | 154.3 ms | 611.6 ms | 1025 ms |
 
-For a sense of scale on one 13-point match (459 plies): `world_class_fast` is
-about 1 minute on the workstation, 4 minutes on the laptop and 9 minutes on the
-4-core desktop; `world_class` is roughly double each.
+\* The September figure. `very_quick` is unchanged since then, and on
+2026-10-21 the M3 started its run under background load, which showed up only
+in this row (17.5 ms). On the i5 it measured 40.9 ms against September's 40.8.
+
+The `@2` revisions roughly halved `world_class`, from 291 / 1371 / 2048 ms per
+ply in September, and made `deep` about a third cheaper. For a sense of scale
+on one 13-point match (459 plies), `world_class` is about 1 minute on the
+workstation, 5 minutes on the laptop and 8 minutes on the 4-core desktop.
 
 **There is no machine-independent "relative to `fast`" number**, which is why
-this table gives absolutes on named hardware. The multiple for
-`world_class_fast` measures 17.2×, 19.5× and 13.5× on the three machines above,
-and for `world_class` 30.3×, 43.6× and 27.1× — the ratio moves because its
-denominator is machine-dependent too, and not even monotonically with how fast
-the machine is. Only `deep` is stable enough to quote as a ratio (1.9–2.1×
-`fast` everywhere).
+this table gives absolutes on named hardware. The multiple for `world_class`
+measures 16.4×, 22.7× and 16.4× on the three machines above. The ratio moves
+because its denominator is machine-dependent too, and not even monotonically
+with how fast the machine is. Only `deep` is stable enough to quote as a ratio
+(1.4–1.6× `fast` everywhere).
 
-Two comparisons are the argument for the lineup, and both hold on every machine:
-
-- `world_class` costs **1.8–2.2× `world_class_fast`** and buys a little under
-  0.01 PR of XG agreement. That is why `world_class_fast` is the
-  recommendation and `world_class` is reserved for deliberately reproducing XG.
-- The jump from `deep` to `world_class_fast` is **where rollouts enter** —
-  nearly an order of magnitude on every machine. Everything above that line is
-  pure full-width search; everything below it sizes its errors with a truncated
-  rollout. That step is the one to expect in any timing you take yourself, and
-  it is why the retired `balanced` preset was no bargain: it screened at 2-ply
-  but paid the same rollout tier, measuring 170.4 / 751.8 / 1030 ms on the three
-  machines — within a few percent of `world_class_fast` on two of them and 23%
-  *more* on the laptop.
+The jump from `deep` to `world_class` is **where rollouts enter**, and it is
+the step to expect in any timing you take yourself. Everything at or below
+`deep` is pure full-width search; `world_class` sizes its errors with a
+truncated rollout.
 
 Two cautions if you benchmark this yourself. Individual matches spread about 2×
 around these means at every preset, because what a preset costs depends on how

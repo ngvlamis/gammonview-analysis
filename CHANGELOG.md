@@ -34,7 +34,7 @@ carry none.
 
 **Checker plays are screened in stages, as XG screens them** *(change)*
 
-`fast`, `deep`, `world_class` and `world_class_fast` move to revision 2:
+`fast`, `deep` and `world_class` move to revision 2:
 
 1. Every move is screened at 1-ply.
 2. The top 14 are rescored at 2-ply, or every move within 0.2 of the 1-ply
@@ -68,8 +68,19 @@ Ours now average 2.26. On 11 matches `world_class` ran 28% faster (448s to
 320s); 4 of 1,937 best moves changed, together 0.029 equity of error, and PR
 moved by 0.006 on average (at most 0.11). Each rolled-out row is bgsage's own
 rollout of that board, to the last digit. `GVAN_ROLLOUT_SELECT=0` restores
-bgsage's choice for A/B work. Part of `world_class@2` and
-`world_class_fast@2`, neither of which has shipped.
+bgsage's choice for A/B work. Part of `world_class@2`, which has not
+shipped.
+
+**`world_class_fast` is retired** *(breaking)*
+
+`--preset world_class_fast` (`wcf`) now fails with a message pointing to
+`world_class` or `deep`. Faster rollouts and the staged screen made
+`world_class` cheap enough that `world_class_fast` stopped earning its place.
+On 11 matches it took 74% of `world_class`'s time (234s against 318s) for PR
+0.13 away from it on average (at most 0.38), while `deep` takes 9% (29s). Two
+world-class methods would also split the comparison that preset labels exist
+for. Files analyzed with it are unaffected, and it is not aliased to
+`world_class`, since that would mislabel the analysis.
 
 **`world_class` rolls out every wrong cube** *(change)*
 

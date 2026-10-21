@@ -444,7 +444,7 @@ def analyze_ogxm(
     # decision's ~15 candidate elevations overlap inside one worker.
     #
     # SIZING, measured 2026-09-19 across four machines on a 6-match corpus
-    # (84-459 plies each), `world_class_fast`, whole corpus per point:
+    # (84-459 plies each), `world_class_fast` (since retired), whole corpus per point:
     #
     #   A worker draws ~7 effective cores on a checker decision at threads=0 --
     #   `checker_eval` elevates ~15 candidates single-threaded and overlaps

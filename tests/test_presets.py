@@ -118,12 +118,12 @@ def check_builtins_locked() -> None:
     presets, _aliases, _default, err = config(
         "presets:\n"
         "  world_class: {error_threshold: 0.0}\n"
-        "  wcf: {first_pass: 2ply}\n"
+        "  d: {first_pass: 2ply}\n"
         "  mine: {first_pass: 3ply, second_pass: truncated2}\n")
     check(presets["world_class"].error_threshold_checker == 0.02
-          and presets["world_class_fast"].first_pass == "3ply",
+          and presets["deep"].first_pass == "3ply",
           "a built-in (by name or alias) cannot be overridden")
-    check("world_class" in err and "wcf" in err, "each skipped override is warned about", err)
+    check("world_class" in err and "'d'" in err, "each skipped override is warned about", err)
     check("mine" in presets, "the file's other presets still load")
     check(presets["mine"].label.startswith("custom/mine@") and presets["mine"].revision is None,
           f"a custom preset is labelled by its definition ({presets['mine'].label})")
@@ -196,6 +196,14 @@ def check_pins() -> None:
             check(False, f"{name} refused")
         except ValueError as e:
             check(frag in str(e), f"{name} refused: {e}")
+    for name in ("world_class_fast", "wcf", "wcf@2", "balanced"):
+        try:
+            P.resolve_preset(name)
+            check(False, f"retired {name} refused")
+        except ValueError as e:
+            check("retired" in str(e) and "Unknown" not in str(e), f"retired {name} refused: {e}")
+    got, *_rest, err = config("presets:\n  wcf: {first_pass: 3ply}\n")
+    check("wcf" not in got and "wcf" in err, "a retired name cannot be reused for a custom preset", err)
     with env(GVAN_STAGED="0"):
         try:
             P.resolve_preset("world_class@2")

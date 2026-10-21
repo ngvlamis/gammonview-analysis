@@ -173,7 +173,7 @@ own; analysis does not need them.) `--link` encodes the whole match into a
 ### Analysis presets
 
 `--preset` selects an eXtreme Gammon–style scheme: a cheap first pass screens
-every decision, and a stronger pass runs only where it is needed. The five
+every decision, and a stronger pass runs only where it is needed. The four
 built-ins:
 
 | Preset (aliases) | 1st pass | Middle tier | 2nd pass | XG equivalent |
@@ -182,63 +182,45 @@ built-ins:
 | `fast` (`f`) | `2ply` | — | `3ply` | Fast |
 | `deep` (`d`) | `3ply` | — | — | Deep |
 | `world_class` (`wc`) | `3ply` | `4ply` | `truncated2` | World Class (XG Roller+) |
-| `world_class_fast` (`wcf`) | `3ply` | `truncated2` (**cube only**) | `truncated2` | World Class (3-tier) |
 
 The second pass runs on an **error**; the middle tier runs on a **borderline**
 decision the screen would otherwise have settled. `fast` is the default.
 
 #### Which one to use
 
-493 matches were analyzed by XG at World Class and by each of the strong
-presets, then compared decision by decision:
+493 matches were analyzed by XG at World Class and by `world_class`, then
+compared decision by decision:
 
-| | mean gap to XG's match PR | same checker play as XG | PR within 1 of XG | cost, ms/ply (24c → 4c) |
-|---|---|---|---|---|
-| `world_class` | 0.423 | 90.3% | 91.7% | 291 → 2048 |
-| `world_class_fast` | 0.431 | 90.0% | 91.3% | 166 → 1016 |
+| | mean gap to XG's match PR | PR within 1 of XG | same cube action as XG |
+|---|---|---|---|
+| `world_class@2` | 0.420 | 92.0% | 96.2% |
 
-Re-measured 2026-09-20 over the same 493 matches after the retune. The retune
-moved both presets about 0.01 PR closer to XG, which is **not** a significant
-improvement — the paired confidence intervals span zero — but does establish
-that it cost nothing. The checker-play column is carried over from the original
-study; a like-for-like check says the retune moves it by at most 0.6 points, but
-its exact figure could not be reproduced (see
-[the write-up](experiments/2026-09-20-corpus-rerun.md)).
+Measured 2026-10-21. Against the September `world_class` on the same matches
+the gap moved by −0.003, inside the noise (95% CI [−0.010, +0.004]), while the
+run took 1.83× less time: 3 h 31 m against 6 h 25 m on a 24-core M2 Ultra, or
+about 150 ms per ply. See [the write-up](experiments/2026-10-21-wc2-corpus.md).
 
 **Mean gap** is the average distance between the two *ratings* of the same
 player-match, in either direction: rate a match with `world_class` and XG rates
-it 0.434 PR away, typically. It is not what following the preset costs you —
-priced by XG's own equities, a player who made `world_class`'s recommended
-checker play every time would post a PR of 0.333 and `world_class_fast`
-0.353. Both are inside what XG itself calls world-class play. (Those two
-figures predate the retune and were not re-measured; everything else in this
-section was.)
+it about 0.42 PR away, typically. It is not what following the preset costs you.
+Priced by XG's own equities, a player who made `world_class`'s recommended
+checker play every time would post a PR of 0.333, inside what XG itself calls
+world-class play. (That figure predates the September retune and was not
+re-measured.)
 
-Cost is milliseconds per ply over six matches, on a 24-core M2 Ultra and a
-4-core i5-7600 — absolutes rather than a multiple of `fast`, because that
-multiple is not constant across machines. Individual matches spread about 2×
-around these means. See [the timings](docs/CLI.md#what-they-cost).
-
-- **`world_class_fast` is the recommended analysis.** It lands 0.008 PR behind
-  the deepest preset for a little under half the time — a difference the
-  493-match corpus cannot resolve from zero (95% CI [−0.020, +0.004]). The two sit three times
-  closer to each other (0.136) than either does to XG, because what separates
-  them from XG is the *engine*, not the search depth — 95% of
-  `world_class_fast`'s squared PR error against XG is that engine floor, which
-  no preset can spend its way past.
-- **`world_class` is for reproducing XG specifically**, not for being more
-  accurate. It routes as XG World Class does — checker plays from a 3-ply
-  screen to 4-ply on near-ties, cubes from a 3-ply screen to 4-ply within 0.12
-  of the double or take point, and any wrong cube action rolled out. The
-  figures above predate that cube routing; it costs
-  roughly twice as much as `world_class_fast`. Resign errors, which BMAB's
-  configuration counts, are a separate switch (`--resign-errors`) that any
-  preset can run with.
-- **If you want cheap, drop to `deep`**, which costs an order of magnitude
-  less than either. There is nothing between them: a `balanced` preset used to
-  sit in that gap, but after the September 2026 retune it cost about what
-  `world_class_fast` costs while agreeing with XG less often, so it was
-  retired.
+- **`world_class` is the analysis to trust.** It routes as XG World Class
+  does: checker plays from a 3-ply screen to 4-ply on near-ties, cubes from a
+  3-ply screen to 4-ply within 0.12 of the double or take point, any wrong cube
+  action rolled out, and checker errors over 0.02 rolled out. Most of what
+  separates it from XG is the *engine*, not the search depth, and no preset can
+  spend its way past that. Resign errors, which BMAB's configuration counts,
+  are a separate switch (`--resign-errors`) that any preset can run with.
+- **If you want cheap, drop to `deep`**, which costs about a tenth as much.
+  Nothing sits between them any more. `balanced` was retired in September 2026
+  for costing what the preset above it cost. `world_class_fast` was retired in
+  October 2026 once faster rollouts made `world_class` nearly as cheap: on 11
+  matches it took 74% of `world_class`'s time for a PR 0.13 away from it. Both
+  names now fail with a message saying so.
 
 Every number above measures *similarity to XG*, which is not the same as being
 right — where the two engines differ there is no arbiter here to say which is

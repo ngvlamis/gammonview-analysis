@@ -139,50 +139,6 @@ _BUILTIN_SPECS: dict[str, dict] = {
                     "close_threshold": {"checker": 0.08, "cube": 0.12},
                     "error_threshold": {"checker": DEFAULT_ERROR_THRESHOLD, "cube": 0.0},
                     "aliases": ["wc", "worldclass"]},
-    # 3-tier XG World Class analog: 3-ply screen, truncated2 rollout on error,
-    # and a middle tier on cubes only.
-    #
-    # The checker middle tier stays gone, but on one argument rather than the
-    # two it used to rest on. What decides it is how often "borderline" fires:
-    # at a 0.04 window a cube is borderline ~5% of the time and a checker play
-    # 53.8% of the time, so the same rule costs ~0.4s per match on cubes and
-    # ~42-91s per match on checker plays depending on the level named. The
-    # second argument -- that restoring it "diverts 65 of the 83 checker
-    # rollouts into 4-ply, the weaker estimator" -- described the escalation
-    # defect, not the tier: a borderline decision used to be capped at the
-    # middle tier however large its error turned out to be. It escalates now,
-    # so a middle tier no longer steals rollouts. It would still cost, and
-    # more than before, since those decisions would pay both tiers.
-    #
-    # (Also note the cost order has flipped since that measurement: on 760
-    # paired checker decisions 4-ply is faster than truncated2 on 710 of them,
-    # median 2.23x, because checker_eval.py screens candidates before the
-    # full-width pass. The old "4-ply on a move list is the dear one" framing
-    # no longer holds -- the borderline rate is the whole argument.)
-    #
-    # Cubes keep a middle tier, and it is truncated2 rather than 4-ply: a
-    # borderline cube is the one place 4-ply looked like a bargain, and against
-    # a truncated3 arbiter it still lost to the rollout, at a difference in cost
-    # too small to buy the accuracy back. So the cube tier is really "borderline
-    # OR wrong -> roll it out"; the middle tier survives only to widen what
-    # counts as worth rolling out, not to name a shallower level. Because it
-    # names second_pass's own level, the escalation re-check is a no-op here --
-    # the analyzers are one object and game_eval skips the second call.
-    #
-    # close_threshold is 0.08 for the same reason world_class's is: it is XG's
-    # own depth crossover, and there is no principled reason the cube boundary
-    # should sit at half the checker one. Only the cube value bites here (no
-    # checker middle tier for the checker one to gate). Measured, 33 holdout
-    # matches paired against 0.04 on the same matches: MAE 0.4826 -> 0.4840,
-    # 95% CI [-0.0235, +0.0192], wall +1.5%, and 2 of 33 matches produced any PR
-    # change at all. So this is adopted as a coherence fix, NOT a measured gain
-    # -- 489 of 686 cube decisions already reached the rollout at 0.04, leaving
-    # about one per match that widening can touch. What the test does establish
-    # is that it is not harmful. The corpus mining points the same way: missed
-    # errors fall from 7.2% of mid-tier cubes at 0.04 to 3.3% at 0.08.
-    "world_class_fast": {"display": "World Class Fast", "revision": 2, "first_pass": "3ply",
-                         "mid_pass": {"cube": "truncated2"},
-                         "second_pass": "truncated2", "close_threshold": 0.08, "aliases": ["wcf"]},
     # TODO Extensive: needs a full-completion `rollout` second pass plus a tiered
     # outplay-vs-error escalation trigger, so it is not yet defined.
 }
@@ -197,10 +153,21 @@ _BUILTIN_DEFAULT = "fast"
 _RETIRED: dict[str, str] = {
     "balanced": (
         "retired after 1.0.0 -- it cost about what world_class_fast costs "
-        "while agreeing with XG less often. Use world_class_fast for analysis "
+        "while agreeing with XG less often. Use world_class for analysis "
         "you intend to trust, or deep for something genuinely cheap."
     ),
     "b": "balanced",   # its alias, resolved to the entry above
+    # Retired before preset revisions shipped, so no file carries its label.
+    # Once world_class's rollouts got cheaper it cost three quarters of
+    # world_class for a PR 0.13 away from it (11 matches, 2026-10-21), and a
+    # second world-class method splits exactly the comparison the labels exist
+    # for. The gap below world_class is deep, at an eighth of the cost.
+    "world_class_fast": (
+        "retired after 2.0.2 -- it cost three quarters of what world_class "
+        "costs for results 0.13 PR away from it. Use world_class for analysis "
+        "you intend to trust, or deep for something genuinely cheap."
+    ),
+    "wcf": "world_class_fast",
 }
 
 #: The definition digest (`Preset.digest`, first 12 hex) of every revision each
@@ -222,7 +189,6 @@ _REVISIONS: dict[str, dict[int, str]] = {
     "fast": {1: "7030cc90eace", 2: "a44dc6c17c2f"},
     "deep": {1: "f0d71d4caf31", 2: "062a598d4e7f"},
     "world_class": {1: "e5b1989b5c6c", 2: "5b8d38df0b0d"},
-    "world_class_fast": {1: "7914909ce57a", 2: "e0dd834816a4"},
 }
 
 #: What a custom preset's name may be: it is written into the label, so it
@@ -261,8 +227,8 @@ TEMPLATE = """\
 #   - global:  ~/.config/bgsage/presets.yaml
 #   - project: ./presets.yaml (next to the scripts)
 #
-# Built-in presets: very_quick (vq), fast (f), deep (d),
-#                   world_class (wc), world_class_fast (wcf). Default: fast.
+# Built-in presets: very_quick (vq), fast (f), deep (d), world_class (wc).
+# Default: fast.
 #
 # Each preset is a two-pass scheme: a cheap first_pass screens every decision,
 # a stronger second_pass runs only on an error (the played checker move or cube
@@ -291,12 +257,12 @@ TEMPLATE = """\
 # Optional 3-tier: add mid_pass + close_threshold. mid_pass is either a level
 # (both decision kinds get that middle tier, as in world_class) or a
 # {checker, cube} mapping naming one per kind, since the same level is not
-# equally cheap on a move list and on a single cube -- see world_class_fast,
-# which gives cubes a middle tier and leaves checker plays 2-tier. An omitted
-# kind stays plain 2-tier. close_threshold and error_threshold take the same
-# bare-value-or-{checker, cube}-mapping shape, and so does first_pass (whose
-# checker level is required): world_class screens cubes at 4ply and checker
-# plays at 3ply, as XG World Class does. Naming the same level as
+# equally cheap on a move list and on a single cube -- a 4-ply look is 19x
+# the 3-ply screen on a move list and 4x on one cube. An omitted kind stays
+# plain 2-tier. close_threshold and error_threshold take the same
+# bare-value-or-{checker, cube}-mapping shape (world_class gives cubes a 0.12
+# window and checker plays 0.08), and so does first_pass, whose checker level
+# is required. Naming the same level as
 # second_pass in mid_pass is allowed and costs nothing extra (one analyzer is
 # built and shared); it means "borderline as well as wrong earns the top tier".
 #

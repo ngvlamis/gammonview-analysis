@@ -24,6 +24,14 @@ which is the most important section here.
 > percentages, and the follow-the-preset PR figures. See
 > [`../experiments/2026-09-20-corpus-rerun.md`](../experiments/2026-09-20-corpus-rerun.md).
 
+> **`world_class_fast` has since been retired too** (2026-10-21), and
+> `world_class` re-measured at its `@2` revision over the same 493 matches: mean
+> gap to XG 0.4196, against 0.4228 for the September `world_class`, a change
+> inside the noise. Once faster rollouts made `world_class` nearly as cheap,
+> `world_class_fast` no longer bought enough time to justify a second method, so
+> this document's recommendation of it no longer applies. See
+> [`../experiments/2026-10-21-wc2-corpus.md`](../experiments/2026-10-21-wc2-corpus.md).
+
 > **`balanced` has since been retired** (2026-09-20), so one of the four
 > readings below is of a preset you can no longer select. The study is kept
 > whole rather than edited down, because the `balanced` column is *why* it was
