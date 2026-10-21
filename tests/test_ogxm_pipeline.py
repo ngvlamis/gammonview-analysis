@@ -133,8 +133,10 @@ def main() -> int:
         mat_decs = []
         for i, g in enumerate(md["games"]):
             mat_decs += reconstruct_decisions(g, ml, p1, p2, is_crawford=(i == cidx))["decisions"]
+        # A resignation is judged only on the OGXM path (the .mat reconstructor
+        # predates it), so it is not part of the comparison.
         ogxm_decs = [d for gr in reconstruct_decisions_from_ogxm(mat_to_ogxm(text))
-                     for d in gr["decisions"]]
+                     for d in gr["decisions"] if d["kind"] != "resign"]
         same = (len(mat_decs) == len(ogxm_decs)
                 and all(_norm(a) == _norm(b) for a, b in zip(mat_decs, ogxm_decs)))
         check(same, f"{stem}: OGXM decisions match .mat decisions ({len(mat_decs)})")

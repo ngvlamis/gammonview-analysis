@@ -50,10 +50,12 @@ worth of time and the deep ranking is the entire point -- exactly the case where
 paying full-width is right. This module is for match analysis, where the same
 work repeats once per ply.
 
-Only cubeful multi-ply analyzers take this path. Rollout levels return before
-bgsage's blanket conversion and already prefilter in two stages, so they are
-left alone, as is any analyzer whose internals don't match what we probe for
-(see ``_screen_context``) — those fall back to ``analyzer.checker_play``
+Only cubeful multi-ply analyzers take this path. A rollout level handed the
+tier below's result (``seed=``) rolls out that result's best, a close
+runner-up and the played move, and keeps the seed's numbers for the rest (see
+``ROLLOUT_RUNNER_UP_WINDOW``); unseeded, it is left to bgsage, as is any
+analyzer whose internals don't match what we probe for (see
+``_screen_context``) — those fall back to ``analyzer.checker_play``
 unchanged. Set ``GVAN_NO_SCREEN=1`` to force the fallback everywhere.
 """
 
@@ -69,11 +71,13 @@ from bgsage.types import CheckerPlayResult, MoveAnalysis, Probabilities
 
 try:  # pragma: no cover - import guard for a bgsage without these internals
     import bgbot_cpp
-    from bgsage.analyzer import _FLIP_OWNER, _MultiPlyAnalyzer, resolve_owner
+    from bgsage.analyzer import (
+        _FLIP_OWNER, _MultiPlyAnalyzer, _RolloutAnalyzer, resolve_owner)
 except Exception:  # pragma: no cover
     bgbot_cpp = None
     _FLIP_OWNER = None
     _MultiPlyAnalyzer = None
+    _RolloutAnalyzer = None
     resolve_owner = None
 
 
@@ -178,6 +182,22 @@ STAGE_THRESHOLD = 0.16
 STAGE_MAX_MOVES = 12
 DEEPEN_MAX_MOVES = 8
 
+# Which moves a rollout tier rolls out, when it is handed the tier below's
+# result (`seed=`, as `game_eval`'s second pass does): the seed's best, the
+# played move, and the seed's runner-up when it is within
+# ROLLOUT_RUNNER_UP_WINDOW of the best at the same depth. Everything else keeps
+# the seed's numbers. GVAN_ROLLOUT_SELECT=0 hands the choice back to bgsage.
+#
+# bgsage, left to choose, discards the seed and starts again: a 1-ply cull at
+# 0.15, a 2-ply rescore, its TINY filter (within 0.08, at most 5), the played
+# move, then a promotion loop that rolls out any unrolled move ranked above the
+# rolled ones. So a 2-ply filter picks what a 3/4-ply tier has already
+# judged, and over 43,691 rolled-out checker decisions in our corpus outputs it
+# rolled out 3.85 moves a decision. XG World Class rolls out 2.06: over 12,025
+# checker decisions it sent to Roller+, 93.9% roll out exactly the best and the
+# played move, and 6.0% add one more, nearly always the runner-up (516 of 724).
+ROLLOUT_RUNNER_UP_WINDOW = 0.02
+
 
 @lru_cache(maxsize=1)
 def _has_root_routing() -> bool:
@@ -197,6 +217,12 @@ def _has_root_routing() -> bool:
 
 def _env_disabled() -> bool:
     return os.environ.get("GVAN_NO_SCREEN", "").strip() not in ("", "0")
+
+
+def _rollout_select_enabled() -> bool:
+    # On by default; GVAN_ROLLOUT_SELECT=0 lets bgsage choose the rollout set,
+    # for A/B measurement (and labels the preset as modified).
+    return os.environ.get("GVAN_ROLLOUT_SELECT", "").strip() != "0"
 
 
 def _staged_enabled() -> bool:
@@ -233,7 +259,15 @@ def screening(levels: list[str], has_mid: bool) -> dict:
                         STAGE_SCREEN_CAP, STAGE_THRESHOLD, STAGE_MAX_MOVES]
         if has_mid:
             out["deepen"] = DEEPEN_MAX_MOVES
+    if _rollout_select_enabled() and any(_is_rollout(lv) for lv in levels):
+        # Only a seeded rollout tier selects, and only a screened (multi-ply)
+        # tier below it seeds one, so this sits inside the screened case.
+        out["rollout"] = [ROLLOUT_RUNNER_UP_WINDOW]
     return out
+
+
+def _is_rollout(level: str) -> bool:
+    return level == "rollout" or level.startswith("truncated")
 
 
 class _ScreenContext:
@@ -393,6 +427,9 @@ def checker_play(
     deepest moves within ``seed_window`` of its best are re-evaluated, at most
     DEEPEN_MAX_MOVES, plus ``force_boards``; the rest keep the seed's numbers.
 
+    A rollout ``analyzer`` given a ``seed`` rolls out only the seed's best, its
+    runner-up within ROLLOUT_RUNNER_UP_WINDOW, and ``force_boards``.
+
     Falls back to ``analyzer.checker_play`` whenever the screen-then-elevate
     path does not apply.
     """
@@ -400,6 +437,13 @@ def checker_play(
     if away1 > 0 or away2 > 0:
         jacoby = False
         beaver = False
+
+    if seed is not None:
+        rolled = _rollout_seeded(
+            analyzer, seed, board, die1, die2, cube_value, cube_owner,
+            away1, away2, is_crawford, jacoby, beaver, force_boards)
+        if rolled is not None:
+            return rolled
 
     ctx = _screen_context(analyzer, cube_owner)
     if ctx is None:
@@ -497,6 +541,77 @@ def checker_play(
     boards = [scored[i][2] for i in chosen]
     deep = group(boards, run(boards), deep_level)
     return finish(deep + tail_of(set(chosen)))
+
+
+def _rollout_seeded(analyzer, seed, board, die1, die2, cube_value, cube_owner,
+                    away1, away2, is_crawford, jacoby, beaver, force_boards):
+    """A rollout tier over `seed`'s choice of moves (ROLLOUT_RUNNER_UP_WINDOW),
+    or None when `analyzer` is not a cubeful rollout or `seed` is not a
+    shallower list to build on -- the caller then goes on as unseeded.
+
+    Each move is rolled out by the call bgsage's own rollout path makes
+    (``_RolloutAnalyzer.checker_play_analytics``), bearoff override included,
+    so a rolled-out row matches bgsage's for the same board."""
+    if (_env_disabled() or not _rollout_select_enabled()
+            or bgbot_cpp is None or _RolloutAnalyzer is None):
+        return None
+    inner = getattr(getattr(analyzer, "_analyzer", None), "_inner", None)
+    if not isinstance(inner, _RolloutAnalyzer):
+        return None
+    strategy = getattr(inner, "_rollout_strategy", None)
+    if not hasattr(strategy, "cubeful_evaluate_board"):
+        return None
+    try:
+        owner = resolve_owner(cube_owner)
+    except Exception:
+        return None
+    moves = list(seed.moves)
+    if owner is None or not moves or moves[0].eval_level == "Rollout":
+        return None
+
+    best = moves[0]
+    picked = [best]
+    if (len(moves) > 1 and moves[1].eval_level == best.eval_level
+            and best.equity - moves[1].equity <= ROLLOUT_RUNNER_UP_WINDOW):
+        picked.append(moves[1])
+    taken = {tuple(m.board) for m in picked}
+    for b in force_boards or []:
+        m = next((m for m in moves if tuple(m.board) == tuple(b)), None)
+        if m is not None and tuple(m.board) not in taken:
+            picked.append(m)
+            taken.add(tuple(m.board))
+
+    db = getattr(inner, "_bearoff_db", None)
+    rolled = []
+    for m in picked:
+        r = strategy.cubeful_evaluate_board(
+            m.board, board, cube_value=cube_value, owner=owner,
+            away1=away1, away2=away2, is_crawford=is_crawford,
+            jacoby=jacoby, beaver=beaver)
+        probs = list(r["probs"])
+        if db is not None and db.is_bearoff(m.board):
+            probs = db.lookup_probs(m.board, post_move=True)
+        rolled.append(MoveAnalysis(
+            board=list(m.board),
+            equity=r["cubeful_equity"],
+            cubeless_equity=r["equity"],
+            probs=Probabilities.from_list(probs),
+            equity_diff=0.0,
+            eval_level="Rollout",
+            std_error=r.get("std_error", 0),
+            prob_std_errors=list(r.get("prob_std_errors", [0] * 5)),
+        ))
+    # bgsage's own total order (`_move_order_key`): cubeful, then cubeless,
+    # then the board, so tied lost positions rank the same way every time.
+    rolled.sort(key=lambda m: (-m.equity, -m.cubeless_equity, tuple(m.board)))
+    # The rest keep the seed's numbers, under the rolled group for the reason
+    # `tail_of` gives: a rollout and an N-ply equity are different estimators.
+    out = rolled + [replace(m) for m in moves if tuple(m.board) not in taken]
+    top = out[0].equity
+    for m in out:
+        m.equity_diff = m.equity - top
+    return CheckerPlayResult(moves=out, board=list(board), die1=die1, die2=die2,
+                             eval_level="Rollout")
 
 
 def _with_forced(chosen: list[int], scored, wanted) -> list[int]:

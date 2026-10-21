@@ -86,6 +86,7 @@ argument-length limits. Pass both flags to print the URL *and* open it.
 | `--preset NAME` | See [Presets](#presets). Default `fast`. |
 | `--all-moves` | Put every legal move in `move_options` (default: top 6 plus the played move). |
 | `--count-illegal` | Include illegal or unmatched moves in the PR calculation (default: excluded). |
+| `--resign-errors` | Judge accepted resignations and count them in PR (default: off). See [Resign errors](#presets). |
 
 ### Parallelism
 
@@ -147,7 +148,7 @@ per-file analysis output is suppressed.
 | `--gvab`, `--binary` | Write `.gvab` instead of `.gva`. |
 | `--out-dir DIR` | Write outputs here instead of beside each input. |
 | `--force` | Overwrite existing outputs instead of skipping. |
-| `--preset`, `--threads`, `--jobs`, `--all-moves`, `--count-illegal` | As `gvan-match`. |
+| `--preset`, `--threads`, `--jobs`, `--all-moves`, `--count-illegal`, `--resign-errors` | As `gvan-match`. |
 
 `--jobs` parallelizes decisions *within* each file; the file loop stays
 sequential. Analyzers are rebuilt per file, so a large batch pays net-loading
@@ -216,10 +217,41 @@ presets judge everything at the first pass.
 | `very_quick` (`vq`) | `2ply` | — | — | Very quick |
 | `fast` (`f`) | `2ply` | — | `3ply` | Fast |
 | `deep` (`d`) | `3ply` | — | — | Deep |
-| `world_class` (`wc`) | `3ply` | `4ply` (both kinds) | `truncated2` | World Class (XG Roller+) |
+| `world_class` (`wc`) | `3ply` | `4ply` | `truncated2` | World Class (XG Roller+) |
 | `world_class_fast` (`wcf`) | `3ply` | `truncated2` (**cube only**) | `truncated2` | World Class (3-tier) |
 
 `fast` is the default.
+
+`world_class` screens both kinds at 3-ply and deepens a borderline one to 4-ply:
+a checker play whose top two moves are within 0.08, a cube within 0.12 of its
+double or take point. Its cube `error_threshold` is `0`, so any wrong cube
+action is rolled out (XG's "if different"); a checker play is rolled out when it
+costs more than 0.02. A preset's `first_pass` also takes a `{checker, cube}`
+mapping, the same shape `mid_pass` takes, for a cube screen at another depth.
+
+**Resign errors.** Off unless you pass `--resign-errors` (in the API,
+`resign_errors=True`), with any preset; no preset turns them on. With it, every
+accepted resignation is judged, as one decision for each player: the
+resigner's to concede, and the acceptor's to accept. The position resigned is
+valued, cubeful, and compared with what was conceded, and whichever side that
+comparison goes against is charged the difference. A resignation that
+conceded exactly what the position was worth (a game already decided) counts
+for neither player.
+
+Which position was resigned is what the record shows. After a play, or a
+dance, the next player is on roll with the dice still to come, and the
+position is valued before the roll. If the record shows a roll that had a
+legal play and was left unplayed, the resigner had seen it (their own roll or
+the opponent's), so the position is that roll's best play, not the average
+over all 21 rolls. A player who rolls badly and then resigns may have been
+right to, even where resigning before the roll would have been a large error.
+A resignation on a pending double is not judged: it is a pass.
+
+XG's own World Class mode leaves resignations out (its "Do not calculate resign
+errors" box is ticked); BMAB's published configuration counts them. An analysis
+run with the switch is labelled with it, for example `world_class@2+resign`, and
+`--preset world_class@2` still accepts it, since the preset itself is
+unchanged.
 
 ### How the tiers fire
 
@@ -293,9 +325,11 @@ most 0.6 points, but the study's exact figure could not be reproduced, which
   two sit far closer to each other than either does to XG: the remaining gap is
   the engine difference, not the search depth.
 - **`world_class`** matches XG's *search routing* — a 3-ply pass that deepens to
-  4-ply on near-ties, which is what XG World Class actually does — so it is the
+  4-ply on near-ties, which is what XG World Class actually does, with every
+  cube judged at 4-ply and any wrong cube action rolled out — so it is the
   one to reach for when reproducing XG is itself the goal. It is not more
-  accurate than `world_class_fast` in any way that experiment demonstrates.
+  accurate than `world_class_fast` in any way that experiment demonstrates, and
+  the experiment predates its current cube routing.
 - **A `balanced` preset used to sit between `deep` and these two** — a 2-ply
   screen with a 3-ply middle tier. It was retired after the retune, when it
   turned out to cost about what `world_class_fast` costs (see *What they cost*)

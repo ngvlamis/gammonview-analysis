@@ -22,7 +22,10 @@ What must hold:
   * GVAN_NO_SCREEN=1 forces that fallback everywhere;
   * staging (the default; GVAN_STAGED=0 turns it off) stages the screen (1 -> 2 -> N-ply) and lets a deeper tier
     deepen only a shallower result's close moves, every row still exact at
-    the depth its label names.
+    the depth its label names;
+  * a seeded rollout tier rolls out the seed's best, a close runner-up and the
+    played move -- each row exactly bgsage's rollout of that board -- and
+    keeps the seed's numbers for the rest (GVAN_ROLLOUT_SELECT=0 turns it off).
 
 Calling the same C++ entry point is what makes exact parity a fair thing to
 demand -- and what makes a *signature* change (bgsage 2.0's `root_board=`) a
@@ -485,6 +488,55 @@ def check_seeded_deepening() -> int:
     return failures
 
 
+def check_seeded_rollout() -> int:
+    """A rollout tier given the tier below's result rolls out its best, its
+    runner-up when within ROLLOUT_RUNNER_UP_WINDOW, and the forced (played)
+    move; nothing else. Each rolled row is bgsage's own rollout of that board,
+    the rest are the seed's rows, and with the flag off bgsage chooses."""
+    failures = 0
+    a3 = BgBotAnalyzer(eval_level="3ply", cubeful=True)
+    ro = BgBotAnalyzer(eval_level="truncated2", cubeful=True)
+    board, (d1, d2) = list(STARTING_BOARD), (4, 3)
+    seed = screened(a3, board, d1, d2)
+    played = seed.moves[3].board
+    got = screened(ro, board, d1, d2, force_boards=[played], seed=seed)
+
+    s0, s1 = seed.moves[0], seed.moves[1]
+    want = {tuple(s0.board), tuple(played)}
+    if (s1.eval_level == s0.eval_level
+            and s0.equity - s1.equity <= checker_eval.ROLLOUT_RUNNER_UP_WINDOW):
+        want.add(tuple(s1.board))
+    rolled = [m for m in got.moves if m.eval_level == "Rollout"]
+    ref = {tuple(m.board): m for m in ro.checker_play(
+        board, d1, d2, force_boards=[m.board for m in rolled]).moves}
+    exact = all(abs(m.equity - ref[tuple(m.board)].equity) < EPS
+                and abs(m.cubeless_equity - ref[tuple(m.board)].cubeless_equity) < EPS
+                and ref[tuple(m.board)].eval_level == "Rollout" for m in rolled)
+    seedmap = {tuple(m.board): m for m in seed.moves}
+    rest = got.moves[len(rolled):]
+    kept = all(m.eval_level != "Rollout" and m.equity == seedmap[tuple(m.board)].equity
+               and m.eval_level == seedmap[tuple(m.board)].eval_level for m in rest)
+    ok = ({tuple(m.board) for m in rolled} == want and exact and kept
+          and got.moves[:len(rolled)] == rolled
+          and len(got.moves) == len(seed.moves) and abs(got.moves[0].equity_diff) < EPS)
+    failures += not ok
+    print(f"{'PASS' if ok else 'FAIL'}  seeded rollout: {len(rolled)} rolled "
+          f"(best, runner-up within {checker_eval.ROLLOUT_RUNNER_UP_WINDOW}, played), "
+          f"each exactly bgsage's; the rest kept from the seed")
+
+    os.environ["GVAN_ROLLOUT_SELECT"] = "0"
+    try:
+        off = screened(ro, board, d1, d2, force_boards=[played], seed=seed)
+    finally:
+        del os.environ["GVAN_ROLLOUT_SELECT"]
+    plain = ro.checker_play(board, d1, d2, force_boards=[played])
+    ok = ([(tuple(m.board), m.equity, m.eval_level) for m in off.moves]
+          == [(tuple(m.board), m.equity, m.eval_level) for m in plain.moves])
+    failures += not ok
+    print(f"{'PASS' if ok else 'FAIL'}  GVAN_ROLLOUT_SELECT=0 leaves the choice to bgsage")
+    return failures
+
+
 def main() -> int:
     failures = 0
     failures += check_parity()
@@ -495,6 +547,7 @@ def main() -> int:
     failures += check_no_legal_moves()
     failures += check_staged()
     failures += check_seeded_deepening()
+    failures += check_seeded_rollout()
     print(f"\n{'all passed' if not failures else str(failures) + ' failed'}")
     return 1 if failures else 0
 

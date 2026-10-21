@@ -171,6 +171,10 @@ def main() -> None:
         "--count-illegal", action="store_true", dest="count_illegal",
         help="Include illegal/mismatched moves in PR calculation (default: excluded)",
     )
+    parser.add_argument(
+        "--resign-errors", action="store_true", dest="resign_errors",
+        help="Judge accepted resignations, counting them in PR (default: off)",
+    )
     args = parser.parse_args()
 
     files = _collect_inputs(args.inputs)
@@ -207,6 +211,7 @@ def main() -> None:
                 threads=args.threads,
                 all_moves=args.all_moves,
                 count_illegal=args.count_illegal,
+                resign_errors=args.resign_errors,
                 quiet=True,
                 show_progress=False,
                 jobs=args.jobs,

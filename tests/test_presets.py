@@ -25,6 +25,7 @@ Run: uv run python tests/test_presets.py   (exit 0 = all passed)
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import io
 import os
 import sys
@@ -36,7 +37,7 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 # The pinned digests describe the default environment.
-for _var in ("GVAN_STAGED", "GVAN_NO_SCREEN"):
+for _var in ("GVAN_STAGED", "GVAN_NO_SCREEN", "GVAN_ROLLOUT_SELECT"):
     os.environ.pop(_var, None)
 
 from gvanalysis import presets as P  # noqa: E402
@@ -94,15 +95,9 @@ def check_revisions_pinned() -> None:
 
 def check_digest_scope() -> None:
     wc = P.PRESETS["world_class"]
-    renamed = P.Preset("other", "Other", wc.first_pass, wc.second_pass,
-                       wc.mid_pass_checker, wc.mid_pass_cube,
-                       wc.close_threshold_checker, wc.close_threshold_cube,
-                       wc.error_threshold_checker, wc.error_threshold_cube, None)
+    renamed = dataclasses.replace(wc, key="other", display="Other", revision=None)
     check(renamed.digest() == wc.digest(), "name and display are not part of the definition")
-    tweaked = P.Preset(wc.key, wc.display, wc.first_pass, wc.second_pass,
-                       wc.mid_pass_checker, wc.mid_pass_cube,
-                       wc.close_threshold_checker, wc.close_threshold_cube,
-                       0.0, wc.error_threshold_cube, wc.revision)
+    tweaked = dataclasses.replace(wc, error_threshold_checker=0.0)
     check(tweaked.digest() != wc.digest() and tweaked.label.startswith("world_class@2+"),
           f"a changed threshold changes the digest and marks the label ({tweaked.label})")
     with env(GVAN_STAGED="0"):
@@ -113,6 +108,10 @@ def check_digest_scope() -> None:
           f"GVAN_STAGED=0 shows in every other label: {sorted(flat.values())}")
     with env(GVAN_NO_SCREEN="1"):
         check("+" in P.PRESETS["deep"].label, "GVAN_NO_SCREEN shows in the label")
+    with env(GVAN_ROLLOUT_SELECT="0"):
+        ro = {k: p.label for k, p in P.PRESETS.items()}
+    check(all(("+" in v) == k.startswith("world_class") for k, v in ro.items()),
+          f"GVAN_ROLLOUT_SELECT=0 shows in exactly the rollout presets' labels: {sorted(ro.values())}")
 
 
 def check_builtins_locked() -> None:
@@ -121,7 +120,7 @@ def check_builtins_locked() -> None:
         "  world_class: {error_threshold: 0.0}\n"
         "  wcf: {first_pass: 2ply}\n"
         "  mine: {first_pass: 3ply, second_pass: truncated2}\n")
-    check(presets["world_class"].error_threshold_cube == 0.02
+    check(presets["world_class"].error_threshold_checker == 0.02
           and presets["world_class_fast"].first_pass == "3ply",
           "a built-in (by name or alias) cannot be overridden")
     check("world_class" in err and "wcf" in err, "each skipped override is warned about", err)
@@ -140,6 +139,48 @@ def check_builtins_locked() -> None:
         got, *_rest, err = config(text)
         check("mine" not in got and "my preset" not in got and "ignoring" in err,
               f"refused: {what}", err)
+
+
+def check_first_pass_split() -> None:
+    """A per-kind first pass (a custom preset's: no built-in splits it), and
+    one method has one digest however it is spelled."""
+    check(all(p.first_pass_cube is None for p in P.PRESETS.values()),
+          "no built-in splits its first pass")
+    check(P.PRESETS["deep"].first_pass_cube is None
+          and P.PRESETS["deep"].cube_first_pass == "3ply",
+          "an unsplit first pass serves both kinds")
+    got, *_rest, err = config(
+        "presets:\n"
+        "  bare: {first_pass: 3ply, second_pass: truncated2}\n"
+        "  same: {first_pass: {checker: 3ply, cube: 3ply}, second_pass: truncated2}\n"
+        "  split: {first_pass: {checker: 3ply, cube: 4ply}, second_pass: truncated2}\n")
+    check(got["bare"].digest() == got["same"].digest(),
+          "a mapping naming one level for both is the bare level's digest")
+    check(got["split"].digest() != got["bare"].digest()
+          and got["split"].cube_first_pass == "4ply",
+          "a split first pass is its own definition")
+    for text, what in (
+        ("presets:\n  mine: {first_pass: {cube: 4ply}}\n", "a first pass with no checker level"),
+        ("presets:\n  mine: {first_pass: {checker: 3ply, cube: 5ply}}\n", "an invalid cube level"),
+        ("presets:\n  mine: {first_pass: {checker: 3ply, move: 4ply}}\n", "an unknown kind"),
+    ):
+        got, *_rest, err = config(text)
+        check("mine" not in got and "ignoring" in err, f"refused: {what}", err)
+
+
+def check_resign_option() -> None:
+    """Resign errors are an option, never part of a preset: off in every
+    built-in, named in the label when on, and outside what a pin names."""
+    check(not any(p.resign_errors for p in P.PRESETS.values()),
+          "no built-in judges resignations")
+    wc = P.PRESETS["world_class"]
+    on = wc.with_resign_errors()
+    check(on.label == "world_class@2+resign" and on.method_label == wc.label
+          and on.digest() == wc.digest(),
+          f"the option shows in the label, not the definition ({on.label})")
+    got, *_rest, err = config("presets:\n  mine: {first_pass: 3ply, resign_errors: true}\n")
+    check("mine" not in got and "analysis option" in err,
+          "a preset cannot turn resign errors on", err)
 
 
 def check_pins() -> None:
@@ -167,6 +208,8 @@ def main() -> int:
     check_revisions_pinned()
     check_digest_scope()
     check_builtins_locked()
+    check_first_pass_split()
+    check_resign_option()
     check_pins()
     print(f"\n{'all passed' if not failures else str(failures) + ' failed'}")
     return 1 if failures else 0

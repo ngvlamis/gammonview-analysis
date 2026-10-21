@@ -181,7 +181,7 @@ built-ins:
 | `very_quick` (`vq`) | `2ply` | — | — | Very quick |
 | `fast` (`f`) | `2ply` | — | `3ply` | Fast |
 | `deep` (`d`) | `3ply` | — | — | Deep |
-| `world_class` (`wc`) | `3ply` | `4ply` (both kinds) | `truncated2` | World Class (XG Roller+) |
+| `world_class` (`wc`) | `3ply` | `4ply` | `truncated2` | World Class (XG Roller+) |
 | `world_class_fast` (`wcf`) | `3ply` | `truncated2` (**cube only**) | `truncated2` | World Class (3-tier) |
 
 The second pass runs on an **error**; the middle tier runs on a **borderline**
@@ -227,9 +227,13 @@ around these means. See [the timings](docs/CLI.md#what-they-cost).
   `world_class_fast`'s squared PR error against XG is that engine floor, which
   no preset can spend its way past.
 - **`world_class` is for reproducing XG specifically**, not for being more
-  accurate. Its only real edge is on borderline cubes, and it gets there by
-  rolling them out *less* often than `world_class_fast` does — which is
-  XG-like, not demonstrably better. It costs roughly twice as much for that.
+  accurate. It routes as XG World Class does — checker plays from a 3-ply
+  screen to 4-ply on near-ties, cubes from a 3-ply screen to 4-ply within 0.12
+  of the double or take point, and any wrong cube action rolled out. The
+  figures above predate that cube routing; it costs
+  roughly twice as much as `world_class_fast`. Resign errors, which BMAB's
+  configuration counts, are a separate switch (`--resign-errors`) that any
+  preset can run with.
 - **If you want cheap, drop to `deep`**, which costs an order of magnitude
   less than either. There is nothing between them: a `balanced` preset used to
   sit in that gap, but after the September 2026 retune it cost about what

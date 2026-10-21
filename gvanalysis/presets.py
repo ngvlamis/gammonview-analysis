@@ -27,7 +27,8 @@ results changes -- its levels and thresholds, and the screening constants in
 `test_presets` fails if a definition changes without a new revision. Two
 analyses with the same label and the same `engine_build` were produced the same
 way; a caller that needs that guarantee passes `name@revision` and is refused
-if this install runs anything else.
+if this install runs anything else. Resign errors are an analysis option, not a
+preset's: an analysis that judged them is labelled `world_class@2+resign`.
 """
 
 from __future__ import annotations
@@ -37,6 +38,7 @@ import json
 import os
 import re
 import sys
+import dataclasses
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -48,6 +50,20 @@ VALID_LEVELS: frozenset[str] = frozenset({
     "1ply", "2ply", "3ply", "4ply",
     "truncated1", "truncated2", "truncated3", "rollout",
 })
+
+DEFAULT_ERROR_THRESHOLD = 0.02
+"""Default `error_threshold`: the standard cutoff below which an error is not
+worth sizing precisely.
+
+Three independent measurements land on this number. XG's own World Class
+routing rolls out 22.9% of decisions whose error is 0.015-0.020 and 94.7% of
+those in 0.020-0.030 -- a cliff, not a ramp. Scored against XG as referee, a
+rollout improves error sizing by +8.3% below 0.02 and +31.9% above it. And
+across a 101-match corpus the errors under 0.02 are 43-46% of everything a
+screen flags while carrying 7-8% of the error equity: nearly half the rollouts
+for a PR fidelity cost of roughly 0.02.
+"""
+
 
 # Canonical built-in presets (spec dicts, same shape as presets.yaml entries).
 # These are the guaranteed baseline. second_pass None => single pass; mid_pass +
@@ -98,16 +114,31 @@ _BUILTIN_SPECS: dict[str, dict] = {
     # cannot resolve that: the 95% CI is [-0.0370, +0.1735]. The speedup is the
     # measured claim here; the accuracy is not yet.
     #
-    # Unlike world_class_fast, the cube middle tier here is 4-ply rather than
-    # truncated2, so both kinds deepen before they roll out. That is safe only
-    # because a borderline decision now ESCALATES: the arbiter test that made
-    # 4-ply the weaker cube estimator (14% wrong verdicts, mean gap error
-    # 0.0127, against truncated2's 12%/0.0091) was scoring it as a TERMINAL
-    # tier, which it no longer is. A borderline cube the 4-ply tier then sizes
-    # above error_threshold goes to truncated2 on 4-ply's own numbers.
-    "world_class": {"display": "World Class", "revision": 2, "first_pass": "3ply",
-                    "mid_pass": "4ply", "second_pass": "truncated2",
-                    "close_threshold": 0.08, "aliases": ["wc", "worldclass"]},
+    # CUBES: a 3-ply screen, 4-ply on a cube within 0.12 of its double or take
+    # point, and the rollout on ANY wrong action (XG's "If Different"), so cube
+    # error_threshold is 0. (At @1 they shared the checker shape: 0.08 window,
+    # rollout only above 0.02.) The window is wider than the checker one
+    # because a cube is cheap to deepen -- 4-ply is 4x the 3-ply screen on one
+    # pre-roll cube against 19x on a move list. XG's own routing, read off the
+    # corpus, is a 2-ply screen with 4-ply within ~0.25 of the double point;
+    # this keeps the deeper screen instead of copying the shallower one.
+    #
+    # Resignations are not judged here, as in XG's own World Class mode:
+    # resign errors are an analysis option (`resign_errors`), never part of a
+    # preset, and an analysis that ran with them says so in its label.
+    #
+    # The checker interval stays XG's Normal (0.08, 4-ply on up to
+    # DEEPEN_MAX_MOVES). Gigantic -- 16 moves within 0.32, the BMAB setting --
+    # was measured on 11,037 checker decisions and costs 3x the non-rollout
+    # checker CPU to recover 0.089 equity of best-move regret in all, 0.071 of
+    # it on one decision, and an unchanged rollout count: no PR effect. (Its gain is
+    # from a wider 3-ply set, not the window; widening the window alone buys
+    # nothing.)
+    "world_class": {"display": "World Class", "revision": 2,
+                    "first_pass": "3ply", "mid_pass": "4ply", "second_pass": "truncated2",
+                    "close_threshold": {"checker": 0.08, "cube": 0.12},
+                    "error_threshold": {"checker": DEFAULT_ERROR_THRESHOLD, "cube": 0.0},
+                    "aliases": ["wc", "worldclass"]},
     # 3-tier XG World Class analog: 3-ply screen, truncated2 rollout on error,
     # and a middle tier on cubes only.
     #
@@ -184,13 +215,14 @@ _RETIRED: dict[str, str] = {
 #: 2 -- staged checker screening (1 -> 2 -> N-ply, the 2-ply stage widened to
 #:      the 1-ply window on a crowded field, and a middle tier deepening only
 #:      the screen's close moves); very_quick never goes past 2-ply, so it
-#:      is unchanged and stays at 1.
+#:      is unchanged and stays at 1. world_class@2 also widens the cube
+#:      window to 0.12 and rolls out any wrong cube action.
 _REVISIONS: dict[str, dict[int, str]] = {
     "very_quick": {1: "454c535ddc16"},
     "fast": {1: "7030cc90eace", 2: "a44dc6c17c2f"},
     "deep": {1: "f0d71d4caf31", 2: "062a598d4e7f"},
-    "world_class": {1: "e5b1989b5c6c", 2: "7427f6583314"},
-    "world_class_fast": {1: "7914909ce57a", 2: "075ea0886200"},
+    "world_class": {1: "e5b1989b5c6c", 2: "5b8d38df0b0d"},
+    "world_class_fast": {1: "7914909ce57a", 2: "e0dd834816a4"},
 }
 
 #: What a custom preset's name may be: it is written into the label, so it
@@ -262,7 +294,9 @@ TEMPLATE = """\
 # equally cheap on a move list and on a single cube -- see world_class_fast,
 # which gives cubes a middle tier and leaves checker plays 2-tier. An omitted
 # kind stays plain 2-tier. close_threshold and error_threshold take the same
-# bare-value-or-{checker, cube}-mapping shape. Naming the same level as
+# bare-value-or-{checker, cube}-mapping shape, and so does first_pass (whose
+# checker level is required): world_class screens cubes at 4ply and checker
+# plays at 3ply, as XG World Class does. Naming the same level as
 # second_pass in mid_pass is allowed and costs nothing extra (one analyzer is
 # built and shared); it means "borderline as well as wrong earns the top tier".
 #
@@ -330,21 +364,43 @@ class Preset:
     error_threshold_cube: float = 0.02
     # The built-in's revision (see `_REVISIONS`); None for a custom preset.
     revision: int | None = None
+    # The cube screen's level when it differs from the checker one; None =>
+    # `first_pass` for both. Last, so positional construction keeps working.
+    # XG World Class screens cubes at 4-ply and checker plays at 3-ply, and
+    # the cost argument is the middle tier's: 4-ply is 4x the 3-ply screen on a
+    # cube, 19x on a move list.
+    first_pass_cube: str | None = None
+    # Judge accepted resignations: the resigner's error in giving up the
+    # position for what was conceded, and the acceptor's in taking it. XG has
+    # this as a global switch, off in its World Class mode and on in BMAB's
+    # published configuration. Here it is an analysis option, never a preset's
+    # (`with_resign_errors`): it moves PR, so it shows in the label as
+    # `+resign`, but it is not part of the definition a pin names.
+    resign_errors: bool = False
+
+    @property
+    def cube_first_pass(self) -> str:
+        """The level every cube decision is screened at."""
+        return self.first_pass_cube or self.first_pass
 
     def definition(self) -> dict:
         """Everything that decides this preset's results, as plain data.
 
         The levels and thresholds, plus the screening constants the levels it
         names actually reach (`checker_eval.screening`), read at call time so
-        an environment override (GVAN_NO_SCREEN, GVAN_STAGED) shows up here
+        an environment override (GVAN_NO_SCREEN, GVAN_STAGED, GVAN_ROLLOUT_SELECT) shows up here
         instead of running under a label that says otherwise. Not the display
         name or aliases: renaming a preset does not change what it computes.
         """
         from .checker_eval import screening   # lazy: pulls in bgsage
         levels = [lv for lv in (self.first_pass, self.mid_pass_checker,
                                 self.mid_pass_cube, self.second_pass) if lv]
+        # A shared first pass stays a bare level, so every preset that never
+        # split it keeps the digest it always had.
+        first = (self.first_pass if self.cube_first_pass == self.first_pass
+                 else [self.first_pass, self.cube_first_pass])
         return {
-            "first_pass": self.first_pass,
+            "first_pass": first,
             "mid_pass": [self.mid_pass_checker, self.mid_pass_cube],
             "second_pass": self.second_pass,
             "close_threshold": [self.close_threshold_checker, self.close_threshold_cube],
@@ -364,14 +420,24 @@ class Preset:
         `world_class@2` for a built-in running its pinned definition;
         `world_class@2+<digest>` for one whose definition has been changed
         under it (an environment override), so it is never mistaken for the
-        real revision; `custom/<name>@<digest>` for a user preset.
+        real revision; `custom/<name>@<digest>` for a user preset. Any of
+        them ends `+resign` when the analysis judged resignations.
         """
+        return self.method_label + ("+resign" if self.resign_errors else "")
+
+    @property
+    def method_label(self) -> str:
+        """The label of the preset's definition alone -- what a pin names."""
         d = self.digest()[:12]
         if self.revision is None:
             return f"custom/{self.key}@{d[:6]}"
         if _REVISIONS.get(self.key, {}).get(self.revision) == d:
             return f"{self.key}@{self.revision}"
         return f"{self.key}@{self.revision}+{d[:6]}"
+
+    def with_resign_errors(self, on: bool = True) -> "Preset":
+        """This preset, judging accepted resignations (or not)."""
+        return dataclasses.replace(self, resign_errors=on)
 
     @property
     def has_mid(self) -> bool:
@@ -428,18 +494,6 @@ def _mid_levels(key: str, spec: dict) -> tuple[str | None, str | None]:
     )
 
 
-DEFAULT_ERROR_THRESHOLD = 0.02
-"""Default `error_threshold`: the standard cutoff below which an error is not
-worth sizing precisely.
-
-Three independent measurements land on this number. XG's own World Class
-routing rolls out 22.9% of decisions whose error is 0.015-0.020 and 94.7% of
-those in 0.020-0.030 -- a cliff, not a ramp. Scored against XG as referee, a
-rollout improves error sizing by +8.3% below 0.02 and +31.9% above it. And
-across a 101-match corpus the errors under 0.02 are 43-46% of everything a
-screen flags while carrying 7-8% of the error equity: nearly half the rollouts
-for a PR fidelity cost of roughly 0.02.
-"""
 
 
 def _kind_thresholds(key: str, spec: dict, field: str,
@@ -479,15 +533,36 @@ def _kind_thresholds(key: str, spec: dict, field: str,
     )
 
 
+def _first_levels(key: str, spec: dict) -> tuple[str | None, str | None]:
+    """Resolve `first_pass` into (checker_level, cube_level_or_None).
+
+    A bare level screens both kinds (every preset written before the split); a
+    `{checker, cube}` mapping names each, and the checker level is required --
+    there is no screen to fall back to. A cube level equal to the checker one
+    collapses to None, so the two spellings of one method are one preset.
+    """
+    raw = spec.get("first_pass")
+    if not isinstance(raw, dict):
+        return raw, None
+    unknown = sorted(str(k) for k in raw if k not in _MID_KINDS)
+    if unknown:
+        raise PresetConfigError(
+            f"preset {key!r}: first_pass keys must be "
+            f"{' / '.join(map(repr, _MID_KINDS))}, got {', '.join(unknown)}")
+    checker, cube = raw.get("checker"), raw.get("cube")
+    return checker, (None if cube in (None, checker) else cube)
+
+
 def _make_preset(key: str, spec: dict) -> Preset:
     """Validate one preset spec dict into a Preset. Raises PresetConfigError."""
-    first_pass = spec.get("first_pass")
+    first_pass, first_cube = _first_levels(key, spec)
     second_pass = spec.get("second_pass")  # may be absent/null
     mid_checker, mid_cube = _mid_levels(key, spec)
     close_checker, close_cube = _kind_thresholds(key, spec, "close_threshold", None)
     err_checker, err_cube = _kind_thresholds(key, spec, "error_threshold",
                                              DEFAULT_ERROR_THRESHOLD)
-    for label, lvl in (("first_pass", first_pass), ("second_pass", second_pass),
+    for label, lvl in (("first_pass", first_pass), ("first_pass.cube", first_cube),
+                       ("second_pass", second_pass),
                        ("mid_pass.checker", mid_checker), ("mid_pass.cube", mid_cube)):
         if lvl is None and label != "first_pass":
             continue
@@ -520,6 +595,10 @@ def _make_preset(key: str, spec: dict) -> Preset:
         close_checker = None
     if mid_cube is None:
         close_cube = None
+    if "resign_errors" in spec:
+        raise PresetConfigError(
+            f"preset {key!r}: resign_errors is an analysis option "
+            f"(--resign-errors), not part of a preset")
     revision = spec.get("revision")
     if revision is not None and (isinstance(revision, bool) or not isinstance(revision, int)
                                  or revision < 1):
@@ -529,7 +608,7 @@ def _make_preset(key: str, spec: dict) -> Preset:
                   close_checker, close_cube,
                   0.0 if err_checker is None else err_checker,
                   0.0 if err_cube is None else err_cube,
-                  revision)
+                  revision, first_cube)
 
 
 def _assemble(specs: dict[str, dict], default: str) -> tuple[dict[str, Preset], dict[str, str], str]:
@@ -703,8 +782,8 @@ def _check_pin(name: str, p: Preset, pin: str) -> None:
             f"Preset {name!r} is {when} of {p.key}; this install runs "
             f"{p.key}@{p.revision}. Install the release that shipped "
             f"{p.key}@{want} to reproduce it.")
-    if p.label != f"{p.key}@{p.revision}":
+    if p.method_label != f"{p.key}@{p.revision}":
         raise ValueError(
             f"Preset {name!r}: this install's {p.key} has been modified "
             f"({p.label}), so it is not revision {want} -- check GVAN_STAGED / "
-            f"GVAN_NO_SCREEN in the environment.")
+            f"GVAN_NO_SCREEN / GVAN_ROLLOUT_SELECT in the environment.")

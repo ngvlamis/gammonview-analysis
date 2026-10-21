@@ -113,8 +113,13 @@ def main() -> int:
                 continue
             first, mid, second = cells[0], cells[1], cells[2]
 
-            check(first == (d.get("first_pass") or "—"),
-                  f"{doc}:{name} 1st pass is {d.get('first_pass')!r} (doc says {first!r})")
+            # A cube screen of its own is named after the checker one:
+            # "3ply (cube 4ply)".
+            want = d.get("first_pass") or "—"
+            if d.get("first_pass_cube"):
+                want = f"{want} (cube {d['first_pass_cube']})"
+            check(first == want,
+                  f"{doc}:{name} 1st pass is {want!r} (doc says {first!r})")
             check(second == (d.get("second_pass") or "—"),
                   f"{doc}:{name} 2nd pass is {d.get('second_pass')!r} (doc says {second!r})")
             check(_mid_ok(mid, d.get("mid_pass_checker"), d.get("mid_pass_cube")),

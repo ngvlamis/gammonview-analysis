@@ -26,7 +26,7 @@ reuses a built-in's name or alias is now skipped with a warning, where it used
 to override the built-in. A custom preset's label comes from a digest of its
 whole definition, screening constants included, so renaming it changes nothing
 and a changed threshold changes the label. An environment override
-(`GVAN_STAGED=0`, `GVAN_NO_SCREEN`) runs as `world_class@2+<digest>` rather
+(`GVAN_STAGED=0`, `GVAN_NO_SCREEN`, `GVAN_ROLLOUT_SELECT=0`) runs as `world_class@2+<digest>` rather
 than under the real label. `--preset world_class@2` runs exactly that revision,
 and refuses if anything else would run. The label travels in the block's
 `x-gammonview-analysis` annotation (`preset=`), in Python and JS; older files
@@ -53,6 +53,53 @@ depth as XG's does. 4-ply checker work falls to about 36% of its cost.
 and 1.45x on an 8-core one. PR is identical to two decimals on 24 players, and
 8 of 2,323 best moves differ, every one of them a tie. `very_quick` never
 reaches the staged screen and stays at revision 1.
+
+**A checker rollout rolls out the moves the tier below chose** *(change)*
+
+When a checker play goes to the rollout tier, the moves rolled out are now
+the best move from the tier that sent it (the 3-ply screen, or 4-ply after a
+middle tier), its runner-up when within 0.02 of that best at the same depth,
+and the played move. Every other move keeps that tier's numbers. bgsage
+used to choose the set again from a fresh 2-ply filter, plus a loop that rolled
+out any unrolled move ranked above the rolled ones: 3.85 moves a decision across
+43,691 decisions in our corpus outputs, where XG World Class rolls out 2.06
+(93.9% of its Roller+ decisions roll out exactly the best and the played move).
+Ours now average 2.26. On 11 matches `world_class` ran 28% faster (448s to
+320s); 4 of 1,937 best moves changed, together 0.029 equity of error, and PR
+moved by 0.006 on average (at most 0.11). Each rolled-out row is bgsage's own
+rollout of that board, to the last digit. `GVAN_ROLLOUT_SELECT=0` restores
+bgsage's choice for A/B work. Part of `world_class@2` and
+`world_class_fast@2`, neither of which has shipped.
+
+**`world_class` rolls out every wrong cube** *(change)*
+
+A cube is still screened at 3-ply, but deepened to 4-ply within 0.12 of its
+double or take point (was 0.08), and any wrong cube action is now rolled out
+(was: only one wrong by more than 0.02), as XG World Class's "if different"
+does. On 11 matches (1,109 cubes) it costs 2% of wall time and 6 more cube
+rollouts, and it reaches the same optimal action on every cube as screening
+them all at 4-ply would, which costs 11%. Against the old shape it flips 3
+optimal actions; PR moves by 0.02 on average (at most 0.23). A preset's
+`first_pass` also takes a `{checker, cube}` mapping now, for a cube screen at
+its own depth. Part of `world_class@2`, which has not shipped.
+
+**Resign errors** *(new, opt-in)*
+
+`--resign-errors` (`resign_errors=True` in the API) judges every accepted
+resignation, as BMAB's configuration of XG does. It is off by default and no
+preset turns it on; an analysis run with it is labelled `<preset>+resign`
+(`world_class@2+resign`), and a pinned `--preset world_class@2` still accepts
+it. A resignation counts as a decision for each player: the resigner is charged
+if they conceded more than the position was worth, and the acceptor if they
+took less. A resignation conceding the position's exact value counts for
+neither. The position is the one the record shows was resigned: before the roll
+after a play or a dance, and after it when the record shows a roll that had a
+legal play and was left unplayed, since the resigner had seen it. In the XG
+corpus 18 of 149 judged resignations come after a seen roll; judged before the
+roll instead, two of them would be charged 0.33 and 0.60 that the roll actually
+seen makes 0. A resignation on a pending double is not judged. The analysis goes
+in v2's resign record (`resign_error`, `take_resign_error`, with its level), and
+`compute_aggregates` / `computeAggregates` now count it in PR.
 
 **Auto `--jobs` is `cpu // 3` workers, at least 2** *(behaviour change on
 `--jobs 0`)*

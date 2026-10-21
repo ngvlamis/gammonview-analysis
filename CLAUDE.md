@@ -248,8 +248,44 @@ in step when a flag changes; the rationale belongs only here.
   | `very_quick` (`vq`) | `2ply` | — | Very quick |
   | `fast` (`f`) | `2ply` | `3ply` | Fast |
   | `deep` (`d`) | `3ply` | — | Deep |
-  | `world_class` (`wc`) | `3ply` → `4ply` on close | `truncated2` | World Class (XG Roller+) |
+  | `world_class` (`wc`) | `3ply` → `4ply` on close (cube: within 0.12) | `truncated2` | World Class (XG Roller+) |
   | `world_class_fast` (`wcf`) | `3ply` (cube: → rollout on close too) | `truncated2` | World Class (3-tier) |
+
+  `world_class`'s cubes: a 3-ply screen, 4-ply within 0.12 of the double or
+  take point (`close_threshold: {checker: 0.08, cube: 0.12}`), and cube
+  `error_threshold` 0 -- any wrong action rolled out ("if different"). XG's own
+  routing, read off 39,284 cube records in 524 XG files, is shallower: no
+  cube is 3-ply; it screens at 2-ply and goes to 4-ply only within ~0.25 of the
+  double point (no 2-ply record above a gap of -0.24), every actual double,
+  take and pass at 4-ply or Roller+. We keep the deeper screen. Measured on
+  11 matches, 1,109 cubes, against the old shape (0.08 window, rollout above
+  0.02) and against 4-ply on every cube:
+
+  | cube shape | wall | 3-ply / 4-ply / rollout | action flips vs all-4-ply |
+  |---|---|---|---|
+  | old (@1) | 442s | 1013 / 49 / 47 | 3 |
+  | all 4-ply | 491s (+11%) | 0 / 1057 / 52 | -- |
+  | **@2** | 451s (+2%) | 981 / 75 / 53 | **0** |
+
+  So @2 reaches every verdict the all-4-ply shape does at a fifth of its cost.
+  PR still differs from it by 0.097 mean (max 0.56), and not through any cube
+  error -- lost equity is identical on all 1,109 -- but through the decision
+  count: 3-ply and 4-ply disagree on whether 1-2 cubes per player are trivial.
+  The checker interval stays at XG's Normal: Gigantic (16 within 0.32)
+  costs 3x the non-rollout checker CPU for 0.089 total best-move regret over
+  11,037 decisions, one decision holding 0.071 of it, rollouts unchanged.
+
+  **Resign errors are an analysis option, never a preset's** (`--resign-errors`,
+  `resign_errors=True`; `Preset.with_resign_errors`). They move PR, so the label
+  says so (`world_class@2+resign`), but they stay out of the definition and
+  digest: a pin names the preset, and `presets.yaml` refuses the key. The
+  position judged is the one the record shows was resigned. After a play or a
+  dance it is pre-roll for the next player. After a roll left unplayed that had
+  a legal play, it is that roll's best play, because the resigner saw the dice. In the XG
+  corpus 18 of 149 judged resignations follow a seen roll, and pre-roll
+  judging would have charged two of them 0.33 and 0.60 where the seen roll
+  makes both 0. A roll seen but not recorded cannot be detected; XG does record
+  one.
 
   `world_class_fast` is a 3-tier scheme (`mid_pass` + `close_threshold` on the
   preset): `3ply` baseline, `truncated2` rollout on error, and a middle tier on
@@ -573,10 +609,28 @@ documented with their measurements in the module: `ELEVATE_THRESHOLD` /
 `ELEVATE_MAX_MOVES` (the accuracy filter) and `ELEVATE_MIN_MOVES` (a
 display-quality floor). **Every one of these constants is part of a preset's
 definition** (`checker_eval.screening()` feeds `Preset.digest()`), so changing
-one fails `test_presets` until the affected presets get a new revision. Rollout
-tiers, cubeless and 1-ply analyzers, and any bgsage whose internals have moved
-all fall back to `analyzer.checker_play` unchanged; `GVAN_NO_SCREEN=1` forces
-that fallback everywhere, which is how the A/B measurements above were taken.
+one fails `test_presets` until the affected presets get a new revision. An
+unseeded rollout tier, cubeless and 1-ply analyzers, and any bgsage whose
+internals have moved all fall back to `analyzer.checker_play` unchanged;
+`GVAN_NO_SCREEN=1` forces that fallback everywhere, which is how the A/B
+measurements above were taken.
+
+**A rollout tier rolls out what the tier below chose, as XG's does.**
+`game_eval` hands the second pass the screen's (or middle tier's) result as
+`seed=`, and a rollout analyzer then rolls out only that result's best, its
+runner-up within `ROLLOUT_RUNNER_UP_WINDOW` (0.02) at the same depth, and the
+played move, keeping the seed's numbers for the rest. Left to itself bgsage
+throws the seed away and picks again with a 2-ply filter (within 0.08, at most
+5) plus a promotion loop: 3.85 rollouts a decision over 43,691 in our corpus
+outputs, against XG World Class's 2.06 (93.9% exactly best + played; 6% add one,
+nearly always the runner-up). Ours average 2.26 (26% take the runner-up, so the
+window is wider than XG's; it is cheap insurance). On 11 matches `world_class`
+went 448s -> 320s (-28%); 4 of 1,937 best moves changed, 0.029 equity of error
+in total, PR within 0.006 mean (0.11 max). Each rolled row is bgsage's own
+`cubeful_evaluate_board` call, so it matches bgsage exactly
+(`test_screened_checker.check_seeded_rollout`). The second pass gets a seed
+but no `seed_window`, so a multi-ply second pass (`fast`'s 3-ply) does not
+deepen and is unchanged. `GVAN_ROLLOUT_SELECT=0` restores bgsage's choice.
 
 **Because it duplicates a bgsage call site, it inherits that call's signature.**
 bgsage 2.0 added `root_board=` to `cubeful_probs_and_equity_nply` — Stage 11's

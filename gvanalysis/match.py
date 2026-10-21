@@ -68,7 +68,7 @@ from .loader import load_ogxm
 from .ogxm_reconstructor import reconstruct_decisions_from_ogxm
 from .game_eval import (
     evaluate_game, _EvalCtx, _eval_cube_decision, _eval_checker_decision,
-    _collate_game, _LEVEL_DISPLAY,
+    _eval_resign_decision, _collate_game, _LEVEL_DISPLAY,
 )
 from gvformat import to_ogxm_json, write_gvab, read_gvab, encode_match, append_analysis
 from .share import GAMMONVIEW_BASE_URL, MAX_SHARE_LENGTH, SHARE_PARAM
@@ -209,8 +209,8 @@ def _gz_path(path: Path, compress: bool) -> Path:
 _WORKER: dict = {}
 
 
-def _worker_init(base_level, mid_level_checker, mid_level_cube, level,
-                 thresholds, all_moves, count_illegal, level_display,
+def _worker_init(base_level, base_level_cube, mid_level_checker, mid_level_cube, level,
+                 thresholds, resign_errors, all_moves, count_illegal, level_display,
                  engine_threads, verbose) -> None:
     # First, before any weights are loaded: from here on this process holds
     # hundreds of megabytes, and if the parent dies hard nothing else will ever
@@ -232,11 +232,13 @@ def _worker_init(base_level, mid_level_checker, mid_level_cube, level,
 
     analyzer = mk(level)
     base_analyzer = mk(base_level)
+    base_analyzer_cube = mk(base_level_cube)
     mid_analyzer_checker = mk(mid_level_checker)
     mid_analyzer_cube = mk(mid_level_cube)
     luck_analyzer = mk("1ply")
     _WORKER["ctx_kw"] = dict(
         analyzer=analyzer, base_analyzer=base_analyzer,
+        base_analyzer_cube=base_analyzer_cube, resign_errors=resign_errors,
         mid_analyzer_checker=mid_analyzer_checker, mid_analyzer_cube=mid_analyzer_cube,
         luck_analyzer=luck_analyzer,
         close_threshold_checker=close_checker,
@@ -254,6 +256,8 @@ def _worker_run(item):
     ctx = _EvalCtx(game={"game_number": game_number}, **_WORKER["ctx_kw"])
     if dec["kind"] == "cube":
         res = _eval_cube_decision(dec, ctx)
+    elif dec["kind"] == "resign":
+        res = _eval_resign_decision(dec, ctx)
     else:
         res = _eval_checker_decision(dec, ctx)
     return gi, di, res
@@ -270,6 +274,7 @@ def analyze_ogxm(
     show_progress: bool = True,
     on_progress: "Callable[[int, int], None] | None" = None,
     jobs: int = 1,
+    resign_errors: bool = False,
 ) -> dict:
     """Analyze an OGXM match dict; return the internal analyzed ``data`` dict
     (``summary`` + ``games[].moves[]``) that ``gvformat.to_ogxm_json`` consumes.
@@ -288,6 +293,10 @@ def analyze_ogxm(
     first pass screens every decision and a stronger second pass runs on
     disagreement. Single-pass presets judge everything at the first-pass level.
     None selects the configured default preset.
+
+    `resign_errors` judges accepted resignations, as XG does with "Do not
+    calculate resign errors" unchecked: off unless asked for, in every preset.
+    It moves PR, so the analysis is labelled with it (`world_class@2+resign`).
 
     Raises ValueError for unknown presets. Pass quiet=True to suppress the
     human-readable table/summary; pass show_progress=False to suppress the
@@ -347,7 +356,11 @@ def analyze_ogxm(
     single deterministic function shared by both paths, and bgsage's rollout
     seed is fixed).
     """
-    p = resolve_preset(preset)
+    p = resolve_preset(preset).with_resign_errors(resign_errors)
+    # A cube screen of its own, when the preset names one (world_class: cubes
+    # at 4-ply, checker plays at 3-ply). In a single-pass preset it is that
+    # kind's only level; either way None means the checker level serves both.
+    base_level_cube = p.first_pass_cube
     if p.second_pass is None:      # single pass
         base_level_r = None
         level = p.first_pass
@@ -395,6 +408,8 @@ def analyze_ogxm(
         print(f"Match: {p1} vs {p2}")
         print(f"Match length: {ml if ml > 0 else 'money game'}")
         print(f"Games: {len(recons)}")
+        screen_desc = (base_level_r if base_level_cube is None
+                       else f"{base_level_r} / cube {base_level_cube}")
         if base_level_r and (mid_level_checker or mid_level_cube):
             if mid_level_checker == mid_level_cube:
                 mid_desc = mid_level_checker
@@ -409,15 +424,16 @@ def analyze_ogxm(
                               if thr is not None))
             err_desc = (f"{err_checker}" if err_checker == err_cube
                         else f"checker {err_checker} / cube {err_cube}")
-            print(f"Preset: {p.display} [{p.label}] ({base_level_r} screen -> {mid_desc} on close "
+            print(f"Preset: {p.display} [{p.label}] ({screen_desc} screen -> {mid_desc} on close "
                   f"(<= {close_desc}) -> {level} on error (> {err_desc}))")
         elif base_level_r:
             err_desc = (f"{err_checker}" if err_checker == err_cube
                         else f"checker {err_checker} / cube {err_cube}")
-            print(f"Preset: {p.display} [{p.label}] ({base_level_r} screen, upgrade to {level} "
+            print(f"Preset: {p.display} [{p.label}] ({screen_desc} screen, upgrade to {level} "
                   f"on error (> {err_desc}))")
         else:
-            print(f"Preset: {p.display} [{p.label}] ({level})")
+            print(f"Preset: {p.display} [{p.label}] ({level}"
+                  f"{'' if base_level_cube is None else f' / cube {base_level_cube}'})")
         print()
 
     if on_progress is not None:
@@ -479,7 +495,7 @@ def analyze_ogxm(
 
     # Serial builds analyzers once here; parallel workers build their own (they
     # can't cross the process boundary), so skip the main-process build then.
-    analyzer = base_analyzer = luck_analyzer = None
+    analyzer = base_analyzer = base_analyzer_cube = luck_analyzer = None
     mid_analyzer_checker = mid_analyzer_cube = None
     if jobs == 1:
         # One analyzer per distinct level, shared across every tier that names
@@ -502,6 +518,7 @@ def analyze_ogxm(
         # once under the name of the tier that actually needs it.
         analyzer = _mk(level, "analyzer")
         base_analyzer = _mk(base_level_r, "base analyzer")
+        base_analyzer_cube = _mk(base_level_cube, "cube base analyzer")
         mid_analyzer_checker = _mk(mid_level_checker, "mid analyzer")
         mid_analyzer_cube = _mk(mid_level_cube, "mid analyzer")
         luck_analyzer = _mk("1ply", "luck analyzer")
@@ -560,6 +577,8 @@ def analyze_ogxm(
                               base_analyzer=base_analyzer, luck_analyzer=luck_analyzer,
                               mid_analyzer_checker=mid_analyzer_checker,
                               mid_analyzer_cube=mid_analyzer_cube,
+                              base_analyzer_cube=base_analyzer_cube,
+                              resign_errors=p.resign_errors,
                               close_threshold_checker=close_checker,
                               close_threshold_cube=close_cube,
                               error_threshold_checker=err_checker,
@@ -582,8 +601,8 @@ def analyze_ogxm(
                 work.append((gi, di, game_number, dec))
 
         init_args = (
-            base_level_r, mid_level_checker, mid_level_cube, level,
-            (close_checker, close_cube, err_checker, err_cube), all_moves,
+            base_level_r, base_level_cube, mid_level_checker, mid_level_cube, level,
+            (close_checker, close_cube, err_checker, err_cube), p.resign_errors, all_moves,
             count_illegal, _LEVEL_DISPLAY.get(level, level), worker_threads, verbose,
         )
         buckets: "list[list[tuple[int, object]]]" = [[] for _ in recons]
@@ -674,6 +693,8 @@ def analyze_ogxm(
             # what makes two analyses comparable, so what the file records.
             "preset": p.label,
             "first_pass_level": p.first_pass,
+            # Set only when cubes are screened at another level (world_class).
+            "first_pass_cube_level": base_level_cube,
             # Kept scalar for the checker tier (its meaning before the tier
             # became per-kind, so every preset naming one level still reports
             # what it always did); the cube tier sits alongside it.
@@ -846,6 +867,11 @@ def main() -> None:
         help="Include illegal/mismatched moves in PR calculation (default: excluded)",
     )
     parser.add_argument(
+        "--resign-errors", action="store_true", dest="resign_errors",
+        help="Judge accepted resignations, counting them in PR (default: off). "
+             "The analysis is labelled with it, e.g. world_class@2+resign.",
+    )
+    parser.add_argument(
         "--gvab", "--binary", action="store_true", dest="gvab",
         help="Write the compact binary encoding (.gvab) instead of the .gva "
              "JSON. The two carry the same match.",
@@ -891,6 +917,7 @@ def main() -> None:
             verbose=args.verbose,
             all_moves=args.all_moves,
             count_illegal=args.count_illegal,
+            resign_errors=args.resign_errors,
             quiet=quiet,
             show_progress=not silent,
             jobs=args.jobs,

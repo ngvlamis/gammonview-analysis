@@ -30,7 +30,7 @@ from bgsage.board import flip_board, possible_moves
 from bgsage.text_export import compute_move_notation
 
 from gvformat.legality import board_problems
-from gvformat.met import eq2mwc, mwc2eq, score_mwc
+from gvformat.met import eq2mwc, mwc_anchors, mwc2eq, score_mwc
 
 from .checker_eval import checker_play as _checker_play
 
@@ -262,6 +262,11 @@ class _EvalCtx:
     count_illegal: bool
     level_display: str
     game: dict
+    # The cube screen, when the preset screens cubes at another level than
+    # checker plays (world_class: 4-ply against 3-ply); None => `base_analyzer`.
+    base_analyzer_cube: "BgBotAnalyzer | None" = None
+    # Judge accepted resignations (the preset's `resign_errors`).
+    resign_errors: bool = False
 
     def eval_label(self, raw: str) -> str:
         return self.level_display if raw == "Rollout" else raw
@@ -379,7 +384,8 @@ def _eval_cube_decision(dec: dict, ctx: _EvalCtx) -> _DecResult:
                 is_crawford=dec["is_crawford"],
             )
 
-        cheap = ctx.base_analyzer if ctx.base_analyzer is not None else ctx.analyzer
+        cheap = next(a for a in (ctx.base_analyzer_cube, ctx.base_analyzer,
+                                 ctx.analyzer) if a is not None)
         cheap_result = cube_at(cheap)
         nd_b = float(cheap_result.equity_nd)
         dt_b = float(cheap_result.equity_dt)
@@ -603,6 +609,144 @@ def _eval_cube_decision(dec: dict, ctx: _EvalCtx) -> _DecResult:
     return res
 
 
+#: Below this a resignation conceded the position's value: a decided game,
+#: no decision for either side (the cube rules' 0.001, for the same reason).
+_RESIGN_EPS = 0.001
+
+
+def _resign_equity(dec: dict) -> float:
+    """What the resignation conceded, in the resigner's equity frame.
+
+    Money: the points lost, in cube units (normalized equity is per cube).
+    Match: the MWC of the score the acceptor reaches, brought into the frame of
+    this game's own anchors. `mwc_anchors` resolves a loss of exactly `cube`
+    points, so it is asked for a loss of the points conceded instead -- with
+    the Crawford flag off, because the flag's only job there is to pin the
+    cube at 1, and a Crawford game already routes through the post-Crawford
+    regime by having a side 1-away.
+    """
+    away_r, away_a = ((dec["away1"], dec["away2"]) if dec["resigner_on_roll"]
+                      else (dec["away2"], dec["away1"]))
+    points = dec["points"]
+    if away_r <= 0 or away_a <= 0:
+        return -points / dec["cube_value"]
+    mwc = mwc_anchors(away_r, away_a, points, False)[1]
+    return mwc2eq(mwc, away_r, away_a, dec["cube_value"], dec["is_crawford"])
+
+
+def _eval_resign_decision(dec: dict, ctx: _EvalCtx) -> _DecResult:
+    """An accepted resignation, judged as XG's resign analysis does.
+
+    The resigner gave up the position for the points conceded; the acceptor
+    took them instead of playing on. Their equities are equal and opposite,
+    so one number is both verdicts: `resign_error` is the resigner's equity
+    playing on minus what they conceded -- positive, they resigned too much --
+    and the acceptor's error is its negative. Each side is charged only its
+    own positive part, and the resignation counts as a decision for both
+    unless it conceded the position's exact value (a game already decided,
+    where neither had a choice worth the name).
+
+    Pre-roll, the position's value to the player on roll is cubeful: the
+    better of not doubling and doubling, where the cube is theirs to turn --
+    routed through the cube tiers (the cube screen, then the second pass on an
+    error above the cube threshold), since it is the same evaluation. When the
+    record shows the roll was already seen (`dec["dice"]`), the value is that
+    roll's best play instead, through the checker tiers: a player who rolls a
+    dance and then resigns gave up a different position from the one the 21
+    rolls average over.
+    """
+    res = _DecResult()
+    if not ctx.resign_errors or dec["points"] <= 0:
+        return res
+    _require_playable(dec, ctx)
+    match = dec["away1"] > 0 and dec["away2"] > 0
+    can_double = (dec["cube_owner"] in ("centered", "player") and not dec["is_crawford"]
+                  and not (match and dec["cube_value"] >= dec["away1"]))
+    conceded = _resign_equity(dec)
+    dice = dec.get("dice")
+    sign = 1.0 if dec["resigner_on_roll"] else -1.0
+
+    seen: list = []          # the roll's move list at the last tier judged
+
+    def judge(analyzer):
+        """(eval_level, probs on roll, resigner's equity, error)."""
+        if dice:
+            # Seeded by the screen's list, a rollout tier rolls out its best
+            # (and a close runner-up) rather than choosing again.
+            r = _checker_play(
+                analyzer, dec["board"], dice[0], dice[1],
+                cube_value=dec["cube_value"], cube_owner=dec["cube_owner"],
+                away1=dec["away1"], away2=dec["away2"], is_crawford=dec["is_crawford"],
+                seed=seen[-1] if seen else None)
+            seen.append(r)
+            best = list(r.moves)[0]
+            e_roll, level, probs = float(best.equity), best.eval_level, best.probs
+        else:
+            r = analyzer.cube_action(
+                dec["board"], cube_value=dec["cube_value"], cube_owner=dec["cube_owner"],
+                away1=dec["away1"], away2=dec["away2"], is_crawford=dec["is_crawford"])
+            nd = float(r.equity_nd)
+            e_roll = max(nd, min(float(r.equity_dt), float(r.equity_dp))) if can_double else nd
+            level, probs = r.eval_level, r.probs
+        e_play = sign * e_roll
+        return level, probs, e_play, e_play - conceded
+
+    if dice:
+        tiers = (ctx.base_analyzer, ctx.analyzer)
+        threshold = ctx.error_threshold_checker
+    else:
+        tiers = (ctx.base_analyzer_cube, ctx.base_analyzer, ctx.analyzer)
+        threshold = ctx.error_threshold_cube
+    try:
+        screen = next(a for a in tiers if a is not None)
+        level, probs, e_play, err = judge(screen)
+        # An error that counts, past the threshold, earns the second pass.
+        # "Counts" matters at world_class's cube threshold of 0: a decided
+        # game conceded at its value differs from it by float noise only.
+        if (ctx.base_analyzer is not None and screen is not ctx.analyzer
+                and abs(err) >= _RESIGN_EPS and abs(err) > threshold):
+            level, probs, e_play, err = judge(ctx.analyzer)
+    except Exception as e:
+        if ctx.verbose:
+            print(f"  resign evaluation error: {e}")
+        return res
+
+    counted = abs(err) >= _RESIGN_EPS
+    resigner_err, acceptor_err = max(0.0, err), max(0.0, -err)
+    if counted:
+        if dec["is_resigner_p1"]:
+            res.p1_err += resigner_err
+            res.p2_err += acceptor_err
+        else:
+            res.p2_err += resigner_err
+            res.p1_err += acceptor_err
+        res.p1_dec += 1
+        res.p2_dec += 1
+
+    entry: dict = {
+        "kind": "resign",
+        "player": dec["resigner"],
+        "acceptor": dec["acceptor"],
+        "points": dec["points"],
+        "equity_play": round(e_play, 4),
+        "equity_resign": round(conceded, 4),
+        "resign_error": round(err, 4) + 0.0,       # + 0.0: never -0.0
+        "take_resign_error": round(-err, 4) + 0.0,
+        "lost_equity": round(abs(err), 4),
+        "counted": counted,
+        "eval_level": ctx.eval_label(level),
+    }
+    if dice:
+        entry["dice"] = list(dice)
+    if probs is not None:
+        pl = _probs_list(probs)
+        if not dec["resigner_on_roll"]:   # the resigner's view: wins <-> losses
+            pl = [round(1.0 - pl[0], 3), pl[3], pl[4], pl[1], pl[2]]
+        entry["probs"] = pl
+    res.entries.append(entry)
+    return res
+
+
 def _eval_checker_decision(dec: dict, ctx: _EvalCtx) -> _DecResult:
     _require_playable(dec, ctx)
     res = _DecResult()
@@ -707,7 +851,11 @@ def _eval_checker_decision(dec: dict, ctx: _EvalCtx) -> _DecResult:
                     top2_gap = (abs(best_eq_b - float(peers[0].equity))
                                 if peers else float("inf"))
 
-                    def play_at(analyzer, seed=None):
+                    def play_at(analyzer, seed=None, window=None):
+                        # `seed` is the tier below's result. With `window`, a
+                        # multi-ply tier deepens only the seed's moves within
+                        # it (the middle tier); without, only a rollout tier
+                        # uses it, to choose what it rolls out.
                         return _checker_play(
                             analyzer,
                             dec["board"], die1, die2,
@@ -718,7 +866,7 @@ def _eval_checker_decision(dec: dict, ctx: _EvalCtx) -> _DecResult:
                             is_crawford=dec["is_crawford"],
                             force_boards=[dec["board_played"]],
                             seed=seed,
-                            seed_window=close_thr if seed is not None else None,
+                            seed_window=window,
                         )
 
                     def played_error(move_list) -> float | None:
@@ -753,7 +901,7 @@ def _eval_checker_decision(dec: dict, ctx: _EvalCtx) -> _DecResult:
                         # The screen's own result seeds the middle tier, which
                         # (staged) deepens only the screen's close moves.
                         full_result = play_at(ctx.mid_analyzer_checker,
-                                              seed=cheap_result)
+                                              seed=cheap_result, window=close_thr)
                         moves = list(full_result.moves)
                         checker_upgraded = True
                         tier_analyzer = ctx.mid_analyzer_checker
@@ -772,7 +920,7 @@ def _eval_checker_decision(dec: dict, ctx: _EvalCtx) -> _DecResult:
                         if two_pass and ctx.mid_analyzer_checker is not ctx.analyzer:
                             mid_err = played_error(moves)
                             if mid_err is not None and mid_err > err_thr:
-                                full_result = play_at(ctx.analyzer)
+                                full_result = play_at(ctx.analyzer, seed=full_result)
                                 moves = list(full_result.moves)
                                 tier_analyzer = ctx.analyzer
                     elif two_pass and screen_error:
@@ -783,7 +931,7 @@ def _eval_checker_decision(dec: dict, ctx: _EvalCtx) -> _DecResult:
                         # at the screen -- there is nothing there for a rollout
                         # to size, and below 0.02 one buys ~6% of sizing
                         # accuracy for ~45% of the rollouts.
-                        full_result = play_at(ctx.analyzer)
+                        full_result = play_at(ctx.analyzer, seed=cheap_result)
                         moves = list(full_result.moves)
                         checker_upgraded = True
                     else:
@@ -1077,6 +1225,8 @@ def evaluate_game(game: dict, analyzer: BgBotAnalyzer, recon: dict,
                   luck_analyzer: "BgBotAnalyzer | None" = None,
                   mid_analyzer_checker: "BgBotAnalyzer | None" = None,
                   mid_analyzer_cube: "BgBotAnalyzer | None" = None,
+                  base_analyzer_cube: "BgBotAnalyzer | None" = None,
+                  resign_errors: bool = False,
                   close_threshold_checker: float | None = None,
                   close_threshold_cube: float | None = None,
                   error_threshold_checker: float = 0.02,
@@ -1105,6 +1255,7 @@ def evaluate_game(game: dict, analyzer: BgBotAnalyzer, recon: dict,
         error_threshold_cube=error_threshold_cube,
         verbose=verbose, all_moves=all_moves, count_illegal=count_illegal,
         level_display=level_display, game=game,
+        base_analyzer_cube=base_analyzer_cube, resign_errors=resign_errors,
     )
 
     results: "list[_DecResult]" = []
@@ -1116,5 +1267,7 @@ def evaluate_game(game: dict, analyzer: BgBotAnalyzer, recon: dict,
             results.append(_eval_cube_decision(dec, ctx))
         elif kind == "checker":
             results.append(_eval_checker_decision(dec, ctx))
+        elif kind == "resign":
+            results.append(_eval_resign_decision(dec, ctx))
 
     return _collate_game(results, game, game_result, is_crawford)

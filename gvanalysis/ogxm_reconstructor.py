@@ -28,7 +28,7 @@ can align the resulting per-ply analysis back onto the base plies positionally.
 
 from __future__ import annotations
 
-from bgsage.board import flip_board
+from bgsage.board import flip_board, possible_moves
 
 from gvformat.reader import _absolute_to_p1, _apply_moves_p1, _game_start_scores
 from gvformat.export import variant_opening_p1
@@ -90,10 +90,17 @@ def reconstruct_game_decisions(
     dbl_is_white = False
 
     decisions: list[dict] = []
+    # The ply before this one, as (action_id, is_white, moved, dice): a
+    # resignation is judged from the position it was made in, and that ply
+    # says whose roll it was -- and whether the dice were already on the board.
+    last: tuple | None = None
+    pending_double = False
 
     for ply in game.get("plies") or []:
         aid = ply.get("action_id")
         is_white = bool(ply.get("color"))
+        prev, last = last, (aid, is_white, bool(ply.get("moves")),
+                            (ply.get("d1"), ply.get("d2")))
 
         # A set-position ply carrying dice is a *restated play*: an illegal play
         # no dice ply could encode, written as the board it produced (see
@@ -174,6 +181,7 @@ def reconstruct_game_decisions(
             any_move_made = True
 
         elif aid == 21:                                   # double offered
+            pending_double = True
             dbl_board_p1 = list(board_p1)
             dbl_value = cube_value
             dbl_owner_abs = cube_owner_abs
@@ -181,6 +189,7 @@ def reconstruct_game_decisions(
             cube_value *= 2
 
         elif aid in (22, 23):                             # take (22) / drop (23)
+            pending_double = False
             resp_is_white = is_white                      # responder is on this ply
             away_m, away_o = _away(sw, sb, match_length, dbl_is_white)
             decisions.append({
@@ -201,6 +210,7 @@ def reconstruct_game_decisions(
                 cube_owner_abs = "W" if resp_is_white else "B"
 
         elif aid == 32:                                   # beaver: the responder redoubles
+            pending_double = False
             # A beaver answers the double (spec M6): the cube is doubled again,
             # to 4x its value before the double, and the beaverer owns it. The
             # engine has no beaver verdict -- it judges take or pass -- so the
@@ -247,7 +257,45 @@ def reconstruct_game_decisions(
             # a checker decision above, board included.)
             board_p1 = _absolute_to_p1(list(ply.get("set_position") or [0] * 26))
 
-        # terminal (24-30): no decision.
+        elif aid in (27, 28):                             # an accepted resignation
+            # Judged from what the record says the players could see. After a
+            # play, or a dance, the next player is on roll and the dice are
+            # still in the cup: a pre-roll position. After a roll that had a
+            # legal play and was left unplayed, the dice were seen -- the
+            # resigner looked at their roll (or the opponent's) and gave up --
+            # so it is judged against that roll, not the 21 the pre-roll
+            # equity averages over. XG records such a roll; 20 of the corpus's
+            # 151 resignations follow one. A resignation on a pending double is
+            # a pass by another name and is not judged.
+            if (not pending_double and prev is not None
+                    and prev[0] is not None and 0 <= prev[0] <= 20):
+                _, prev_white, moved, (d1, d2) = prev
+                roller_white, dice = not prev_white, None
+                if not moved and d1 and d2:
+                    seen = _mover_frame(board_p1, prev_white)
+                    if any(list(b) != seen for b in possible_moves(seen, d1, d2)):
+                        roller_white, dice = prev_white, [d1, d2]
+                away_r, away_o = _away(sw, sb, match_length, roller_white)
+                decisions.append({
+                    "kind": "resign",
+                    "board": _mover_frame(board_p1, roller_white),
+                    # The roll already seen, in the roller's hand; None pre-roll.
+                    "dice": dice,
+                    "cube_value": cube_value,
+                    "cube_owner": _cube_owner_rel(cube_owner_abs, roller_white),
+                    "away1": away_r,
+                    "away2": away_o,
+                    "is_crawford": crawford,
+                    "resigner": name(is_white),
+                    "acceptor": name(not is_white),
+                    "is_resigner_p1": is_white,
+                    "resigner_on_roll": roller_white == is_white,
+                    # What was conceded, uncapped: a match-winning resignation
+                    # is priced by the score it reaches, which caps it anyway.
+                    "points": int(game.get("points_won") or 0),
+                })
+
+        # other terminals (24-26, 29, 30): no decision.
 
     return decisions
 
