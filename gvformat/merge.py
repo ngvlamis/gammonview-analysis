@@ -44,10 +44,10 @@ def _decision_plies(game: dict) -> list[dict]:
 
     A beaver is answered at most once: the raccoon that follows it answers the
     beaver, not a double, and the engine has no decision for it. A resignation
-    (27, 28) is a decision -- whether to concede, and whether to accept -- and
-    both documents end a resigned game on one. The other terminal plies (24-26,
-    29, 30) hold no decision at all, and a set-position ply with *no* dice
-    states where a game starts rather than a turn taken."""
+    (27, 28) is a decision -- whether to concede, and whether to accept -- but
+    not every source records one (see ``_aligned``). The other terminal plies
+    (24-26, 29, 30) hold no decision at all, and a set-position ply with *no*
+    dice states where a game starts rather than a turn taken."""
     out = []
     pending = False                  # a double that has not been answered
     for ply in game.get("plies") or []:
@@ -70,30 +70,37 @@ def _decision_plies(game: dict) -> list[dict]:
     return out
 
 
-def _decision_analyses(game: dict) -> list[dict | None]:
-    """Per-decision analysis objects for one ``our`` game, in ply order — each
-    decision ply's ``analysis`` (``None`` when it has nothing to report).
-    Terminal/set-position plies are skipped so this aligns 1:1 with the base's
-    decision plies (see ``_decision_plies``)."""
-    return [ply.get("analysis") for ply in _decision_plies(game)]
-
-
-def _base_decision_plies(game: dict) -> list[dict]:
-    """The base plies that can carry analysis, in order."""
-    return _decision_plies(game)
+def _is_resign(ply: dict) -> bool:
+    return ply.get("action_id") in (27, 28)
 
 
 def _aligned(base_game: dict, our_game: dict) -> list[tuple[dict, dict | None]]:
-    """Pair each base decision ply with the corresponding ``our`` analysis."""
-    base_plies = _base_decision_plies(base_game)
-    our_analyses = _decision_analyses(our_game)
-    if len(base_plies) != len(our_analyses):
+    """Pair each base decision ply with the corresponding ``our`` analysis.
+
+    Checker plays and cube actions pair 1:1, and a different count of them is
+    an error: the two documents are not the same match. Resignations pair only
+    when both record the same number of them. Sources differ there -- one
+    converter records a game's resignation as plies and another only as the
+    game's result -- so a resignation one document has and the other lacks is
+    left without the other's analysis, as every resignation was before they
+    counted as decisions, rather than failing the whole merge.
+    """
+    base = _decision_plies(base_game)
+    our = _decision_plies(our_game)
+    base_plays = [p for p in base if not _is_resign(p)]
+    our_plays = [p for p in our if not _is_resign(p)]
+    if len(base_plays) != len(our_plays):
         raise ValueError(
             f"analysis/ply count mismatch in game "
-            f"{base_game.get('game_index')}: {len(base_plies)} base decision "
-            f"plies vs {len(our_analyses)} analyses"
+            f"{base_game.get('game_index')}: {len(base_plays)} base decision "
+            f"plies vs {len(our_plays)} analyses"
         )
-    return list(zip(base_plies, our_analyses))
+    pairs = [(bp, op.get("analysis")) for bp, op in zip(base_plays, our_plays)]
+    base_resigns = [p for p in base if _is_resign(p)]
+    our_resigns = [p for p in our if _is_resign(p)]
+    if len(base_resigns) == len(our_resigns):
+        pairs += [(bp, op.get("analysis")) for bp, op in zip(base_resigns, our_resigns)]
+    return pairs
 
 
 def _promote_to_multi(base: dict) -> None:

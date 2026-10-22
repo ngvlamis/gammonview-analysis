@@ -42,10 +42,10 @@ import { MAX_ANALYSES } from './constants.js';
  *
  *  A beaver is answered at most once: the raccoon that follows it answers the
  *  beaver, not a double, and the engine has no decision for it. A resignation
- *  (27, 28) is a decision -- whether to concede, and whether to accept -- and
- *  both documents end a resigned game on one. The other terminal plies (24-26,
- *  29, 30) hold no decision at all, and a set-position ply with *no* dice
- *  states where a game starts rather than a turn taken. */
+ *  (27, 28) is a decision -- whether to concede, and whether to accept -- but
+ *  not every source records one (see `_aligned`). The other terminal plies
+ *  (24-26, 29, 30) hold no decision at all, and a set-position ply with *no*
+ *  dice states where a game starts rather than a turn taken. */
 function _decisionPlies(game) {
   const out = [];
   let pending = false;                   // a double that has not been answered
@@ -69,29 +69,37 @@ function _decisionPlies(game) {
   return out;
 }
 
-/** The base plies that can carry analysis, in order. */
-function _baseDecisionPlies(game) {
-  return _decisionPlies(game);
+function _isResign(ply) {
+  return ply.action_id === 27 || ply.action_id === 28;
 }
 
-/** Per-decision analysis objects for one `our` game, in ply order — each
- *  decision ply's analysis via `select` (null when it has nothing to report).
- *  Terminal/set-position plies are skipped so this aligns 1:1 with the base's
- *  decision plies. */
-function _decisionAnalyses(game, select) {
-  return _decisionPlies(game).map(select);
-}
-
-/** Pair each base decision ply with the corresponding `our` analysis. */
+/** Pair each base decision ply with the corresponding `our` analysis (via
+ *  `select`, null when that ply has nothing to report).
+ *
+ *  Checker plays and cube actions pair 1:1, and a different count of them is
+ *  an error: the two documents are not the same match. Resignations pair only
+ *  when both record the same number of them. Sources differ there -- one
+ *  converter records a game's resignation as plies and another only as the
+ *  game's result -- so a resignation one document has and the other lacks is
+ *  left without the other's analysis, as every resignation was before they
+ *  counted as decisions, rather than failing the whole merge. */
 function _aligned(baseGame, ourGame, select) {
-  const basePlies = _baseDecisionPlies(baseGame);
-  const ourAnalyses = _decisionAnalyses(ourGame, select);
-  if (basePlies.length !== ourAnalyses.length) {
+  const base = _decisionPlies(baseGame);
+  const our = _decisionPlies(ourGame);
+  const basePlays = base.filter((p) => !_isResign(p));
+  const ourPlays = our.filter((p) => !_isResign(p));
+  if (basePlays.length !== ourPlays.length) {
     throw new Error(
       `analysis/ply count mismatch in game ${baseGame.game_index}: `
-      + `${basePlies.length} base decision plies vs ${ourAnalyses.length} analyses`);
+      + `${basePlays.length} base decision plies vs ${ourPlays.length} analyses`);
   }
-  return basePlies.map((ply, i) => [ply, ourAnalyses[i]]);
+  const pairs = basePlays.map((ply, i) => [ply, select(ourPlays[i])]);
+  const baseResigns = base.filter(_isResign);
+  const ourResigns = our.filter(_isResign);
+  if (baseResigns.length === ourResigns.length) {
+    baseResigns.forEach((ply, i) => pairs.push([ply, select(ourResigns[i])]));
+  }
+  return pairs;
 }
 
 /** Rewrite a single-analysis base in place to explicit multi form: move its

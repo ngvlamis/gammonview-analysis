@@ -13,6 +13,20 @@ when the repository was opened; they are kept because they record why things
 are the way they are — particularly the breaking changes and the measurements
 behind several design decisions. Dates are the tag dates.
 
+## 3.0.1 — 2026-10-22
+
+**Appending an analysis no longer fails on a resignation only one file records** *(fix)*
+
+3.0.0 counted resignations as decisions when pairing one document's analysis
+with another's, and required both to record them. They need not: one
+converter ends a resigned game on its resignation and another only on its
+result. So `append_analysis` / `appendAnalysis` raised "analysis/ply count
+mismatch" on, for one, a match imported from both an `.xg` and a `.bgf`.
+Checker plays and cubes still pair one to one, and a different count of them
+is still an error; resignations pair when both documents record the same
+number, and are otherwise left without the other block's analysis, as every
+resignation was before 3.0.0.
+
 ## 3.0.0 — 2026-10-22
 
 **Presets are versioned, and a built-in cannot be changed** *(breaking)*

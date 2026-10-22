@@ -355,5 +355,38 @@ function canonical(ogxm) {
   assert(uint8Equal(bytes, write_gvab(decoded)), 'v2: byte-for-byte round-trip (multi-analysis)');
 }
 
+// --- 12. A resignation one source records and the other does not -------------
+// One converter ends a resigned game on resign plies (27, 28), another only on
+// its result. Checker plays and cubes still pair; the resignation is left
+// unpaired rather than failing the merge -- 3.0.0 threw "analysis/ply count
+// mismatch" here, on a match imported from both an .xg and a .bgf.
+{
+  const resigned = (doc, analysed) => {
+    doc.games[1].plies.splice(1, 1,
+      { color: 1, action_id: 27 }, { color: 0, action_id: 28 });
+    if (analysed) doc.games[1].plies[1].analysis = { resign_error: 0.4, decision: true };
+    return doc;
+  };
+  const base = resigned(makeMatch({ analysis: true, modelId: 'a' }), true);
+  const our = makeMatch({ analysis: true, modelId: 'b', equity: 0.21 });
+  const merged = appendAnalysis(base, our);
+  assert(merged.analyses_info.length === 2, 'resign on one side only: the merge goes through');
+  assert(merged.games[0].plies[0].analyses.some((a) => a.analysis_index === 1),
+    'resign on one side only: checker plays still pair');
+  assert(!(merged.games[1].plies[1].analyses || []).some((a) => a.analysis_index === 1),
+    'resign on one side only: the resignation takes nothing from the other block');
+
+  const both = appendAnalysis(
+    resigned(makeMatch({ analysis: true, modelId: 'a' }), true),
+    resigned(makeMatch({ analysis: true, modelId: 'b' }), true));
+  assert(both.games[1].plies[1].analyses.some((a) => a.analysis_index === 1 && a.resign_error === 0.4),
+    'resign on both sides: the resignations pair');
+
+  const short = makeMatch({ analysis: true, modelId: 'b' });
+  short.games[0].plies.splice(1, 2);
+  assertThrows(() => appendAnalysis(makeMatch({ analysis: true, modelId: 'a' }), short),
+    'count mismatch', 'a different number of plays is still an error');
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed > 0 ? 1 : 0);
