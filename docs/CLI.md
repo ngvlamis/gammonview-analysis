@@ -407,3 +407,23 @@ definition: the same definition always gets the same label, on any machine, and
 editing it gives it a new one. `default:` sets which preset is used when
 `--preset` is omitted. Delete the file to restore defaults. A malformed file is
 skipped with a warning, and the other layer still loads.
+
+A program that keeps its presets somewhere other than a file can pass one as
+data. `custom_preset` takes the same shape as one `presets.yaml` entry, applies
+the same rules, and gives the same label, so the file and the data cannot name
+one method two ways:
+
+```python
+from gvanalysis import analyze_match, custom_preset
+
+mine = custom_preset("deep-cubes", {
+    "first_pass": {"checker": "3ply", "cube": "4ply"},
+    "second_pass": "truncated2",
+    "error_threshold": 0.02,
+})
+data = analyze_match("match.mat", preset=mine)   # recorded as custom/deep-cubes@<digest>
+```
+
+It raises `PresetConfigError` with the message a malformed file entry would
+get. The preset is not registered anywhere, so a name passed to `--preset`
+still only finds the built-ins and `presets.yaml`.

@@ -69,7 +69,7 @@ def _load_match():
     return match
 
 
-def analyze_match(input_path, *, preset: str | None = None, quiet: bool = True, **kwargs) -> bytes:
+def analyze_match(input_path, *, preset=None, quiet: bool = True, **kwargs) -> bytes:
     """Analyze a match file and return the analyzed ``.gvab`` bytes.
 
     Returns **bytes**, not a dict: this is the one call that hands back the
@@ -87,6 +87,10 @@ def analyze_match(input_path, *, preset: str | None = None, quiet: bool = True, 
     judgement and ours side by side. Equivalent to
     ``write_gvab(analyze_file(...))``. Requires the ``[engine]`` extra; without
     it, raises a ``ModuleNotFoundError`` explaining how to install.
+
+    ``preset`` is a name (``"world_class"``, ``"world_class@2"``, a custom
+    preset from ``presets.yaml``) or a ``Preset`` built with ``custom_preset``
+    from a definition held in memory; None is the configured default.
 
     Extra keyword arguments go to ``analyze_ogxm``; notably ``jobs=0`` enables
     decision-level parallelism (off by default here, since this is a library
@@ -118,6 +122,11 @@ def __getattr__(name):
     if name == "analyze_position":
         from . import position
         return position.analyze_position
+    # Lazy for the same reason: `presets` needs pyyaml, which is in the
+    # `[engine]` extra rather than the base install.
+    if name in ("custom_preset", "resolve_preset", "Preset", "PresetConfigError"):
+        from . import presets
+        return getattr(presets, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
@@ -125,4 +134,5 @@ __all__ = [
     "analyze_mat", "analyze_ogxm", "analyze_file",
     "analyze_match", "mat_to_gvab",
     "analyze_position",
+    "custom_preset", "resolve_preset", "Preset", "PresetConfigError",
 ]

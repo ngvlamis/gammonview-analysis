@@ -626,8 +626,6 @@ def _overlay_file(specs: dict[str, dict], default: str, path: Path) -> tuple[dic
     reserved = _reserved_names()
     for key, spec in user_presets.items():
         key = str(key).strip().lower()
-        if not isinstance(spec, dict):
-            raise PresetConfigError(f"preset {key!r} must be a mapping")
         # A built-in names one method, so it cannot be redefined -- not even a
         # field of it. Skipped, not fatal, so the file's other presets load.
         if key in reserved:
@@ -635,20 +633,55 @@ def _overlay_file(specs: dict[str, dict], default: str, path: Path) -> tuple[dic
                   f"be overridden; skipping it (give your preset a name of its own)",
                   file=sys.stderr)
             continue
-        if not _CUSTOM_NAME.fullmatch(key):
-            raise PresetConfigError(
-                f"preset {key!r}: a custom preset's name must be lowercase letters, "
-                f"digits, '_' and '-', starting with a letter or digit")
-        if "revision" in spec:
-            raise PresetConfigError(
-                f"preset {key!r}: revision is for built-ins; a custom preset is "
-                f"identified by the digest of its definition")
-        for alias in spec.get("aliases") or []:
-            if str(alias).strip().lower() in reserved:
-                raise PresetConfigError(
-                    f"preset {key!r}: alias {alias!r} is a built-in name")
+        _check_custom(key, spec, reserved)
         merged[key] = spec
     return merged, raw.get("default", default)
+
+
+def _check_custom(key: str, spec, reserved: set[str]) -> None:
+    """The rules a custom preset's entry obeys, wherever it came from.
+
+    One set, shared by `presets.yaml` and `custom_preset`, so a definition
+    accepted by one is accepted by the other and labelled the same. Raises
+    PresetConfigError; `_make_preset` then checks the levels and thresholds.
+    """
+    if not isinstance(spec, dict):
+        raise PresetConfigError(f"preset {key!r} must be a mapping")
+    if key in reserved:
+        raise PresetConfigError(
+            f"preset {key!r} is a built-in name and cannot be redefined; "
+            f"give your preset a name of its own")
+    if not _CUSTOM_NAME.fullmatch(key):
+        raise PresetConfigError(
+            f"preset {key!r}: a custom preset's name must be lowercase letters, "
+            f"digits, '_' and '-', starting with a letter or digit")
+    if "revision" in spec:
+        raise PresetConfigError(
+            f"preset {key!r}: revision is for built-ins; a custom preset is "
+            f"identified by the digest of its definition")
+    for alias in spec.get("aliases") or []:
+        if str(alias).strip().lower() in reserved:
+            raise PresetConfigError(
+                f"preset {key!r}: alias {alias!r} is a built-in name")
+
+
+def custom_preset(name: str, spec: dict) -> Preset:
+    """A custom preset from a definition held in memory rather than a file.
+
+    The in-memory twin of one `presets.yaml` entry: the same spec shape, the
+    same rules, and so the same `custom/<name>@<digest>` label -- the digest
+    is of the definition, so the file and this function cannot label one
+    method two ways. For a program that keeps its presets somewhere of its own
+    (a settings page, a database, a league's published rules) and would
+    otherwise have to write a YAML file and reload this module to run one.
+
+    The result is not registered anywhere: pass it as `preset=` to
+    `analyze_match` and its relatives. Raises PresetConfigError, with the
+    messages a malformed `presets.yaml` entry gets.
+    """
+    key = str(name).strip().lower()
+    _check_custom(key, spec, _reserved_names())
+    return _make_preset(key, spec)
 
 
 def _reserved_names() -> set[str]:
@@ -693,12 +726,15 @@ def write_template(path: Path = PROJECT_PRESETS_FILE, force: bool = False) -> Pa
 PRESETS, _ALIASES, DEFAULT_PRESET = _build_config(PRESET_FILES)
 
 
-def resolve_preset(name: str | None) -> Preset:
+def resolve_preset(name: "str | Preset | None") -> Preset:
     """Resolve a canonical key or alias (case-insensitive) to a Preset.
 
-    Pass None to get the configured default preset. Raises ValueError listing
-    the valid presets for an unknown name.
+    Pass None to get the configured default preset, or a Preset (from
+    `custom_preset`) to have it back unchanged. Raises ValueError listing the
+    valid presets for an unknown name.
     """
+    if isinstance(name, Preset):
+        return name
     if name is None:
         return PRESETS[DEFAULT_PRESET]
     key = name.strip().lower()

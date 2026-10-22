@@ -73,7 +73,7 @@ from .game_eval import (
 from gvformat import to_ogxm_json, write_gvab, read_gvab, encode_match, append_analysis
 from .share import GAMMONVIEW_BASE_URL, MAX_SHARE_LENGTH, SHARE_PARAM
 from .presets import (
-    resolve_preset, write_template, DEFAULT_PRESET, PRESETS,
+    Preset, resolve_preset, write_template, DEFAULT_PRESET, PRESETS,
     PROJECT_PRESETS_FILE, GLOBAL_PRESETS_FILE,
 )
 from .progress import ProgressBar
@@ -265,7 +265,7 @@ def _worker_run(item):
 
 def analyze_ogxm(
     ogxm: dict,
-    preset: str | None = None,
+    preset: "str | Preset | None" = None,
     threads: int = 0,
     verbose: bool = False,
     all_moves: bool = False,
@@ -292,7 +292,8 @@ def analyze_ogxm(
     `preset` names an XG-style two-pass scheme defined in presets.yaml: a cheap
     first pass screens every decision and a stronger second pass runs on
     disagreement. Single-pass presets judge everything at the first-pass level.
-    None selects the configured default preset.
+    None selects the configured default preset; a `Preset` (from
+    `presets.custom_preset`) is run as given, for a definition held in memory.
 
     `resign_errors` judges accepted resignations, as XG does with "Do not
     calculate resign errors" unchecked: off unless asked for, in every preset.

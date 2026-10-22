@@ -17,7 +17,9 @@ promise holds only if:
   * a custom preset's label follows its definition, not its name or display;
   * an environment override (``GVAN_STAGED``, ``GVAN_NO_SCREEN``) shows in the
     label instead of running under the real revision's name;
-  * a pinned name (``world_class@2``) runs that revision or nothing.
+  * a pinned name (``world_class@2``) runs that revision or nothing;
+  * a definition held in memory (``custom_preset``) obeys the file's rules and
+    gets the file's label, so the two cannot name one method two ways.
 
 Run: uv run python tests/test_presets.py   (exit 0 = all passed)
 """
@@ -183,6 +185,48 @@ def check_resign_option() -> None:
           "a preset cannot turn resign errors on", err)
 
 
+def check_custom_from_data() -> None:
+    """`custom_preset` is one presets.yaml entry, passed as data."""
+    spec = {"first_pass": "3ply", "mid_pass": {"checker": "4ply"}, "second_pass": "truncated2",
+            "close_threshold": 0.08, "error_threshold": 0.02, "display": "Mine"}
+    mine = P.custom_preset("Mine", spec)
+    from_file, *_rest, err = config(
+        "presets:\n"
+        "  mine: {first_pass: 3ply, mid_pass: {checker: 4ply}, second_pass: truncated2,\n"
+        "         close_threshold: 0.08, error_threshold: 0.02}\n")
+    check(mine.key == "mine" and mine.display == "Mine" and mine.revision is None,
+          "the name is normalised the way a file's key is")
+    check(mine.label == from_file["mine"].label and mine.label.startswith("custom/mine@"),
+          f"the same definition is labelled the same from data and from a file ({mine.label})", err)
+    check(P.custom_preset("other", {**spec, "display": "Something else"}).digest() == mine.digest(),
+          "neither the name nor the display is part of the definition")
+    check(P.resolve_preset(mine) is mine, "resolve_preset hands a Preset back unchanged")
+    check(P.custom_preset("x", {"first_pass": "2ply"}).second_pass is None,
+          "a single-pass definition is accepted")
+    for name, bad, what in (
+        ("world_class", {"first_pass": "3ply"}, "a built-in name"),
+        ("wc", {"first_pass": "3ply"}, "a built-in alias"),
+        ("balanced", {"first_pass": "3ply"}, "a retired name"),
+        ("My Preset", {"first_pass": "3ply"}, "a name the label cannot carry"),
+        ("mine", {"first_pass": "3ply", "revision": 1}, "a revision"),
+        ("mine", {"first_pass": "3ply", "resign_errors": True}, "resign errors"),
+        ("mine", {"first_pass": "5ply"}, "an invalid level"),
+        ("mine", {"first_pass": "3ply", "mid_pass": "4ply"}, "a middle pass with no second pass"),
+        ("mine", {"first_pass": "3ply", "mid_pass": "4ply", "second_pass": "truncated2"},
+         "a middle pass with no close threshold"),
+        ("mine", ["3ply"], "a definition that is not a mapping"),
+    ):
+        try:
+            P.custom_preset(name, bad)
+            check(False, f"custom_preset refuses {what}")
+        except P.PresetConfigError as e:
+            check(True, f"custom_preset refuses {what}: {e}")
+    import gvanalysis
+    check(gvanalysis.custom_preset is P.custom_preset
+          and gvanalysis.PresetConfigError is P.PresetConfigError,
+          "the package exports custom_preset and PresetConfigError")
+
+
 def check_pins() -> None:
     check(P.resolve_preset("world_class@2").key == "world_class", "world_class@2 resolves")
     check(P.resolve_preset("WC@2").key == "world_class", "a pin works through an alias")
@@ -219,6 +263,7 @@ def main() -> int:
     check_first_pass_split()
     check_resign_option()
     check_pins()
+    check_custom_from_data()
     print(f"\n{'all passed' if not failures else str(failures) + ' failed'}")
     return 1 if failures else 0
 

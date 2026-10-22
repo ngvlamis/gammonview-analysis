@@ -94,6 +94,16 @@ optimal actions; PR moves by 0.02 on average (at most 0.23). A preset's
 `first_pass` also takes a `{checker, cube}` mapping now, for a cube screen at
 its own depth. Part of `world_class@2`, which has not shipped.
 
+**A custom preset can be passed as data** *(new)*
+
+`custom_preset(name, spec)` builds a custom preset from a definition held in
+memory, in the shape of one `presets.yaml` entry, and `analyze_match` (with
+`analyze_file`, `analyze_ogxm` and `resolve_preset`) accepts the `Preset` it
+returns wherever it took a name. It obeys the file's rules and gets the file's
+label, `custom/<name>@<digest>`, so a program that keeps presets somewhere of its
+own no longer has to write a YAML file and re-import the module to run one.
+Both are exported from `gvanalysis`, with `Preset` and `PresetConfigError`.
+
 **Resign errors** *(new, opt-in)*
 
 `--resign-errors` (`resign_errors=True` in the API) judges every accepted

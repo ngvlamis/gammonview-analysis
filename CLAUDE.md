@@ -226,6 +226,9 @@ in step when a flag changes; the rationale belongs only here.
   built-in's name or alias is skipped with a warning; `default:` sets the
   default. Restore defaults by deleting the file(s); a malformed file is skipped
   with a warning (the other layer still loads).
+  `custom_preset(name, spec)` is the in-memory twin of one file entry (same
+  rules via `_check_custom`, same label), and every entry point that takes a
+  preset name also takes the `Preset` it returns.
 
   **A preset label names one method.** Output records `Preset.label`:
   `world_class@2` for a built-in, `custom/<name>@<digest>` for a user preset
