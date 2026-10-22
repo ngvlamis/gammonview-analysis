@@ -38,7 +38,7 @@ from gvformat.game_reconstructor import find_crawford_game_index, reconstruct_de
 from gvformat.mat import mat_to_ogxm
 from gvanalysis.ogxm_reconstructor import reconstruct_decisions_from_ogxm
 from gvformat import write_gvab, read_gvab
-from fixtures import goldens_are_native  # noqa: E402  (after sys.path fix-up)
+from fixtures import GOLDEN_BUILD, goldens_are_native, pin_engine_build  # noqa: E402  (after sys.path fix-up)
 
 SAMPLES = _ROOT / "samples" / "mat"
 GOLDEN = _ROOT / "tests" / "golden"
@@ -91,6 +91,11 @@ def main() -> int:
     if not stems:
         print(f"SKIP: no golden files in {GOLDEN}")
         return 0
+
+    # Before anything is analysed, so the real version is checked in 5. alone.
+    from gvanalysis.match import engine_build
+    real_build = engine_build()
+    pin_engine_build()
 
     # 1. Golden regression (byte-for-byte) via the OGXM-native pipeline.
     #
@@ -213,8 +218,14 @@ def main() -> int:
     gv_ver = _dist_version("gammonview")
     check(gv_ver is None or gv_ver not in mid,
           f"model_id carries no gammonview version ({gv_ver})")
+    # engine_build is the gammonview version, the one place it is recorded:
+    # what fixed results with bgsage unchanged (3.0.1's resignations) shows.
+    check(gv_ver is None or real_build == f"gammonview/{gv_ver}",
+          f"engine_build names the installed gammonview ({real_build})")
     for stem in stems:
         doc = read_gvab((GOLDEN / f"{stem}.{PRESET}.gvab").read_bytes())
+        check(doc["analysis_info"].get("engine_build") == GOLDEN_BUILD,
+              f"{stem}: golden records the pinned engine_build")
         if doc["analysis_info"]["model_id"] != mid:
             check(False, f"{stem}: golden model_id is stale ({doc['analysis_info']['model_id']})")
             break

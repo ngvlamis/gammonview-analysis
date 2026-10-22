@@ -220,7 +220,7 @@ ply. See [Multiple analyses](#multiple-analyses).
   "timestamp": 1768141380,
   "analysis_id": "ea7ae02e-7c4a-8759-861b-eec0502be9b7",
   "complete": true,
-  "engine_build": "2.0.20260907"
+  "engine_build": "gammonview/3.1.0"
 }
 ```
 
@@ -233,7 +233,7 @@ ply. See [Multiple analyses](#multiple-analyses).
 | `model_id` | string | Engine identifier, free-form: a label, not a key. Our analyses write `gv-bgsage/<bgsage version>`; the converters write the foreign engine's bare name (`"xg"`, `"bgblitz"`, `"gnubg"`); another producer's is its own (HedgeHog's is a UUID) | `model_id` |
 | `model_name` | string | A display name. Show `model_name ?? model_id` | `model_name` |
 | `model_digest` | string | 64 lower-case hex digits | `model_digest` |
-| `engine_build` | string | The build that ran, e.g. the bgsage version | `engine_build` |
+| `engine_build` | string | The build that ran the model. Ours write `gammonview/<version>` (before 3.1.0, the bgsage version `model_id` already names); another producer's is its own (HedgeHog's is a git hash) | `engine_build` |
 | `producer` | uint | 0 OGX, 1 eXtreme Gammon, 2 external engine, 3 BGBlitz, 4 human annotation | `producer` |
 | `complete` | bool | The block analyzed the whole match. Absent = unstated | `complete` |
 | `coverage` | `[game_index, ply_index]`[] | The plies the block attempted, which can be more than it holds a decision for. Ascending, no repeats; always includes every ply the block holds a decision for | `coverage` |
@@ -911,10 +911,14 @@ The v1 byte layout is frozen in
   the engine name alone would overstate its share of the answer: the screening in
   `gvanalysis/checker_eval.py` chooses which moves are evaluated at full depth,
   and the preset's tiers choose that depth, so two files both reading `"bgsage"`
-  can hold different numbers from the same engine. No gammonview version is
-  carried, deliberately — every other field of `analysis_info` is fixed by the match
-  and the engine, and that determinism is what lets a byte-exact regression corpus
-  exist at all.
+  can hold different numbers from the same engine. It carries no gammonview
+  version: `model_id` names the model, as v2 means it.
+- `gvanalysis` writes `engine_build = "gammonview/<version>"`, the build that ran
+  the model: the presets, the screening and the judging of cubes and
+  resignations are gammonview's, and a fix to them changes results with bgsage
+  unchanged. Until 3.1.0 it repeated the bgsage version. The regression corpus
+  is written with it pinned to `gammonview/golden` (`tests/fixtures.py`), which
+  keeps the bytes fixed by the match and the engine alone.
 - A match is `White = alphabetically first player` unless the document is the
   analysis of an existing one, in which case it keeps the document's White.
 
@@ -960,7 +964,7 @@ annotation to fall back on.
     "duration_ms": 12300,
     "analysis_id": "ea7ae02e-7c4a-8759-861b-eec0502be9b7",
     "complete": true,
-    "engine_build": "2.0.20260907"
+    "engine_build": "gammonview/3.1.0"
   },
   "games": [
     {

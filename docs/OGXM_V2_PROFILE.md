@@ -91,7 +91,7 @@ One `ANAL` + `DECS` per analysis block, primary first.
 | `analysis_info.analysis_id` | `analysis_id`. A block without one gets a deterministic id: four CRC32s over the match and the block's identity, stamped as a UUIDv8 |
 | `analysis_info.model_id`, `model_name` | `model_id`, `model_name`, each exactly as stated: HedgeHog's `model_id` is a UUID, ours `gv-bgsage/<version>`. Show `model_name ?? model_id` |
 | `analysis_info.timestamp`, `duration_ms`, `completed_at` (ms) | `started_at`, `duration_ms`, `completed_at` |
-| `analysis_info.producer`, `complete`, `model_digest` (hex), `engine_build`, `cube_efficiency`, `tables`, `dials`, `sources` | the same fields. Ours states `engine_build` (the bgsage version) and `complete` |
+| `analysis_info.producer`, `complete`, `model_digest` (hex), `engine_build`, `cube_efficiency`, `tables`, `dials`, `sources` | the same fields. Ours states `engine_build` (`gammonview/<version>`; `model_id` names bgsage) and `complete` |
 | `analysis_info.coverage` | `coverage`, as `[game_index, ply_index]` pairs in the document's own plies |
 | `analysis_info.currency` | `currency`, when it is not the match's default |
 | `analysis_info.ply` | the block level's `checker_ply` |

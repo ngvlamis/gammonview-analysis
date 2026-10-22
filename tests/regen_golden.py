@@ -78,6 +78,8 @@ def _stems() -> list[str]:
 
 
 def main(argv: list[str]) -> int:
+    from fixtures import pin_engine_build  # noqa: E402
+    pin_engine_build()
     check_only = "--check" in argv
     stems = _stems()
     if not stems:

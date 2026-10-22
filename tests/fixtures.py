@@ -98,6 +98,19 @@ def missing_mat_message() -> str:
 # --------------------------------------------------------------------------
 
 GOLDEN_DIR = _REPO_ROOT / "tests" / "golden"
+
+#: The `engine_build` the goldens are written with, in place of this
+#: checkout's own version: a gammonview version in pinned bytes would move with
+#: every commit in a dev checkout and go circular at release, the tag reddening
+#: the suite it was cut from. `test_ogxm_pipeline` checks separately that a
+#: real run names the installed version.
+GOLDEN_BUILD = "gammonview/golden"
+
+
+def pin_engine_build() -> None:
+    """Make analyses in this process record `GOLDEN_BUILD`."""
+    import gvanalysis.match as match
+    match.engine_build = lambda: GOLDEN_BUILD
 PROVENANCE = GOLDEN_DIR / "PROVENANCE.json"
 
 

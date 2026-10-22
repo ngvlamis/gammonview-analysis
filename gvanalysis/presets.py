@@ -25,7 +25,7 @@ definition. A built-in's revision is bumped whenever anything that can move its
 results changes -- its levels and thresholds, and the screening constants in
 `checker_eval` -- and `_REVISIONS` pins the digest each revision stood for, so
 `test_presets` fails if a definition changes without a new revision. Two
-analyses with the same label and the same `engine_build` were produced the same
+analyses with the same label, `model_id` and `engine_build` were produced the same
 way; a caller that needs that guarantee passes `name@revision` and is refused
 if this install runs anything else. Resign errors are an analysis option, not a
 preset's: an analysis that judged them is labelled `world_class@2+resign`.

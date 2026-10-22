@@ -3,8 +3,8 @@
 
 """Our own analysis states where it came from, and what a rollout was.
 
-``gvanalysis`` stamps every block it writes with ``engine_build`` (the bgsage
-version) and ``complete`` (the whole match was looked at), and gives each
+``gvanalysis`` stamps every block it writes with ``engine_build`` (the
+gammonview version) and ``complete`` (the whole match was looked at), and gives each
 decision a rollout judged at one of bgsage's truncated levels the settings of that
 rollout as v2's ``level.rollout`` -- trials, truncation depth, move depth, seed.
 Nothing here is wall-clock, so the bytes stay deterministic and the goldens can

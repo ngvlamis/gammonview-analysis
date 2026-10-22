@@ -116,11 +116,21 @@ def model_id() -> str:
 
 
 def engine_build() -> str | None:
-    """bgsage's version, as v2's ``engine_build``: the build that produced the
-    numbers. Deterministic for a given install, like ``model_id``; ``None`` where
-    the distribution metadata is missing (a source tree on ``sys.path``)."""
+    """``gammonview/<version>``, as v2's ``engine_build``: the build that ran.
+
+    v2 separates the model from the software running it -- HedgeHog states a
+    network's UUID in ``model_id`` and a git hash here -- and so do we:
+    ``model_id`` names bgsage, whose networks ship inside its package, and
+    this names the code that drove it. The presets, the screening and the
+    judging of cubes and resignations are this package's, and a fix to them
+    (3.0.1's resignations) changes results with bgsage unchanged.
+
+    Until 3.1.0 this was bgsage's version again, which said nothing
+    ``model_id`` did not. ``None`` where the distribution metadata is missing
+    (a source tree on ``sys.path``).
+    """
     try:
-        return _metadata.version("bgsage")
+        return f"gammonview/{_metadata.version('gammonview')}"
     except Exception:
         return None
 

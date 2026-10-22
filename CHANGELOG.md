@@ -13,6 +13,22 @@ when the repository was opened; they are kept because they record why things
 are the way they are — particularly the breaking changes and the measurements
 behind several design decisions. Dates are the tag dates.
 
+## Unreleased
+
+**`engine_build` names the gammonview version that ran the analysis** *(changed)*
+
+It was bgsage's version, which `model_id` (`gv-bgsage/<version>`) already
+states. v2 separates the model from the software running it — HedgeHog puts a
+network's UUID in `model_id` and a git hash here — and so now do we:
+`engine_build` is `gammonview/<version>`. The presets, the screening and the
+judging of cubes and resignations are this package's, and a fix to them changes
+results with bgsage unchanged, as 3.0.1's resignations did; until now a file
+could not say which side of such a fix it was made on. It is v2's own field, so
+every v2 reader sees it, and nothing in the format changed.
+
+The goldens are written with `engine_build` pinned to `gammonview/golden`
+(`tests/fixtures.py`), so a version bump does not move them.
+
 ## 3.0.1 — 2026-10-22
 
 **Appending an analysis no longer fails on a resignation only one file records** *(fix)*
