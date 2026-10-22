@@ -13,7 +13,7 @@ when the repository was opened; they are kept because they record why things
 are the way they are — particularly the breaking changes and the measurements
 behind several design decisions. Dates are the tag dates.
 
-## Unreleased
+## 3.0.0 — 2026-10-22
 
 **Presets are versioned, and a built-in cannot be changed** *(breaking)*
 
@@ -68,8 +68,7 @@ Ours now average 2.26. On 11 matches `world_class` ran 28% faster (448s to
 320s); 4 of 1,937 best moves changed, together 0.029 equity of error, and PR
 moved by 0.006 on average (at most 0.11). Each rolled-out row is bgsage's own
 rollout of that board, to the last digit. `GVAN_ROLLOUT_SELECT=0` restores
-bgsage's choice for A/B work. Part of `world_class@2`, which has not
-shipped.
+bgsage's choice for A/B work. Part of `world_class@2`.
 
 **`world_class_fast` is retired** *(breaking)*
 
@@ -92,7 +91,7 @@ rollouts, and it reaches the same optimal action on every cube as screening
 them all at 4-ply would, which costs 11%. Against the old shape it flips 3
 optimal actions; PR moves by 0.02 on average (at most 0.23). A preset's
 `first_pass` also takes a `{checker, cube}` mapping now, for a cube screen at
-its own depth. Part of `world_class@2`, which has not shipped.
+its own depth. Part of `world_class@2`.
 
 **A custom preset can be passed as data** *(new)*
 
