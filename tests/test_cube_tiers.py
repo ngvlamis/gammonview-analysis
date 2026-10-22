@@ -108,12 +108,14 @@ _EQUITIES = (0.0, 0.0, 0.0)  # set per case by tier_used()
 
 
 def tier_used(nd, dt, dp, doubled, response, *, mid=True, two_pass=True,
-              err_thr=None, close=None, mid_equities=None, mid_is_second=False):
+              err_thr=None, close=None, mid_equities=None, mid_is_second=False,
+              cube_second=None):
     """Run one cube decision and return the level of the analyzer that decided it.
 
     `mid_equities`, when given, is what the MIDDLE tier reports instead of the
     screen's -- the case the re-check exists for, where a closer look revises a
-    margin the screen misjudged.
+    margin the screen misjudged. `cube_second` names a second pass of the
+    cube's own, which must then be the one a cube error reaches.
     """
     global _EQUITIES
     _EQUITIES = (nd, dt, dp)
@@ -121,8 +123,9 @@ def tier_used(nd, dt, dp, doubled, response, *, mid=True, two_pass=True,
         err_thr = THR if (mid and two_pass) else 0.0
     log: list[str] = []
     top = _FakeAnalyzer("2T", log)
+    cube_top = _FakeAnalyzer(cube_second, log) if cube_second else None
     if mid_is_second:
-        mid_analyzer = top
+        mid_analyzer = cube_top or top
     elif mid_equities is None:
         mid_analyzer = _FakeAnalyzer("4ply", log)
     else:
@@ -144,6 +147,7 @@ def tier_used(nd, dt, dp, doubled, response, *, mid=True, two_pass=True,
         error_threshold_cube=err_thr,
         verbose=False, all_moves=False, count_illegal=False,
         level_display="2T", game={"game_number": 1},
+        analyzer_cube=cube_top,
     )
     dec = {
         "kind": "cube", "board": list(STARTING_BOARD),
@@ -249,6 +253,20 @@ def main() -> int:
     # object's same answer twice; the identity guard must skip it.
     got, log = tier_used(0.20, 0.19, 1.0, True, "take", mid_is_second=True)
     check("mid tier == second pass runs once, not twice", log, ["3ply", "2T"])
+
+    # --- a second pass of the cube's own --------------------------------------
+    # A preset may size cube errors at another level than checker errors
+    # (`second_pass: {checker: ..., cube: ...}`). Every route to the top tier
+    # -- straight from the screen, or found by the middle tier -- must reach
+    # the cube's, and never the checker's.
+    got, log = tier_used(0.20, 0.05, 1.0, True, "take", cube_second="3T")
+    check("a cube error reaches the cube's own second pass", got, "3T")
+    check("  and never the checker's", "2T" in log, False)
+    got, log = tier_used(0.20, 0.19, 1.0, True, "take", mid_equities=(0.20, 0.10, 1.0),
+                         cube_second="3T")
+    check("an error the middle tier finds reaches it too", log, ["3ply", "4ply", "3T"])
+    got, log = tier_used(0.20, 0.19, 1.0, True, "take", mid_is_second=True, cube_second="3T")
+    check("a middle tier that IS the cube's second pass runs once", log, ["3ply", "3T"])
 
     print(f"\n{'all passed' if not failures else str(failures) + ' failed'}")
     return 1 if failures else 0

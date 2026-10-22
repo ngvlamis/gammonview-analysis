@@ -261,8 +261,11 @@ TEMPLATE = """\
 # the 3-ply screen on a move list and 4x on one cube. An omitted kind stays
 # plain 2-tier. close_threshold and error_threshold take the same
 # bare-value-or-{checker, cube}-mapping shape (world_class gives cubes a 0.12
-# window and checker plays 0.08), and so does first_pass, whose checker level
-# is required. Naming the same level as
+# window and checker plays 0.08), and so do first_pass and second_pass, whose
+# checker levels are required: a mapped second_pass sizes a checker error and a
+# cube error at different levels (a rollout of one cube position costs a
+# fraction of a rollout of a move list's candidates), but every kind has one.
+# Naming the same level as
 # second_pass in mid_pass is allowed and costs nothing extra (one analyzer is
 # built and shared); it means "borderline as well as wrong earns the top tier".
 #
@@ -286,6 +289,10 @@ presets: {}
   #   second_pass: truncated2
   #   close_threshold: {checker: 0.08, cube: 0.04}
   #   error_threshold: 0.02
+  # my_cube_rollouts:
+  #   display: Roll Out the Cubes
+  #   first_pass: 3ply
+  #   second_pass: {checker: 4ply, cube: truncated3}
 """
 
 
@@ -343,11 +350,22 @@ class Preset:
     # (`with_resign_errors`): it moves PR, so it shows in the label as
     # `+resign`, but it is not part of the definition a pin names.
     resign_errors: bool = False
+    # The cube's on-error level when it differs from the checker one; None =>
+    # `second_pass` for both. Like `first_pass_cube`, and last for the same
+    # reason. A rollout of a cube is one position; a rollout of a checker play
+    # is every surviving candidate, so the level worth paying for an error is
+    # not the same one for both. Never set without `second_pass`.
+    second_pass_cube: str | None = None
 
     @property
     def cube_first_pass(self) -> str:
         """The level every cube decision is screened at."""
         return self.first_pass_cube or self.first_pass
+
+    @property
+    def cube_second_pass(self) -> str | None:
+        """The level a cube error is sized at; None for a single-pass preset."""
+        return self.second_pass_cube or self.second_pass
 
     def definition(self) -> dict:
         """Everything that decides this preset's results, as plain data.
@@ -360,15 +378,18 @@ class Preset:
         """
         from .checker_eval import screening   # lazy: pulls in bgsage
         levels = [lv for lv in (self.first_pass, self.mid_pass_checker,
-                                self.mid_pass_cube, self.second_pass) if lv]
-        # A shared first pass stays a bare level, so every preset that never
-        # split it keeps the digest it always had.
+                                self.mid_pass_cube, self.second_pass,
+                                self.second_pass_cube) if lv]
+        # A shared first or second pass stays a bare level, so every preset
+        # that never split it keeps the digest it always had.
         first = (self.first_pass if self.cube_first_pass == self.first_pass
                  else [self.first_pass, self.cube_first_pass])
+        second = (self.second_pass if self.cube_second_pass == self.second_pass
+                  else [self.second_pass, self.cube_second_pass])
         return {
             "first_pass": first,
             "mid_pass": [self.mid_pass_checker, self.mid_pass_cube],
-            "second_pass": self.second_pass,
+            "second_pass": second,
             "close_threshold": [self.close_threshold_checker, self.close_threshold_cube],
             "error_threshold": [self.error_threshold_checker, self.error_threshold_cube],
             "screening": screening(levels, has_mid=self.mid_pass_checker is not None),
@@ -499,6 +520,32 @@ def _kind_thresholds(key: str, spec: dict, field: str,
     )
 
 
+def _second_levels(key: str, spec: dict) -> tuple[str | None, str | None]:
+    """Resolve `second_pass` into (checker_level_or_None, cube_level_or_None).
+
+    Absent or null is a single-pass preset; a bare level sizes both kinds'
+    errors. A `{checker, cube}` mapping names each, and its checker level is
+    required: the two-pass scheme screens every decision and sizes every error
+    worth sizing, so there is no kind without an on-error tier -- a preset
+    that wants one sizes it at the screen's own level. A cube level equal to
+    the checker one, or omitted, collapses to None as in `first_pass`.
+    """
+    raw = spec.get("second_pass")
+    if not isinstance(raw, dict):
+        return raw, None
+    unknown = sorted(str(k) for k in raw if k not in _MID_KINDS)
+    if unknown:
+        raise PresetConfigError(
+            f"preset {key!r}: second_pass keys must be "
+            f"{' / '.join(map(repr, _MID_KINDS))}, got {', '.join(unknown)}")
+    checker, cube = raw.get("checker"), raw.get("cube")
+    if checker is None:
+        raise PresetConfigError(
+            f"preset {key!r}: second_pass.checker is required in a mapping "
+            f"(omit second_pass for a single-pass preset)")
+    return checker, (None if cube in (None, checker) else cube)
+
+
 def _first_levels(key: str, spec: dict) -> tuple[str | None, str | None]:
     """Resolve `first_pass` into (checker_level, cube_level_or_None).
 
@@ -522,13 +569,13 @@ def _first_levels(key: str, spec: dict) -> tuple[str | None, str | None]:
 def _make_preset(key: str, spec: dict) -> Preset:
     """Validate one preset spec dict into a Preset. Raises PresetConfigError."""
     first_pass, first_cube = _first_levels(key, spec)
-    second_pass = spec.get("second_pass")  # may be absent/null
+    second_pass, second_cube = _second_levels(key, spec)  # may be absent/null
     mid_checker, mid_cube = _mid_levels(key, spec)
     close_checker, close_cube = _kind_thresholds(key, spec, "close_threshold", None)
     err_checker, err_cube = _kind_thresholds(key, spec, "error_threshold",
                                              DEFAULT_ERROR_THRESHOLD)
     for label, lvl in (("first_pass", first_pass), ("first_pass.cube", first_cube),
-                       ("second_pass", second_pass),
+                       ("second_pass", second_pass), ("second_pass.cube", second_cube),
                        ("mid_pass.checker", mid_checker), ("mid_pass.cube", mid_cube)):
         if lvl is None and label != "first_pass":
             continue
@@ -574,7 +621,7 @@ def _make_preset(key: str, spec: dict) -> Preset:
                   close_checker, close_cube,
                   0.0 if err_checker is None else err_checker,
                   0.0 if err_cube is None else err_cube,
-                  revision, first_cube)
+                  revision, first_cube, second_pass_cube=second_cube)
 
 
 def _assemble(specs: dict[str, dict], default: str) -> tuple[dict[str, Preset], dict[str, str], str]:

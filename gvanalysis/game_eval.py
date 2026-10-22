@@ -267,9 +267,24 @@ class _EvalCtx:
     base_analyzer_cube: "BgBotAnalyzer | None" = None
     # Judge accepted resignations (the preset's `resign_errors`).
     resign_errors: bool = False
+    # The cube's second pass, when the preset sizes cube errors at another
+    # level than checker errors; None => `analyzer` for both. Its display
+    # likewise, so a cube rolled out at 3T is not recorded as the checker
+    # pass's 2T.
+    analyzer_cube: "BgBotAnalyzer | None" = None
+    level_display_cube: str | None = None
 
-    def eval_label(self, raw: str) -> str:
-        return self.level_display if raw == "Rollout" else raw
+    @property
+    def cube_analyzer(self) -> "BgBotAnalyzer":
+        """The authoritative analyzer for a cube decision."""
+        return self.analyzer_cube if self.analyzer_cube is not None else self.analyzer
+
+    def eval_label(self, raw: str, *, cube: bool = False) -> str:
+        if raw != "Rollout":
+            return raw
+        if cube and self.level_display_cube is not None:
+            return self.level_display_cube
+        return self.level_display
 
 
 @dataclass
@@ -384,8 +399,9 @@ def _eval_cube_decision(dec: dict, ctx: _EvalCtx) -> _DecResult:
                 is_crawford=dec["is_crawford"],
             )
 
+        top = ctx.cube_analyzer
         cheap = next(a for a in (ctx.base_analyzer_cube, ctx.base_analyzer,
-                                 ctx.analyzer) if a is not None)
+                                 top) if a is not None)
         cheap_result = cube_at(cheap)
         nd_b = float(cheap_result.equity_nd)
         dt_b = float(cheap_result.equity_dt)
@@ -446,7 +462,7 @@ def _eval_cube_decision(dec: dict, ctx: _EvalCtx) -> _DecResult:
             real_error, close = verdict(nd_b, dt_b, dp_b)
 
             if real_error:
-                full_result = cube_at(ctx.analyzer)
+                full_result = cube_at(top)
                 cube_upgraded = True
             elif close:
                 full_result = cube_at(ctx.mid_analyzer_cube)
@@ -464,11 +480,11 @@ def _eval_cube_decision(dec: dict, ctx: _EvalCtx) -> _DecResult:
                 # retired world_class_fast did for cubes. Analyzers are memoized by
                 # level (see match.py), so identity is exact, and re-running
                 # would buy the same object's same answer twice.
-                if ctx.mid_analyzer_cube is not ctx.analyzer and verdict(
+                if ctx.mid_analyzer_cube is not top and verdict(
                         float(full_result.equity_nd),
                         float(full_result.equity_dt),
                         float(full_result.equity_dp))[0]:
-                    full_result = cube_at(ctx.analyzer)
+                    full_result = cube_at(top)
             else:
                 full_result = cheap_result
             nd = float(full_result.equity_nd)
@@ -513,7 +529,7 @@ def _eval_cube_decision(dec: dict, ctx: _EvalCtx) -> _DecResult:
         "lost_equity": round(doubler_err, 4),
         "upgraded": cube_upgraded,
         "counted": doubler_counts,
-        "eval_level": ctx.eval_label(full_result.eval_level),
+        "eval_level": ctx.eval_label(full_result.eval_level, cube=True),
         # Board at the cube decision (P1/White perspective). Cube actions do not
         # move checkers, so before == after for the OGXM ply.
         "board": _board_p1(dec["board"], dec["is_doubler_p1"]),
@@ -582,7 +598,7 @@ def _eval_cube_decision(dec: dict, ctx: _EvalCtx) -> _DecResult:
             # `full_result`), so it carries the same level. Recorded because
             # base OGXM's CUBE.ply wants the depth this decision was judged at;
             # without it an upgraded take/pass reads as the header depth.
-            "eval_level": ctx.eval_label(full_result.eval_level),
+            "eval_level": ctx.eval_label(full_result.eval_level, cube=True),
             # Board being decided on (P1/White perspective); take/pass move no
             # checkers, so before == after for the OGXM ply.
             "board": _board_p1(dec["board"], dec["is_doubler_p1"]),
@@ -691,11 +707,15 @@ def _eval_resign_decision(dec: dict, ctx: _EvalCtx) -> _DecResult:
         e_play = sign * e_roll
         return level, probs, e_play, e_play - conceded
 
+    # A resignation with dice thrown is judged as the roll's checker play,
+    # without as the cube position it concedes -- so by that kind's tiers.
     if dice:
-        tiers = (ctx.base_analyzer, ctx.analyzer)
+        top = ctx.analyzer
+        tiers = (ctx.base_analyzer, top)
         threshold = ctx.error_threshold_checker
     else:
-        tiers = (ctx.base_analyzer_cube, ctx.base_analyzer, ctx.analyzer)
+        top = ctx.cube_analyzer
+        tiers = (ctx.base_analyzer_cube, ctx.base_analyzer, top)
         threshold = ctx.error_threshold_cube
     try:
         screen = next(a for a in tiers if a is not None)
@@ -703,9 +723,9 @@ def _eval_resign_decision(dec: dict, ctx: _EvalCtx) -> _DecResult:
         # An error that counts, past the threshold, earns the second pass.
         # "Counts" matters at world_class's cube threshold of 0: a decided
         # game conceded at its value differs from it by float noise only.
-        if (ctx.base_analyzer is not None and screen is not ctx.analyzer
+        if (ctx.base_analyzer is not None and screen is not top
                 and abs(err) >= _RESIGN_EPS and abs(err) > threshold):
-            level, probs, e_play, err = judge(ctx.analyzer)
+            level, probs, e_play, err = judge(top)
     except Exception as e:
         if ctx.verbose:
             print(f"  resign evaluation error: {e}")
@@ -734,7 +754,7 @@ def _eval_resign_decision(dec: dict, ctx: _EvalCtx) -> _DecResult:
         "take_resign_error": round(-err, 4) + 0.0,
         "lost_equity": round(abs(err), 4),
         "counted": counted,
-        "eval_level": ctx.eval_label(level),
+        "eval_level": ctx.eval_label(level, cube=not dice),
     }
     if dice:
         entry["dice"] = list(dice)
@@ -1226,12 +1246,14 @@ def evaluate_game(game: dict, analyzer: BgBotAnalyzer, recon: dict,
                   mid_analyzer_checker: "BgBotAnalyzer | None" = None,
                   mid_analyzer_cube: "BgBotAnalyzer | None" = None,
                   base_analyzer_cube: "BgBotAnalyzer | None" = None,
+                  analyzer_cube: "BgBotAnalyzer | None" = None,
                   resign_errors: bool = False,
                   close_threshold_checker: float | None = None,
                   close_threshold_cube: float | None = None,
                   error_threshold_checker: float = 0.02,
                   error_threshold_cube: float = 0.02,
-                  level: str = "3ply", all_moves: bool = False,
+                  level: str = "3ply", level_cube: str | None = None,
+                  all_moves: bool = False,
                   count_illegal: bool = False,
                   progress: "Callable[[], None] | None" = None) -> dict:
     """Evaluate all decisions in one game. Returns per-player error/decision counts and move log.
@@ -1256,6 +1278,9 @@ def evaluate_game(game: dict, analyzer: BgBotAnalyzer, recon: dict,
         verbose=verbose, all_moves=all_moves, count_illegal=count_illegal,
         level_display=level_display, game=game,
         base_analyzer_cube=base_analyzer_cube, resign_errors=resign_errors,
+        analyzer_cube=analyzer_cube,
+        level_display_cube=(None if level_cube is None
+                            else _LEVEL_DISPLAY.get(level_cube, level_cube)),
     )
 
     results: "list[_DecResult]" = []

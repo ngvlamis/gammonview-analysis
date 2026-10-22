@@ -104,6 +104,18 @@ label, `custom/<name>@<digest>`, so a program that keeps presets somewhere of it
 own no longer has to write a YAML file and re-import the module to run one.
 Both are exported from `gvanalysis`, with `Preset` and `PresetConfigError`.
 
+**A preset can size cube errors at a level of their own** *(new)*
+
+`second_pass` takes a `{checker, cube}` mapping, as `first_pass` does, so a
+preset can roll out a wrong cube and settle a wrong checker play at 4-ply, or
+the reverse. A rollout of a cube is one position and a rollout of a checker
+play is every candidate that survives, so the level worth paying for is not the
+same one. The checker level is required: every kind still has an on-error
+tier. A mapping naming one level for both is the bare level, with the same
+digest, and no built-in changes. The analysis summary gains
+`second_pass_cube_level`, set only when the two differ, and a cube decision
+records the level it was sized at.
+
 **Resign errors** *(new, opt-in)*
 
 `--resign-errors` (`resign_errors=True` in the API) judges every accepted

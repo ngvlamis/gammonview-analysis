@@ -86,8 +86,9 @@ class _Analyzer:
         return type("R", (), {"moves": [best]})()
 
 
-def ctx_for(log, equities, *, resign=True, cube_screen=True, err_thr=0.0):
+def ctx_for(log, equities, *, resign=True, cube_screen=True, err_thr=0.0, cube_second=None):
     return _EvalCtx(
+        analyzer_cube=_Analyzer(cube_second, log, equities) if cube_second else None,
         analyzer=_Analyzer("2T", log, equities),
         base_analyzer=_Analyzer("3ply", log, equities),
         base_analyzer_cube=_Analyzer("4ply", log, equities) if cube_screen else None,
@@ -243,6 +244,17 @@ def check_evaluation() -> None:
     check(abs(e["equity_play"] + 0.99) < 1e-9 and log == [("roll", "3ply", 2, 1)],
           f"the opponent's seen roll, from the resigner's side, under the checker "
           f"threshold ({e}, {log})")
+
+    # A cube second pass of its own sizes a resignation before the roll, and
+    # the checker one still sizes a resignation after it.
+    log = []
+    _eval_resign_decision(resign_dec(), ctx_for(log, (-0.6, -1.5, 1.0), cube_second="3T"))
+    check(log == ["4ply", "3T"], f"before the roll, by the cube's second pass ({log})")
+    log = []
+    _eval_resign_decision(resign_dec(dice=[6, 4]),
+                          ctx_for(log, (-0.6, -1.5, 1.0), cube_second="3T"))
+    check(log == [("roll", "3ply", 6, 4), ("roll", "2T", 6, 4)],
+          f"after it, by the checker's ({log})")
 
     log = []
     res = _eval_resign_decision(resign_dec(), ctx_for(log, (-0.6, -1.5, 1.0), resign=False))

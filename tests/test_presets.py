@@ -170,6 +170,46 @@ def check_first_pass_split() -> None:
         check("mine" not in got and "ignoring" in err, f"refused: {what}", err)
 
 
+def check_second_pass_split() -> None:
+    """A per-kind second pass, spelled and digested the way the first is."""
+    check(all(p.second_pass_cube is None for p in P.PRESETS.values()),
+          "no built-in splits its second pass")
+    check(P.PRESETS["world_class"].cube_second_pass == "truncated2"
+          and P.PRESETS["deep"].cube_second_pass is None,
+          "an unsplit second pass serves both kinds, and a single pass has none")
+    check(P.PRESETS["world_class"].definition()["second_pass"] == "truncated2",
+          "an unsplit second pass stays a bare level in the definition")
+    got, *_rest, err = config(
+        "presets:\n"
+        "  bare: {first_pass: 3ply, second_pass: truncated2}\n"
+        "  same: {first_pass: 3ply, second_pass: {checker: truncated2, cube: truncated2}}\n"
+        "  only: {first_pass: 3ply, second_pass: {checker: truncated2}}\n"
+        "  split: {first_pass: 3ply, second_pass: {checker: 4ply, cube: truncated3}}\n")
+    check(got["bare"].digest() == got["same"].digest() == got["only"].digest(),
+          "a mapping naming one level for both, or no cube level, is the bare level's digest", err)
+    check(got["split"].digest() != got["bare"].digest()
+          and got["split"].second_pass == "4ply"
+          and got["split"].cube_second_pass == "truncated3"
+          and got["split"].definition()["second_pass"] == ["4ply", "truncated3"],
+          "a split second pass is its own definition")
+    mine = P.custom_preset("mine", {"first_pass": "3ply",
+                                    "second_pass": {"checker": "4ply", "cube": "truncated3"}})
+    check(mine.label == P.custom_preset("mine", {
+              "first_pass": "3ply", "second_pass": {"checker": "4ply", "cube": "truncated3"}}).label
+          and mine.digest() == got["split"].digest(),
+          "the same split from data and from a file is the same definition")
+    for text, what in (
+        ("presets:\n  mine: {first_pass: 3ply, second_pass: {cube: truncated2}}\n",
+         "a second pass with no checker level"),
+        ("presets:\n  mine: {first_pass: 3ply, second_pass: {checker: 3ply, cube: 5ply}}\n",
+         "an invalid cube level"),
+        ("presets:\n  mine: {first_pass: 3ply, second_pass: {checker: 3ply, move: 4ply}}\n",
+         "an unknown kind"),
+    ):
+        got, *_rest, err = config(text)
+        check("mine" not in got and "ignoring" in err, f"refused: {what}", err)
+
+
 def check_resign_option() -> None:
     """Resign errors are an option, never part of a preset: off in every
     built-in, named in the label when on, and outside what a pin names."""
@@ -264,6 +304,7 @@ def main() -> int:
     check_resign_option()
     check_pins()
     check_custom_from_data()
+    check_second_pass_split()
     print(f"\n{'all passed' if not failures else str(failures) + ' failed'}")
     return 1 if failures else 0
 

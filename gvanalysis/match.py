@@ -210,8 +210,8 @@ _WORKER: dict = {}
 
 
 def _worker_init(base_level, base_level_cube, mid_level_checker, mid_level_cube, level,
-                 thresholds, resign_errors, all_moves, count_illegal, level_display,
-                 engine_threads, verbose) -> None:
+                 level_cube, thresholds, resign_errors, all_moves, count_illegal,
+                 level_display, engine_threads, verbose) -> None:
     # First, before any weights are loaded: from here on this process holds
     # hundreds of megabytes, and if the parent dies hard nothing else will ever
     # tell it to let go. See `parentwatch`.
@@ -231,13 +231,14 @@ def _worker_init(base_level, base_level_cube, mid_level_checker, mid_level_cube,
         return built[lvl]
 
     analyzer = mk(level)
+    analyzer_cube = mk(level_cube)
     base_analyzer = mk(base_level)
     base_analyzer_cube = mk(base_level_cube)
     mid_analyzer_checker = mk(mid_level_checker)
     mid_analyzer_cube = mk(mid_level_cube)
     luck_analyzer = mk("1ply")
     _WORKER["ctx_kw"] = dict(
-        analyzer=analyzer, base_analyzer=base_analyzer,
+        analyzer=analyzer, analyzer_cube=analyzer_cube, base_analyzer=base_analyzer,
         base_analyzer_cube=base_analyzer_cube, resign_errors=resign_errors,
         mid_analyzer_checker=mid_analyzer_checker, mid_analyzer_cube=mid_analyzer_cube,
         luck_analyzer=luck_analyzer,
@@ -247,6 +248,8 @@ def _worker_init(base_level, base_level_cube, mid_level_checker, mid_level_cube,
         error_threshold_cube=err_cube,
         verbose=verbose, all_moves=all_moves, count_illegal=count_illegal,
         level_display=level_display,
+        level_display_cube=(None if level_cube is None
+                            else _LEVEL_DISPLAY.get(level_cube, level_cube)),
     )
 
 
@@ -362,6 +365,9 @@ def analyze_ogxm(
     # at 4-ply, checker plays at 3-ply). In a single-pass preset it is that
     # kind's only level; either way None means the checker level serves both.
     base_level_cube = p.first_pass_cube
+    # The cube's own on-error level, when it differs; None => `level` sizes
+    # both kinds' errors (and always None for a single pass).
+    level_cube = p.second_pass_cube
     if p.second_pass is None:      # single pass
         base_level_r = None
         level = p.first_pass
@@ -411,6 +417,7 @@ def analyze_ogxm(
         print(f"Games: {len(recons)}")
         screen_desc = (base_level_r if base_level_cube is None
                        else f"{base_level_r} / cube {base_level_cube}")
+        error_desc = level if level_cube is None else f"{level} / cube {level_cube}"
         if base_level_r and (mid_level_checker or mid_level_cube):
             if mid_level_checker == mid_level_cube:
                 mid_desc = mid_level_checker
@@ -426,11 +433,11 @@ def analyze_ogxm(
             err_desc = (f"{err_checker}" if err_checker == err_cube
                         else f"checker {err_checker} / cube {err_cube}")
             print(f"Preset: {p.display} [{p.label}] ({screen_desc} screen -> {mid_desc} on close "
-                  f"(<= {close_desc}) -> {level} on error (> {err_desc}))")
+                  f"(<= {close_desc}) -> {error_desc} on error (> {err_desc}))")
         elif base_level_r:
             err_desc = (f"{err_checker}" if err_checker == err_cube
                         else f"checker {err_checker} / cube {err_cube}")
-            print(f"Preset: {p.display} [{p.label}] ({screen_desc} screen, upgrade to {level} "
+            print(f"Preset: {p.display} [{p.label}] ({screen_desc} screen, upgrade to {error_desc} "
                   f"on error (> {err_desc}))")
         else:
             print(f"Preset: {p.display} [{p.label}] ({level}"
@@ -496,7 +503,7 @@ def analyze_ogxm(
 
     # Serial builds analyzers once here; parallel workers build their own (they
     # can't cross the process boundary), so skip the main-process build then.
-    analyzer = base_analyzer = base_analyzer_cube = luck_analyzer = None
+    analyzer = analyzer_cube = base_analyzer = base_analyzer_cube = luck_analyzer = None
     mid_analyzer_checker = mid_analyzer_cube = None
     if jobs == 1:
         # One analyzer per distinct level, shared across every tier that names
@@ -518,6 +525,7 @@ def analyze_ogxm(
         # Deepest first, so a level shared with a shallower tier is announced
         # once under the name of the tier that actually needs it.
         analyzer = _mk(level, "analyzer")
+        analyzer_cube = _mk(level_cube, "cube analyzer")
         base_analyzer = _mk(base_level_r, "base analyzer")
         base_analyzer_cube = _mk(base_level_cube, "cube base analyzer")
         mid_analyzer_checker = _mk(mid_level_checker, "mid analyzer")
@@ -579,12 +587,14 @@ def analyze_ogxm(
                               mid_analyzer_checker=mid_analyzer_checker,
                               mid_analyzer_cube=mid_analyzer_cube,
                               base_analyzer_cube=base_analyzer_cube,
+                              analyzer_cube=analyzer_cube,
                               resign_errors=p.resign_errors,
                               close_threshold_checker=close_checker,
                               close_threshold_cube=close_cube,
                               error_threshold_checker=err_checker,
                               error_threshold_cube=err_cube,
-                              level=level, all_moves=all_moves,
+                              level=level, level_cube=level_cube,
+                              all_moves=all_moves,
                               count_illegal=count_illegal,
                               progress=advance)
             game_results.append(r)
@@ -603,7 +613,7 @@ def analyze_ogxm(
 
         init_args = (
             base_level_r, base_level_cube, mid_level_checker, mid_level_cube, level,
-            (close_checker, close_cube, err_checker, err_cube), p.resign_errors, all_moves,
+            level_cube, (close_checker, close_cube, err_checker, err_cube), p.resign_errors, all_moves,
             count_illegal, _LEVEL_DISPLAY.get(level, level), worker_threads, verbose,
         )
         buckets: "list[list[tuple[int, object]]]" = [[] for _ in recons]
@@ -706,6 +716,8 @@ def analyze_ogxm(
             "error_threshold_checker": err_checker,
             "error_threshold_cube": err_cube,
             "second_pass_level": p.second_pass,
+            # Set only when cube errors are sized at another level.
+            "second_pass_cube_level": level_cube,
             "eval_level": level,   # back-compat: authoritative level for existing .gva consumers
             # Level the luck-analyzer runs at (always 1-ply today; will become
             # configurable when a "luck eval level" option is added).

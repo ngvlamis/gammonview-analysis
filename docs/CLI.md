@@ -225,8 +225,10 @@ presets judge everything at the first pass.
 a checker play whose top two moves are within 0.08, a cube within 0.12 of its
 double or take point. Its cube `error_threshold` is `0`, so any wrong cube
 action is rolled out (XG's "if different"); a checker play is rolled out when it
-costs more than 0.02. A preset's `first_pass` also takes a `{checker, cube}`
-mapping, the same shape `mid_pass` takes, for a cube screen at another depth.
+costs more than 0.02. A preset's `first_pass` and `second_pass` also take a
+`{checker, cube}` mapping, the same shape `mid_pass` takes: a cube screen at
+another depth, or cube errors sized at another level than checker errors. The
+checker level is required in both.
 
 **Resign errors.** Off unless you pass `--resign-errors` (in the API,
 `resign_errors=True`), with any preset; no preset turns them on. With it, every
