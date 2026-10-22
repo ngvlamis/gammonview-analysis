@@ -13,7 +13,7 @@ when the repository was opened; they are kept because they record why things
 are the way they are — particularly the breaking changes and the measurements
 behind several design decisions. Dates are the tag dates.
 
-## Unreleased
+## 3.1.0 — 2026-10-22
 
 **`engine_build` names the gammonview version that ran the analysis** *(changed)*
 
